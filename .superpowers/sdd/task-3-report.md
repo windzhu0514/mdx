@@ -61,3 +61,20 @@
 - `npm run build`：通过。
 - `cargo check --manifest-path src-tauri/Cargo.toml`：通过；同样仅有 Windows 增量编译目录拒绝访问 warning。
 - `npm run tauri -- build`：通过，生成 exe、MSI 和 NSIS 安装包。
+
+## rejection 与旧实例守卫证据（复审后追加）
+
+- 覆盖文件：`src/components/editor/MilkdownEditor.test.ts`。
+- 新增 create rejection 回归：deferred `create()` reject 后，断言 `console.error("Crepe 初始化失败", error)` 被调用；随后更新 `modelValue` 不调用 `editor.action`。
+- 新增 destroy rejection 回归：create 已成功后卸载，deferred `destroy()` reject；flush 后断言 `console.error("Crepe 销毁失败", error)` 被调用且测试正常完成，证明 rejection 已被承接。
+- 新增旧实例回归：卸载后手动触发捕获的 `markdownUpdated`，断言既不 emit 也不更新父级 Markdown。
+
+### 本轮 TDD/验证记录
+
+- 测试先行命令：`npm test -- src/components/editor/MilkdownEditor.test.ts`。
+- 该测试首跑输出为 `Test Files 1 passed`、`Tests 8 passed`：复审已确认上一提交的 `disposed`/实例 guard 与 `.catch(reportLifecycleError)` 实现正确，因此没有通过破坏已验证的生产代码来人为制造 RED；本轮只补足独立回归证据。
+- GREEN 复跑同一命令：`Test Files 1 passed`、`Tests 8 passed`。
+- `npm test`：通过，17 个文件、59 个测试。
+- `npm run build`：通过。
+- `cargo check --manifest-path src-tauri/Cargo.toml`：通过；仅有 Windows 增量编译目录拒绝访问 warning。
+- `npm run tauri -- build`：通过，生成 exe、MSI 和 NSIS 安装包。

@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => {
     };
     const commands = { call: vi.fn() };
     let createEditor: () => Promise<void> = async () => undefined;
+    let destroyEditor: () => Promise<void> = async () => undefined;
     const instances: Array<{
         options: Record<string, unknown>;
         create: ReturnType<typeof vi.fn>;
@@ -35,6 +36,7 @@ const mocks = vi.hoisted(() => {
     return {
         commands,
         createEditor,
+        destroyEditor,
         editorView,
         instances,
         selectedMarkdown: "item one\nitem two",
@@ -45,7 +47,7 @@ vi.mock("@milkdown/crepe", () => {
     class Crepe {
         static Feature = { AI: "ai", ImageBlock: "image-block" };
         readonly create = vi.fn(() => mocks.createEditor());
-        readonly destroy = vi.fn(async () => undefined);
+        readonly destroy = vi.fn(() => mocks.destroyEditor());
         readonly setReadonly = vi.fn(() => this);
         readonly editor = {
             action: vi.fn((action: unknown) =>
@@ -138,17 +140,21 @@ type MountedEditor = {
 type Deferred<T> = {
     promise: Promise<T>;
     resolve: (value: T) => void;
+    reject: (reason: unknown) => void;
 };
 
 function createDeferred<T>(): Deferred<T> {
     let resolve: ((value: T) => void) | undefined;
-    const promise = new Promise<T>((accept) => {
+    let reject: ((reason: unknown) => void) | undefined;
+    const promise = new Promise<T>((accept, decline) => {
         resolve = accept;
+        reject = decline;
     });
 
     return {
         promise,
         resolve: (value) => resolve?.(value),
+        reject: (reason) => reject?.(reason),
     };
 }
 
@@ -207,7 +213,9 @@ afterEach(() => {
     mocks.editorView.state.tr.setSelection.mockClear();
     mocks.editorView.state.selection = { from: 2, to: 5 };
     mocks.createEditor = async () => undefined;
+    mocks.destroyEditor = async () => undefined;
     mocks.selectedMarkdown = "item one\nitem two";
+    vi.restoreAllMocks();
     document.body.innerHTML = "";
 });
 
@@ -321,5 +329,57 @@ describe("MilkdownEditor", () => {
             markdown: "- [ ] ",
             range: { from: 4, to: 4 },
         });
+    });
+
+    it("reports a rejected creation and keeps external Markdown updates inactive", async () => {
+        const deferred = createDeferred<void>();
+        const failure = new Error("create failed");
+        const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+        mocks.createEditor = () => deferred.promise;
+        const editor = mountEditor();
+        cleanup = editor.unmount;
+        await nextTick();
+
+        const crepe = mocks.instances[0];
+        deferred.reject(failure);
+        await flushPromises();
+        expect(errorSpy).toHaveBeenCalledWith("Crepe 初始化失败", failure);
+
+        editor.markdown.value = "# 不应同步";
+        await nextTick();
+        expect(crepe.editor.action).not.toHaveBeenCalled();
+    });
+
+    it("reports a rejected destruction without leaving an unhandled rejection", async () => {
+        const deferred = createDeferred<void>();
+        const failure = new Error("destroy failed");
+        const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+        mocks.destroyEditor = () => deferred.promise;
+        const editor = mountEditor();
+        await nextTick();
+        await flushPromises();
+
+        const crepe = mocks.instances[0];
+        editor.unmount();
+        await flushPromises();
+        expect(crepe.destroy).toHaveBeenCalledTimes(1);
+
+        deferred.reject(failure);
+        await flushPromises();
+        expect(errorSpy).toHaveBeenCalledWith("Crepe 销毁失败", failure);
+    });
+
+    it("ignores markdown updates from an instance after it is unmounted", async () => {
+        const editor = mountEditor("# 保持原值");
+        await nextTick();
+        await flushPromises();
+
+        const crepe = mocks.instances[0];
+        editor.unmount();
+        await flushPromises();
+        crepe.markdownUpdated?.(undefined, "# 旧实例更新");
+
+        expect(editor.updates).toEqual([]);
+        expect(editor.markdown.value).toBe("# 保持原值");
     });
 });
