@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => {
         dispatch: vi.fn(),
     };
     const commands = { call: vi.fn() };
+    let createEditor: () => Promise<void> = async () => undefined;
     const instances: Array<{
         options: Record<string, unknown>;
         create: ReturnType<typeof vi.fn>;
@@ -31,13 +32,19 @@ const mocks = vi.hoisted(() => {
         editor: { action: ReturnType<typeof vi.fn> };
     }> = [];
 
-    return { commands, editorView, instances, selectedMarkdown: "item one\nitem two" };
+    return {
+        commands,
+        createEditor,
+        editorView,
+        instances,
+        selectedMarkdown: "item one\nitem two",
+    };
 });
 
 vi.mock("@milkdown/crepe", () => {
     class Crepe {
         static Feature = { AI: "ai", ImageBlock: "image-block" };
-        readonly create = vi.fn(async () => undefined);
+        readonly create = vi.fn(() => mocks.createEditor());
         readonly destroy = vi.fn(async () => undefined);
         readonly setReadonly = vi.fn(() => this);
         readonly editor = {
@@ -128,6 +135,28 @@ type MountedEditor = {
     unmount: () => void;
 };
 
+type Deferred<T> = {
+    promise: Promise<T>;
+    resolve: (value: T) => void;
+};
+
+function createDeferred<T>(): Deferred<T> {
+    let resolve: ((value: T) => void) | undefined;
+    const promise = new Promise<T>((accept) => {
+        resolve = accept;
+    });
+
+    return {
+        promise,
+        resolve: (value) => resolve?.(value),
+    };
+}
+
+async function flushPromises(): Promise<void> {
+    await Promise.resolve();
+    await Promise.resolve();
+}
+
 function mountEditor(markdown = "# 初始", readonly = false): MountedEditor {
     const host = document.createElement("div");
     const updates: string[] = [];
@@ -176,6 +205,8 @@ afterEach(() => {
     mocks.editorView.state.doc.textBetween.mockClear();
     mocks.editorView.state.tr.insertText.mockClear();
     mocks.editorView.state.tr.setSelection.mockClear();
+    mocks.editorView.state.selection = { from: 2, to: 5 };
+    mocks.createEditor = async () => undefined;
     mocks.selectedMarkdown = "item one\nitem two";
     document.body.innerHTML = "";
 });
@@ -203,6 +234,7 @@ describe("MilkdownEditor", () => {
         });
 
         editor.unmount();
+        await flushPromises();
         expect(crepe.destroy).toHaveBeenCalledTimes(1);
     });
 
@@ -233,6 +265,61 @@ describe("MilkdownEditor", () => {
             kind: "replace-range",
             markdown: "- [ ] item one\n- [ ] item two",
             range: { from: 2, to: 5 },
+        });
+    });
+
+    it("waits for Crepe creation before synchronizing only the latest external Markdown", async () => {
+        const deferred = createDeferred<void>();
+        mocks.createEditor = () => deferred.promise;
+        const editor = mountEditor("# 初始");
+        cleanup = editor.unmount;
+        await nextTick();
+
+        const crepe = mocks.instances[0];
+        editor.markdown.value = "# 过期值";
+        await nextTick();
+        editor.markdown.value = "# 最新值";
+        await nextTick();
+        expect(crepe.editor.action).not.toHaveBeenCalled();
+
+        deferred.resolve();
+        await flushPromises();
+        expect(crepe.editor.action).toHaveBeenCalledTimes(1);
+        expect(crepe.editor.action).toHaveBeenLastCalledWith({
+            kind: "replace-all",
+            markdown: "# 最新值",
+        });
+    });
+
+    it("destroys Crepe once only after a pending creation settles", async () => {
+        const deferred = createDeferred<void>();
+        mocks.createEditor = () => deferred.promise;
+        const editor = mountEditor();
+        await nextTick();
+
+        const crepe = mocks.instances[0];
+        editor.unmount();
+        expect(crepe.destroy).not.toHaveBeenCalled();
+
+        deferred.resolve();
+        await flushPromises();
+        expect(crepe.destroy).toHaveBeenCalledTimes(1);
+    });
+
+    it("inserts one unchecked task marker at an empty selection", async () => {
+        const editor = mountEditor();
+        cleanup = editor.unmount;
+        await nextTick();
+        await flushPromises();
+
+        mocks.editorView.state.selection = { from: 4, to: 4 };
+        mocks.selectedMarkdown = "";
+        editor.handle.value?.execute({ name: "taskList" });
+
+        expect(mocks.instances[0].editor.action).toHaveBeenLastCalledWith({
+            kind: "replace-range",
+            markdown: "- [ ] ",
+            range: { from: 4, to: 4 },
         });
     });
 });

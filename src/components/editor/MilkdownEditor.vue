@@ -45,6 +45,13 @@ const emit = defineEmits<{
 const editorElement = ref<HTMLDivElement>();
 let crepe: Crepe | undefined;
 let currentMarkdown = props.modelValue;
+let disposed = false;
+let ready = false;
+let readiness: Promise<void> = Promise.resolve();
+
+function reportLifecycleError(operation: string, error: unknown): void {
+    console.error(`Crepe ${operation}失败`, error);
+}
 
 onMounted(() => {
     if (!editorElement.value) return;
@@ -70,26 +77,43 @@ onMounted(() => {
             : {}),
     };
 
-    crepe = new Crepe({
+    const instance = new Crepe({
         root: editorElement.value,
         defaultValue: props.modelValue,
         features,
         featureConfigs,
     });
-    crepe.on((listener) => {
+    crepe = instance;
+    disposed = false;
+    ready = false;
+    instance.on((listener) => {
         listener.markdownUpdated((_ctx, markdown) => {
+            if (disposed || crepe !== instance) return;
             currentMarkdown = markdown;
             if (markdown !== props.modelValue) emit("update:modelValue", markdown);
         });
     });
-    crepe.setReadonly(Boolean(props.readonly));
-    void crepe.create();
+    instance.setReadonly(Boolean(props.readonly));
+    readiness = instance
+        .create()
+        .then(() => {
+            if (disposed || crepe !== instance) return;
+
+            ready = true;
+            instance.setReadonly(Boolean(props.readonly));
+            if (props.modelValue === currentMarkdown) return;
+            instance.editor.action(replaceAll(props.modelValue));
+            currentMarkdown = props.modelValue;
+        })
+        .catch((error: unknown) => {
+            reportLifecycleError("初始化", error);
+        });
 });
 
 watch(
     () => props.modelValue,
     (markdown) => {
-        if (!crepe || markdown === currentMarkdown) return;
+        if (!crepe || !ready || disposed || markdown === currentMarkdown) return;
         crepe.editor.action(replaceAll(markdown));
         currentMarkdown = markdown;
     },
@@ -98,24 +122,36 @@ watch(
 watch(
     () => props.readonly,
     (readonly) => {
-        crepe?.setReadonly(Boolean(readonly));
+        if (!crepe || !ready || disposed) return;
+        crepe.setReadonly(Boolean(readonly));
     },
 );
 
 onBeforeUnmount(() => {
-    if (!crepe) return;
-    void crepe.destroy();
+    const instance = crepe;
+    if (!instance || disposed) return;
+
+    disposed = true;
+    ready = false;
     crepe = undefined;
+    readiness = readiness
+        .then(async () => {
+            await instance.destroy();
+        })
+        .catch((error: unknown) => {
+            reportLifecycleError("销毁", error);
+        });
 });
 
 function focus(): void {
-    crepe?.editor.action((ctx) => {
+    if (!crepe || !ready || disposed) return;
+    crepe.editor.action((ctx) => {
         ctx.get(editorViewCtx).focus();
     });
 }
 
 function getSelectedText(): string {
-    if (!crepe) return "";
+    if (!crepe || !ready || disposed) return "";
 
     return crepe.editor.action((ctx) => {
         const view = ctx.get(editorViewCtx);
@@ -125,7 +161,8 @@ function getSelectedText(): string {
 }
 
 function replaceSelection(text: string): void {
-    crepe?.editor.action((ctx) => {
+    if (!crepe || !ready || disposed) return;
+    crepe.editor.action((ctx) => {
         const view = ctx.get(editorViewCtx);
         const { from, to } = view.state.selection;
         view.dispatch(view.state.tr.insertText(text, from, to));
@@ -133,7 +170,8 @@ function replaceSelection(text: string): void {
 }
 
 function moveCursor(position: "start" | "end"): void {
-    crepe?.editor.action((ctx) => {
+    if (!crepe || !ready || disposed) return;
+    crepe.editor.action((ctx) => {
         const view = ctx.get(editorViewCtx);
         const target = position === "start" ? 0 : view.state.doc.content.size;
         view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, target)));
@@ -141,7 +179,7 @@ function moveCursor(position: "start" | "end"): void {
 }
 
 function execute(command: EditorCommand): void {
-    if (!crepe) return;
+    if (!crepe || !ready || disposed) return;
 
     if (command.name === "taskList") {
         executeTaskList();
@@ -209,19 +247,20 @@ function execute(command: EditorCommand): void {
 }
 
 function executeTaskList(): void {
-    if (!crepe) return;
+    if (!crepe || !ready || disposed) return;
 
-    crepe.editor.action((ctx) => {
+    const instance = crepe;
+    instance.editor.action((ctx) => {
         const view = ctx.get(editorViewCtx);
         const { from, to } = view.state.selection;
-        const markdown = crepe?.editor.action(getMarkdown({ from, to })) ?? "";
+        const markdown = instance.editor.action(getMarkdown({ from, to }));
         const taskMarkdown = markdown
             ? markdown
                   .split("\n")
                   .map((line) => `- [ ] ${line}`)
                   .join("\n")
             : "- [ ] ";
-        crepe?.editor.action(replaceRange(taskMarkdown, { from, to }));
+        instance.editor.action(replaceRange(taskMarkdown, { from, to }));
     });
 }
 
