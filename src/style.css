@@ -508,106 +508,23 @@ summary {
     inset: 0;
 }
 
-/* Toast UI Editor Theme Resets */
-.markdown-editor .toastui-editor-defaultUI {
-    border: none;
-    font-family: var(--font-sans);
+.markdown-editor > *,
+.markdown-editor .milkdown-editor,
+.markdown-editor .source-editor,
+.markdown-editor .cm-editor {
+    height: 100%;
+    min-height: 0;
 }
 
-.markdown-editor .toastui-editor-toolbar {
-    background: #fafbfc !important;
-    border-bottom: 1px solid var(--color-border) !important;
-}
-
-.markdown-editor .toastui-editor-contents,
-.markdown-editor .toastui-editor-md-preview,
-.markdown-editor .toastui-editor-md-code,
-.markdown-editor .ProseMirror {
+.markdown-editor .ProseMirror,
+.markdown-editor .cm-content {
     font-size: 16px;
     line-height: 1.75;
     color: var(--color-text-main);
 }
 
-.markdown-editor .toastui-editor-md-code {
+.markdown-editor .cm-content {
     font-family: var(--font-mono);
-}
-
-.markdown-editor.hide-tabs .toastui-editor-tabs {
-    display: none !important;
-}
-
-.toastui-editor-popup {
-    z-index: 100 !important;
-}
-
-.toastui-editor-ww-code-block-language {
-    z-index: 100 !important;
-    right: auto !important;
-    pointer-events: auto !important;
-    cursor: text !important;
-}
-
-.toastui-editor-ww-code-block-language input {
-    pointer-events: auto !important;
-    user-select: auto !important;
-    cursor: text !important;
-}
-
-.toastui-editor-ww-container {
-    overflow: visible !important;
-}
-
-.custom-lang-dropdown {
-    position: absolute;
-    top: 100%;
-    left: 0;
-    min-width: 120px;
-    max-height: 200px;
-    overflow-y: auto;
-    background: rgba(255, 255, 255, 0.95);
-    backdrop-filter: blur(16px);
-    -webkit-backdrop-filter: blur(16px);
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-md);
-    box-shadow: var(--shadow-lg);
-    z-index: 110;
-    margin-top: 6px;
-    padding: 4px;
-    animation: popup-fade 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-}
-
-.custom-lang-dropdown ul {
-    list-style: none;
-    padding: 0;
-    margin: 0;
-    display: flex;
-    flex-direction: column;
-}
-
-.custom-lang-dropdown .lang-item {
-    padding: 6px 12px;
-    font-size: 13px;
-    color: var(--color-text-main);
-    cursor: pointer;
-    border-radius: var(--radius-sm);
-    transition: all 0.15s ease;
-}
-
-.custom-lang-dropdown .lang-item:hover {
-    background: var(--color-primary-light);
-    color: var(--color-primary);
-    transform: translateX(2px);
-}
-
-.custom-lang-dropdown::-webkit-scrollbar {
-    width: 6px;
-}
-.custom-lang-dropdown::-webkit-scrollbar-thumb {
-    background: rgba(15, 23, 42, 0.15);
-    border-radius: 3px;
-}
-.custom-lang-dropdown::-webkit-scrollbar-track {
-    background: transparent;
 }
 
 /* Modern Status Bar */

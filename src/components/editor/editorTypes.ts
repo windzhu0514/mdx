@@ -25,6 +25,7 @@ export type MoraEditorHandle = {
     replaceSelection(text: string): void;
     moveCursor(position: "start" | "end"): void;
     execute(command: EditorCommand): void;
+    scrollToHeading(text: string): boolean;
 };
 
 export type ImageUploadHandler = (file: File) => Promise<string>;

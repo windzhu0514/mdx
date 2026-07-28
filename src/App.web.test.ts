@@ -6,9 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
     closeHandler: undefined as
         ((event: { preventDefault: () => void }) => Promise<void>) | undefined,
-    editorChange: undefined as (() => void) | undefined,
-    editorConstructed: vi.fn(),
-    editorMarkdown: "",
+    editorUpdate: undefined as ((markdown: string) => void) | undefined,
+    moraEditorMounted: vi.fn(),
     getCurrentWindow: vi.fn(() => ({
         onDragDropEvent: vi.fn(async () => () => undefined),
         onCloseRequested: vi.fn(
@@ -58,22 +57,34 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
     save: vi.fn(),
 }));
 
-vi.mock("@toast-ui/editor", () => ({
-    default: class MockEditor {
-        constructor(options: { events?: { change?: () => void } }) {
-            mocks.editorConstructed();
-            mocks.editorChange = options.events?.change;
-        }
-
-        destroy() {}
-        getMarkdown() {
-            return mocks.editorMarkdown;
-        }
-        setMarkdown(markdown: string) {
-            mocks.editorMarkdown = markdown;
-        }
-    },
-}));
+vi.mock("./components/editor/MoraEditor.vue", async () => {
+    const { defineComponent, h } = await import("vue");
+    return {
+        default: defineComponent({
+            name: "MoraEditorStub",
+            inheritAttrs: false,
+            props: {
+                modelValue: { type: String, required: true },
+                mode: { type: String, required: true },
+                sourcePreview: { type: Boolean, required: true },
+            },
+            emits: ["update:modelValue", "ai-error"],
+            setup(_props, { emit, expose }) {
+                mocks.moraEditorMounted();
+                mocks.editorUpdate = (markdown) => emit("update:modelValue", markdown);
+                expose({
+                    execute: vi.fn(),
+                    focus: vi.fn(),
+                    getSelectedText: vi.fn(() => ""),
+                    moveCursor: vi.fn(),
+                    replaceSelection: vi.fn(),
+                    scrollToHeading: vi.fn(() => false),
+                });
+                return () => h("div", { class: "mora-editor-stub" });
+            },
+        }),
+    };
+});
 
 import App from "./App.vue";
 
@@ -81,8 +92,7 @@ let cleanup: (() => void) | undefined;
 
 beforeEach(() => {
     mocks.closeHandler = undefined;
-    mocks.editorChange = undefined;
-    mocks.editorMarkdown = "";
+    mocks.editorUpdate = undefined;
     mocks.isTauri.mockReturnValue(false);
     window.matchMedia = vi.fn(() => ({
         matches: false,
@@ -104,7 +114,7 @@ afterEach(() => {
 });
 
 describe("App Web 预览启动", () => {
-    it("初始化编辑器但不访问 Tauri 窗口和 IPC", async () => {
+    it("初始化 MoraEditor 但不访问 Tauri 窗口和 IPC", async () => {
         const host = document.createElement("div");
         document.body.append(host);
         const app = createApp(App);
@@ -112,7 +122,7 @@ describe("App Web 预览启动", () => {
         cleanup = () => app.unmount();
 
         await vi.waitFor(() => {
-            expect(mocks.editorConstructed).toHaveBeenCalledTimes(1);
+            expect(mocks.moraEditorMounted).toHaveBeenCalledTimes(1);
         });
 
         expect(mocks.getCurrentWindow).not.toHaveBeenCalled();
@@ -127,13 +137,14 @@ describe("App Web 预览启动", () => {
         cleanup = () => app.unmount();
 
         await vi.waitFor(() => {
-            expect(mocks.editorConstructed).toHaveBeenCalledTimes(1);
+            expect(mocks.moraEditorMounted).toHaveBeenCalledTimes(1);
         });
 
         vi.useFakeTimers();
         try {
-            mocks.editorMarkdown = "Web 预览编辑";
-            mocks.editorChange?.();
+            mocks.editorUpdate?.("Web 预览编辑");
+            await nextTick();
+            expect(host.textContent).toContain("未保存");
             await vi.advanceTimersByTimeAsync(1600);
 
             expect(mocks.invoke).not.toHaveBeenCalled();
@@ -150,11 +161,10 @@ describe("App Web 预览启动", () => {
         cleanup = () => app.unmount();
 
         await vi.waitFor(() => {
-            expect(mocks.editorConstructed).toHaveBeenCalledTimes(1);
+            expect(mocks.moraEditorMounted).toHaveBeenCalledTimes(1);
         });
 
-        mocks.editorMarkdown = "你好😀";
-        mocks.editorChange?.();
+        mocks.editorUpdate?.("你好😀");
         await nextTick();
 
         expect(host.textContent).toContain("3 字");
@@ -168,7 +178,7 @@ describe("App Web 预览启动", () => {
         cleanup = () => app.unmount();
 
         await vi.waitFor(() => {
-            expect(mocks.editorConstructed).toHaveBeenCalledTimes(1);
+            expect(mocks.moraEditorMounted).toHaveBeenCalledTimes(1);
         });
 
         const input = host.querySelector<HTMLInputElement>(

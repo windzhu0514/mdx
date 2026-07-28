@@ -128,9 +128,8 @@ summary:focus-visible,
     cursor: pointer;
 }
 
-.markdown-editor .toastui-editor-contents,
-.markdown-editor .toastui-editor-md-preview .toastui-editor-contents,
-.markdown-editor .ProseMirror {
+.markdown-editor .ProseMirror,
+.markdown-editor .cm-content {
     max-width: var(--content-width);
     margin-inline: auto;
     font-family: var(--editor-font-family);
@@ -336,19 +335,16 @@ summary:focus-visible,
     white-space: nowrap;
 }
 
-:root[data-theme="dark"] .markdown-editor .toastui-editor-defaultUI,
-:root[data-theme="dark"] .markdown-editor .toastui-editor-main,
-:root[data-theme="dark"] .markdown-editor .toastui-editor-md-container,
-:root[data-theme="dark"] .markdown-editor .toastui-editor-md-preview,
-:root[data-theme="dark"] .markdown-editor .toastui-editor-ww-container,
-:root[data-theme="dark"] .markdown-editor .toastui-editor-toolbar {
+:root[data-theme="dark"] .markdown-editor .milkdown-editor,
+:root[data-theme="dark"] .markdown-editor .source-editor,
+:root[data-theme="dark"] .markdown-editor .cm-editor,
+:root[data-theme="dark"] .markdown-editor .cm-gutters {
     border-color: var(--color-border) !important;
     background: var(--color-bg-surface) !important;
 }
 
-:root[data-theme="dark"] .markdown-editor .toastui-editor-contents,
 :root[data-theme="dark"] .markdown-editor .ProseMirror,
-:root[data-theme="dark"] .markdown-editor .toastui-editor-md-code {
+:root[data-theme="dark"] .markdown-editor .cm-content {
     color: var(--color-text-main);
     background: var(--color-bg-surface);
 }

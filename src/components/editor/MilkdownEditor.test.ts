@@ -11,12 +11,24 @@ const mocks = vi.hoisted(() => {
         state: {
             doc: {
                 content: { size: 8 },
+                descendants: vi.fn<
+                    (
+                        visit: (
+                            node: { type: { name: string }; textContent: string },
+                            position: number,
+                        ) => boolean | void,
+                    ) => void
+                >(),
                 textBetween: vi.fn(() => "选中文本"),
             },
             selection: { from: 2, to: 5 },
             tr: {
                 insertText: vi.fn(() => ({ kind: "insert" })),
-                setSelection: vi.fn(() => ({ kind: "selection" })),
+                setSelection: vi.fn<
+                    () =>
+                        | { kind: string }
+                        | { scrollIntoView: () => { kind: string } }
+                >(() => ({ kind: "selection" })),
             },
         },
         dispatch: vi.fn(),
@@ -274,6 +286,33 @@ describe("MilkdownEditor", () => {
             markdown: "- [ ] item one\n- [ ] item two",
             range: { from: 2, to: 5 },
         });
+    });
+
+    it("finds a heading by TOC text and scrolls it into view with a ProseMirror transaction", async () => {
+        const scrollIntoView = vi.fn(() => ({ kind: "scrolled-selection" }));
+        const setSelection = vi.fn(() => ({ scrollIntoView }));
+        mocks.editorView.state.doc.descendants = vi.fn((visit) => {
+            visit(
+                {
+                    type: { name: "heading" },
+                    textContent: "目标标题",
+                },
+                4,
+            );
+        });
+        mocks.editorView.state.tr.setSelection = setSelection;
+        const editor = mountEditor();
+        cleanup = editor.unmount;
+        await nextTick();
+        await flushPromises();
+
+        expect(editor.handle.value?.scrollToHeading("目标标题")).toBe(true);
+        expect(setSelection).toHaveBeenCalledWith({ position: 5 });
+        expect(scrollIntoView).toHaveBeenCalledTimes(1);
+        expect(mocks.editorView.dispatch).toHaveBeenLastCalledWith({
+            kind: "scrolled-selection",
+        });
+        expect(editor.handle.value?.scrollToHeading("不存在")).toBe(false);
     });
 
     it("waits for Crepe creation before synchronizing only the latest external Markdown", async () => {

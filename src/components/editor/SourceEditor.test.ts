@@ -115,4 +115,17 @@ describe("SourceEditor", () => {
             editor.host.querySelector(".cm-content")?.getAttribute("contenteditable"),
         ).toBe("false");
     });
+
+    it("finds the first ATX heading by TOC text and moves the source cursor to it", async () => {
+        const editor = mountEditor("# 开始\n正文\n## 目标标题\n结尾");
+        cleanup = editor.unmount;
+        await nextTick();
+
+        expect(editor.handle.value?.scrollToHeading("目标标题")).toBe(true);
+        editor.handle.value?.replaceSelection("光标：");
+        await nextTick();
+
+        expect(editor.updates).toEqual(["# 开始\n正文\n光标：## 目标标题\n结尾"]);
+        expect(editor.handle.value?.scrollToHeading("不存在")).toBe(false);
+    });
 });

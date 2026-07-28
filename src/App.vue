@@ -3,9 +3,6 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import type Editor from "@toast-ui/editor";
-import type { EditorType } from "@toast-ui/editor";
-import "@toast-ui/editor/dist/toastui-editor.css";
 import "./experience.css";
 import FindReplacePanel from "./components/FindReplacePanel.vue";
 import HistoryPanel from "./components/HistoryPanel.vue";
@@ -15,6 +12,12 @@ import SettingsPanel from "./components/SettingsPanel.vue";
 import StatusBar from "./components/StatusBar.vue";
 import TagEditor from "./components/TagEditor.vue";
 import TableOfContents from "./components/TableOfContents.vue";
+import MoraEditor from "./components/editor/MoraEditor.vue";
+import type {
+    EditorCommand,
+    EditorMode,
+    MoraEditorHandle,
+} from "./components/editor/editorTypes";
 import {
     createDraftRecovery,
     draftKey,
@@ -73,15 +76,12 @@ const dirty = ref(false);
 const loading = ref(false);
 const statusMessage = ref("准备就绪");
 const errorMessage = ref("");
-const editorRoot = ref<HTMLDivElement | null>(null);
+const editorRef = ref<MoraEditorHandle | null>(null);
 const lastSearchQuery = ref("");
 const findPanel = ref<InstanceType<typeof FindReplacePanel> | null>(null);
 
-// 使用纯普通变量（非 ref/shallowRef），避免 Vue 响应式系统干扰 Editor 实例
-let editorInstance: Editor | null = null;
-
-const editorMode = ref<EditorType>("wysiwyg");
-const markdownLayout = ref<"vertical" | "source" | "preview">("vertical");
+const editorMode = ref<EditorMode>("wysiwyg");
+const sourcePreview = ref(true);
 const showToc = ref(true);
 const recentFiles = ref<RecentFileEntry[]>([]);
 const showFindPanel = ref(false);
@@ -140,6 +140,35 @@ function blobToBase64(blob: Blob): Promise<string> {
     });
 }
 
+function imageExtension(mimeType: string): string {
+    const extensions: Record<string, string> = {
+        "image/png": "png",
+        "image/jpeg": "jpg",
+        "image/gif": "gif",
+        "image/webp": "webp",
+        "image/svg+xml": "svg",
+    };
+    return extensions[mimeType] ?? "png";
+}
+
+async function registerPastedImage(file: File): Promise<string> {
+    const extension = imageExtension(file.type);
+    const filename = `assets/image-${crypto.randomUUID()}.${extension}`;
+    const base64 = await blobToBase64(file);
+    const objectUrl = URL.createObjectURL(file);
+    resourceSession.registerNew({
+        path: filename,
+        originalName: file.name || `图片.${extension}`,
+        mimeType: file.type || `image/${extension}`,
+        size: file.size,
+        base64,
+        objectUrl,
+        kind: "asset",
+        isNew: true,
+    });
+    return objectUrl;
+}
+
 const wordCount = computed(() => countNonWhitespaceCharacters(content.value));
 const findMatchCount = computed(() => countOccurrences(content.value, findQuery.value));
 const windowTitle = computed(
@@ -148,9 +177,7 @@ const windowTitle = computed(
 const displayPath = computed(() => currentPath.value || "尚未保存");
 const modeLabel = computed(() => {
     if (editorMode.value === "wysiwyg") return "所见即所得";
-    if (markdownLayout.value === "source") return "仅源码";
-    if (markdownLayout.value === "preview") return "仅预览";
-    return "垂直双栏";
+    return sourcePreview.value ? "垂直双栏" : "仅源码";
 });
 
 const toc = computed(() => {
@@ -168,14 +195,7 @@ const toc = computed(() => {
 });
 
 function scrollToHeading(text: string) {
-    if (!editorRoot.value) return;
-    const elements = Array.from(
-        editorRoot.value.querySelectorAll("h1, h2, h3, h4, h5, h6"),
-    );
-    const target = elements.find((el) => el.textContent?.trim() === text);
-    if (target) {
-        target.scrollIntoView({ behavior: "smooth", block: "start" });
-    }
+    editorRef.value?.scrollToHeading(text);
 }
 
 function setTocVisibility(visible: boolean) {
@@ -356,17 +376,12 @@ const viewMenu = computed<MarkdownCommand[]>(() => [
     {
         label: "垂直双栏",
         shortcut: "Alt+2",
-        action: () => setMarkdownLayout("vertical"),
+        action: () => setSourcePreview(true),
     },
     {
         label: "仅源码",
         shortcut: "Alt+3",
-        action: () => setMarkdownLayout("source"),
-    },
-    {
-        label: "仅预览",
-        shortcut: "Alt+4",
-        action: () => setMarkdownLayout("preview"),
+        action: () => setSourcePreview(false),
     },
     {
         label: showToc.value ? "隐藏侧边栏" : "显示侧边栏",
@@ -377,12 +392,12 @@ const viewMenu = computed<MarkdownCommand[]>(() => [
     {
         label: "光标移到文首",
         shortcut: "Ctrl+Home",
-        action: () => editorInstance?.moveCursorToStart(true),
+        action: () => editorRef.value?.moveCursor("start"),
     },
     {
         label: "光标移到文末",
         shortcut: "Ctrl+End",
-        action: () => editorInstance?.moveCursorToEnd(true),
+        action: () => editorRef.value?.moveCursor("end"),
     },
 ]);
 
@@ -395,11 +410,10 @@ function currentDraftKey() {
 }
 
 function buildDraftSnapshot(): DraftSnapshot {
-    const editorMarkdown = editorInstance?.getMarkdown() ?? content.value;
     return {
         path: currentPath.value,
         title: title.value,
-        content: resourceSession.persistedMarkdown(editorMarkdown),
+        content: resourceSession.persistedMarkdown(content.value),
         meta: meta.value,
         newResources: resourceSession.newResources(),
         updatedAt: new Date().toISOString(),
@@ -468,7 +482,6 @@ async function restoreDraft(snapshot: DraftSnapshot) {
     }
 
     content.value = resourceSession.displayMarkdown(snapshot.content);
-    setEditorMarkdown(content.value);
     dirty.value = true;
     statusMessage.value = "已恢复未保存草稿";
 }
@@ -513,7 +526,6 @@ watch(
 onMounted(async () => {
     window.addEventListener("pointerdown", handleWindowPointerDown, true);
     window.addEventListener("keydown", handleWindowKeyDown);
-    await initializeEditor();
 
     if (!tauriRuntime) {
         meta.value = createEmptyMetadata(title.value);
@@ -548,62 +560,7 @@ onBeforeUnmount(() => {
     draftRecovery.dispose();
     disposePreferences();
     resourceSession.clear();
-    editorInstance?.destroy();
-    editorInstance = null;
 });
-
-async function initializeEditor() {
-    if (!editorRoot.value || editorInstance) return;
-
-    const { default: EditorConstructor } = await import("@toast-ui/editor");
-    editorInstance = new EditorConstructor({
-        el: editorRoot.value,
-        height: "100%",
-        initialValue: content.value,
-        initialEditType: "wysiwyg",
-        previewStyle: "vertical",
-        hideModeSwitch: true,
-        events: {
-            change: () => {
-                syncContentFromEditor(true);
-            },
-        },
-        hooks: {
-            addImageBlobHook: async (blob, callback) => {
-                try {
-                    const extensions: Record<string, string> = {
-                        "image/png": "png",
-                        "image/jpeg": "jpg",
-                        "image/gif": "gif",
-                        "image/webp": "webp",
-                        "image/svg+xml": "svg",
-                    };
-                    const extension = extensions[blob.type] ?? "png";
-                    const filename = `assets/image-${crypto.randomUUID()}.${extension}`;
-                    const base64 = await blobToBase64(blob);
-                    const blobUrl = URL.createObjectURL(blob);
-                    const originalName =
-                        "name" in blob ? (blob as File).name : `图片.${extension}`;
-
-                    resourceSession.registerNew({
-                        path: filename,
-                        originalName,
-                        mimeType: blob.type || `image/${extension}`,
-                        size: blob.size,
-                        base64,
-                        objectUrl: blobUrl,
-                        kind: "asset",
-                        isNew: true,
-                    });
-                    callback(blobUrl, originalName);
-                } catch (e) {
-                    console.error("图片处理失败", e);
-                    alert("图片插入失败");
-                }
-            },
-        },
-    });
-}
 
 function updateTags(tags: string[]) {
     if (!meta.value) return;
@@ -614,6 +571,11 @@ function updateTags(tags: string[]) {
 function markDirty() {
     dirty.value = true;
     if (tauriRuntime) draftRecovery.schedule();
+}
+
+function handleAiError(message: string) {
+    errorMessage.value = `AI 操作失败：${message}`;
+    statusMessage.value = "AI 操作失败";
 }
 
 async function applyNote(note: MdxNote, saved: boolean) {
@@ -664,13 +626,10 @@ async function applyNote(note: MdxNote, saved: boolean) {
     }
 
     content.value = resourceSession.displayMarkdown(persistedContent);
-    setEditorMarkdown(content.value);
     dirty.value = !saved;
     errorMessage.value = "";
 }
 function buildRequest(pathOverride?: string | null): MdxSaveRequest {
-    syncContentFromEditor(false);
-
     const finalContent = resourceSession.persistedMarkdown(content.value);
     const newAssets = resourceSession
         .newResources()
@@ -756,7 +715,7 @@ function openFindPanel() {
     showFindPanel.value = true;
     showReplacePanel.value = false;
 
-    const selectedText = editorInstance?.getSelectedText()?.trim() ?? "";
+    const selectedText = editorRef.value?.getSelectedText().trim() ?? "";
     if (selectedText) {
         findQuery.value = selectedText;
         lastSearchQuery.value = selectedText;
@@ -772,7 +731,7 @@ function openReplacePanel() {
     showFindPanel.value = true;
     showReplacePanel.value = true;
 
-    const selectedText = editorInstance?.getSelectedText()?.trim() ?? "";
+    const selectedText = editorRef.value?.getSelectedText().trim() ?? "";
     if (selectedText) {
         findQuery.value = selectedText;
         lastSearchQuery.value = selectedText;
@@ -833,7 +792,6 @@ function runBrowserFind(query: string, backward = false) {
 }
 
 function navigateFindResult(backward = false) {
-    syncContentFromEditor(false);
     const query = ensureFindQuery();
     if (!query) return;
 
@@ -847,26 +805,23 @@ function expandReplacePanel() {
 }
 
 function replaceCurrentMatch() {
-    syncContentFromEditor(false);
     const query = ensureFindQuery();
-    if (!query || !editorInstance) return;
+    if (!query || !editorRef.value) return;
 
-    if (editorInstance.getSelectedText() !== query) {
+    if (editorRef.value.getSelectedText() !== query) {
         const found = runBrowserFind(query, false);
-        if (!found || editorInstance.getSelectedText() !== query) {
+        if (!found || editorRef.value.getSelectedText() !== query) {
             statusMessage.value = `未定位到“${query}”`;
             return;
         }
     }
 
-    editorInstance.replaceSelection(replaceQuery.value);
-    syncContentFromEditor(true);
+    editorRef.value.replaceSelection(replaceQuery.value);
     statusMessage.value = `已替换当前“${query}”`;
     navigateFindResult(false);
 }
 
 function replaceAllMatches() {
-    syncContentFromEditor(false);
     const query = ensureFindQuery();
     if (!query) return;
 
@@ -877,7 +832,6 @@ function replaceAllMatches() {
     }
 
     content.value = content.value.split(query).join(replaceQuery.value);
-    setEditorMarkdown(content.value);
     markDirty();
     statusMessage.value = `已替换 ${matchCount} 处“${query}”`;
 }
@@ -1033,62 +987,22 @@ async function saveNoteAs() {
     });
 }
 
-function setEditorMarkdown(markdown: string) {
-    if (!editorInstance) return;
-    if (editorInstance.getMarkdown() === markdown) return;
-
-    editorInstance.setMarkdown(markdown, false);
-}
-
-function syncContentFromEditor(shouldMarkDirty = true) {
-    if (!editorInstance) return;
-
-    const markdown = editorInstance.getMarkdown();
-    if (markdown !== content.value) {
-        content.value = markdown;
-        if (shouldMarkDirty) markDirty();
-    }
-}
-
-function setEditorMode(mode: EditorType) {
-    if (!editorInstance || mode === editorMode.value) return;
-
-    syncContentFromEditor(false);
+function setEditorMode(mode: EditorMode) {
     editorMode.value = mode;
-
-    if (mode === "markdown") {
-        editorInstance.changeMode(mode);
-        setMarkdownLayout(markdownLayout.value);
-        statusMessage.value = "已切换到 Markdown 模式";
-    } else {
-        editorInstance.changeMode(mode);
-        statusMessage.value = "已切换到所见即所得";
-    }
-
-    editorInstance.focus();
+    if (mode === "source") sourcePreview.value = false;
+    statusMessage.value =
+        mode === "wysiwyg" ? "已切换到所见即所得" : "已切换到仅源码";
+    editorRef.value?.focus();
 }
 
-function setMarkdownLayout(layout: "vertical" | "source" | "preview") {
-    if (!editorInstance) return;
-
-    if (editorMode.value !== "markdown") {
-        syncContentFromEditor(false);
-        editorMode.value = "markdown";
-        editorInstance.changeMode("markdown");
-    }
-
-    markdownLayout.value = layout;
-    editorInstance.changePreviewStyle("vertical");
-    statusMessage.value =
-        layout === "vertical"
-            ? "已切换到垂直双栏"
-            : layout === "source"
-              ? "已切换到仅源码"
-              : "已切换到仅预览";
-    editorInstance.focus();
+function setSourcePreview(visible: boolean) {
+    editorMode.value = "source";
+    sourcePreview.value = visible;
+    statusMessage.value = visible ? "已切换到垂直双栏" : "已切换到仅源码";
+    editorRef.value?.focus();
 }
 function focusEditor() {
-    editorInstance?.focus();
+    editorRef.value?.focus();
 }
 
 async function writeClipboardText(text: string) {
@@ -1105,7 +1019,7 @@ async function writeClipboardText(text: string) {
 }
 
 async function copySelection() {
-    const selectedText = editorInstance?.getSelectedText() ?? "";
+    const selectedText = editorRef.value?.getSelectedText() ?? "";
     if (await writeClipboardText(selectedText)) {
         statusMessage.value = "已复制所选内容";
     } else {
@@ -1114,27 +1028,25 @@ async function copySelection() {
 }
 
 async function cutSelection() {
-    const selectedText = editorInstance?.getSelectedText() ?? "";
+    const selectedText = editorRef.value?.getSelectedText() ?? "";
     if (!selectedText) return;
 
     const copied = await writeClipboardText(selectedText);
-    if (!copied || !editorInstance) return;
+    if (!copied || !editorRef.value) return;
 
-    editorInstance.replaceSelection("");
-    syncContentFromEditor(true);
+    editorRef.value.replaceSelection("");
     focusEditor();
     statusMessage.value = "已剪切所选内容";
 }
 
 async function pasteClipboard() {
-    if (!editorInstance || !navigator.clipboard?.readText) return;
+    if (!editorRef.value || !navigator.clipboard?.readText) return;
 
     try {
         const text = await navigator.clipboard.readText();
         if (!text) return;
 
-        editorInstance.replaceSelection(text);
-        syncContentFromEditor(true);
+        editorRef.value.replaceSelection(text);
         focusEditor();
         statusMessage.value = "已粘贴剪贴板内容";
     } catch {
@@ -1162,12 +1074,47 @@ function replaceInDocument() {
     openReplacePanel();
 }
 
-function runEditorCommand(command: string, payload?: Record<string, unknown>) {
-    if (!editorInstance) return;
+function isHeadingLevel(value: unknown): value is 0 | 1 | 2 | 3 | 4 | 5 | 6 {
+    return typeof value === "number" && [0, 1, 2, 3, 4, 5, 6].includes(value);
+}
 
-    editorInstance.exec(command, payload);
-    syncContentFromEditor(true);
-    editorInstance.focus();
+function toEditorCommand(
+    name: string,
+    payload?: Record<string, unknown>,
+): EditorCommand | null {
+    if (name === "heading") {
+        const level = payload?.level;
+        return isHeadingLevel(level) ? { name, level } : null;
+    }
+
+    switch (name) {
+        case "undo":
+        case "redo":
+        case "selectAll":
+        case "bold":
+        case "italic":
+        case "strike":
+        case "code":
+        case "blockQuote":
+        case "bulletList":
+        case "orderedList":
+        case "taskList":
+        case "indent":
+        case "outdent":
+        case "hr":
+        case "codeBlock":
+            return { name };
+        default:
+            return null;
+    }
+}
+
+function runEditorCommand(name: string, payload?: Record<string, unknown>) {
+    const command = toEditorCommand(name, payload);
+    if (!command) return;
+
+    editorRef.value?.execute(command);
+    editorRef.value?.focus();
 }
 
 async function runMenuAction(action: () => void | Promise<void>) {
@@ -1325,10 +1272,10 @@ function handleWindowKeyDown(event: KeyboardEvent) {
             insertImageReference();
         } else if (event.key === "Home") {
             event.preventDefault();
-            editorInstance?.moveCursorToStart(true);
+            editorRef.value?.moveCursor("start");
         } else if (event.key === "End") {
             event.preventDefault();
-            editorInstance?.moveCursorToEnd(true);
+            editorRef.value?.moveCursor("end");
         }
     } else if (event.altKey) {
         const key = event.key;
@@ -1337,13 +1284,10 @@ function handleWindowKeyDown(event: KeyboardEvent) {
             setEditorMode("wysiwyg");
         } else if (key === "2") {
             event.preventDefault();
-            setMarkdownLayout("vertical");
+            setSourcePreview(true);
         } else if (key === "3") {
             event.preventDefault();
-            setMarkdownLayout("source");
-        } else if (key === "4") {
-            event.preventDefault();
-            setMarkdownLayout("preview");
+            setSourcePreview(false);
         }
     }
 }
@@ -1480,7 +1424,7 @@ async function chooseResources() {
 }
 
 function insertLink() {
-    const selected = editorInstance?.getSelectedText() || "链接文字";
+    const selected = editorRef.value?.getSelectedText() || "链接文字";
     const text = prompt("链接文字", selected) || selected;
     const url = prompt("链接地址", "https://") || "";
     if (!url) return;
@@ -1503,11 +1447,10 @@ function insertTable() {
 }
 
 function insertMarkdownSnippet(markdown: string) {
-    if (!editorInstance) return;
+    if (!editorRef.value) return;
 
-    editorInstance.replaceSelection(markdown);
-    syncContentFromEditor(true);
-    editorInstance.focus();
+    editorRef.value.replaceSelection(markdown);
+    editorRef.value.focus();
 }
 
 function sanitizeFileName(fileName: string) {
@@ -1678,28 +1621,18 @@ function stringifyError(error: unknown) {
                 <button
                     type="button"
                     :class="{
-                        active: editorMode === 'markdown' && markdownLayout === 'source',
+                        active: editorMode === 'source' && !sourcePreview,
                     }"
-                    @click="setMarkdownLayout('source')"
+                    @click="setSourcePreview(false)"
                 >
                     仅源码
                 </button>
                 <button
                     type="button"
                     :class="{
-                        active: editorMode === 'markdown' && markdownLayout === 'preview',
+                        active: editorMode === 'source' && sourcePreview,
                     }"
-                    @click="setMarkdownLayout('preview')"
-                >
-                    仅预览
-                </button>
-                <button
-                    type="button"
-                    :class="{
-                        active:
-                            editorMode === 'markdown' && markdownLayout === 'vertical',
-                    }"
-                    @click="setMarkdownLayout('vertical')"
+                    @click="setSourcePreview(true)"
                 >
                     垂直双栏
                 </button>
@@ -1742,16 +1675,17 @@ function stringifyError(error: unknown) {
                         @replace-current="replaceCurrentMatch"
                         @replace-all="replaceAllMatches"
                     />
-                    <div
-                        ref="editorRoot"
-                        class="markdown-editor"
-                        :class="{
-                            'source-only':
-                                editorMode === 'markdown' && markdownLayout === 'source',
-                            'preview-only':
-                                editorMode === 'markdown' && markdownLayout === 'preview',
-                        }"
-                    />
+                    <div class="markdown-editor">
+                        <MoraEditor
+                            ref="editorRef"
+                            v-model="content"
+                            :mode="editorMode"
+                            :source-preview="sourcePreview"
+                            :upload-image="registerPastedImage"
+                            @update:model-value="markDirty"
+                            @ai-error="handleAiError"
+                        />
+                    </div>
                 </div>
             </section>
         </div>
@@ -1852,27 +1786,6 @@ function stringifyError(error: unknown) {
 }
 </style>
 
-<style scoped>
-.markdown-editor.source-only :deep(.toastui-editor-md-preview),
-.markdown-editor.source-only :deep(.toastui-editor-md-splitter) {
-    display: none;
-}
-
-.markdown-editor.source-only :deep(.toastui-editor-md-container > .toastui-editor) {
-    width: 100%;
-}
-
-.markdown-editor.preview-only :deep(.toastui-editor-md-container > .toastui-editor),
-.markdown-editor.preview-only :deep(.toastui-editor-md-splitter) {
-    display: none;
-}
-
-.markdown-editor.preview-only :deep(.toastui-editor-md-preview) {
-    display: block;
-    width: 100%;
-}
-</style>
-
 <style>
 @media print {
     .menu-bar,
@@ -1904,15 +1817,9 @@ function stringifyError(error: unknown) {
         height: auto;
     }
 
-    .toastui-editor-toolbar,
-    .toastui-editor-mode-switch,
-    .toastui-editor-md-container {
-        display: none !important;
-    }
-
-    .toastui-editor-defaultUI,
-    .toastui-editor-main,
-    .toastui-editor-md-preview {
+    .markdown-editor .milkdown-editor,
+    .markdown-editor .milkdown,
+    .markdown-editor .ProseMirror {
         height: auto !important;
         overflow: visible !important;
         border: 0 !important;

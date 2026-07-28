@@ -178,6 +178,32 @@ function moveCursor(position: "start" | "end"): void {
     });
 }
 
+function scrollToHeading(text: string): boolean {
+    if (!crepe || !ready || disposed) return false;
+
+    return crepe.editor.action((ctx) => {
+        const view = ctx.get(editorViewCtx);
+        let headingPosition: number | undefined;
+        view.state.doc.descendants((node, position) => {
+            if (
+                headingPosition === undefined &&
+                node.type.name === "heading" &&
+                node.textContent.trim() === text
+            ) {
+                headingPosition = position + 1;
+            }
+            return headingPosition === undefined;
+        });
+        if (headingPosition === undefined) return false;
+
+        const transaction = view.state.tr
+            .setSelection(TextSelection.create(view.state.doc, headingPosition))
+            .scrollIntoView();
+        view.dispatch(transaction);
+        return true;
+    });
+}
+
 function execute(command: EditorCommand): void {
     if (!crepe || !ready || disposed) return;
 
@@ -270,5 +296,6 @@ defineExpose<MoraEditorHandle>({
     replaceSelection,
     moveCursor,
     execute,
+    scrollToHeading,
 });
 </script>
