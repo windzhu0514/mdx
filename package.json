@@ -15,9 +15,15 @@
         "format:check": "prettier --check ."
     },
     "dependencies": {
+        "@codemirror/commands": "6.10.4",
+        "@codemirror/lang-markdown": "6.5.1",
+        "@codemirror/state": "6.7.1",
+        "@milkdown/crepe": "7.21.3",
+        "@milkdown/kit": "7.21.3",
         "@tauri-apps/api": "2.11.0",
         "@tauri-apps/plugin-dialog": "2.7.1",
         "@toast-ui/editor": "3.2.2",
+        "codemirror": "6.0.2",
         "vue": "3.5.34"
     },
     "devDependencies": {
