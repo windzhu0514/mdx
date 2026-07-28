@@ -1,0 +1,192 @@
+<!doctype html>
+<html>
+    <head>
+        <meta charset="UTF-8" />
+        <title>IME Test</title>
+        <style>
+            body {
+                font-family: sans-serif;
+                padding: 20px;
+            }
+            #log {
+                background: #1e1e1e;
+                color: #d4d4d4;
+                padding: 12px;
+                max-height: 400px;
+                overflow: auto;
+                font-size: 12px;
+                font-family: monospace;
+                white-space: pre;
+                border-radius: 8px;
+                margin-top: 16px;
+            }
+            .comp {
+                color: #4ec9b0;
+            }
+            .key {
+                color: #ce9178;
+            }
+            .inp {
+                color: #9cdcfe;
+            }
+            .warn {
+                color: #f14c4c;
+            }
+            h3 {
+                margin-top: 24px;
+            }
+        </style>
+    </head>
+    <body>
+        <h2>Toast UI Editor 中文 IME 测试（纯净版，无任何 patch）</h2>
+        <p>请在下方编辑器中输入中文，观察是否有多余字母。查看下方日志分析事件时序。</p>
+
+        <h3>编辑器 1：WYSIWYG 模式</h3>
+        <div id="editor1" style="border: 1px solid #ccc"></div>
+
+        <h3>编辑器 2：纯 contentEditable（对照组）</h3>
+        <div
+            id="editor2"
+            contenteditable="true"
+            style="
+                border: 1px solid #ccc;
+                padding: 12px;
+                min-height: 100px;
+                font-size: 16px;
+            "
+        ></div>
+
+        <h3>事件日志</h3>
+        <div id="log"></div>
+
+        <script type="module">
+            import Editor from "@toast-ui/editor";
+            import "@toast-ui/editor/dist/toastui-editor.css";
+
+            const logEl = document.getElementById("log");
+            let logCount = 0;
+            function log(msg, cls = "") {
+                logCount++;
+                const span = document.createElement("span");
+                span.className = cls;
+                span.textContent = `[${logCount.toString().padStart(3, "0")}] ${msg}\n`;
+                logEl.appendChild(span);
+                logEl.scrollTop = logEl.scrollHeight;
+            }
+
+            // 编辑器 1：Toast UI
+            const editor = new Editor({
+                el: document.getElementById("editor1"),
+                height: "200px",
+                initialEditType: "wysiwyg",
+                usageStatistics: false,
+                hideModeSwitch: true,
+                placeholder: "在这里输入中文测试...",
+            });
+            log("Toast UI Editor initialized (vanilla, NO patches)");
+
+            // 获取 ProseMirror view
+            const wwEditor = editor.getCurrentModeEditor();
+            const pmView = wwEditor?.view;
+            if (pmView) {
+                log(`ProseMirror view found. composing=${pmView.composing}`);
+                log(`prosemirror-view version: check node_modules`);
+            } else {
+                log("WARNING: ProseMirror view NOT found", "warn");
+            }
+
+            // 监听 IME 事件 - Toast UI 编辑器
+            setTimeout(() => {
+                const pm = document.querySelector(".ProseMirror");
+                if (!pm) {
+                    log("ERROR: .ProseMirror element not found", "warn");
+                    return;
+                }
+
+                pm.addEventListener(
+                    "compositionstart",
+                    (e) => {
+                        log(
+                            `[Toast UI] compositionstart data="${e.data}" | view.composing=${pmView?.composing}`,
+                            "comp",
+                        );
+                    },
+                    true,
+                );
+
+                pm.addEventListener(
+                    "compositionupdate",
+                    (e) => {
+                        log(`[Toast UI] compositionupdate data="${e.data}"`, "comp");
+                    },
+                    true,
+                );
+
+                pm.addEventListener(
+                    "compositionend",
+                    (e) => {
+                        log(
+                            `[Toast UI] compositionend data="${e.data}" | view.composing=${pmView?.composing}`,
+                            "comp",
+                        );
+                        // 检查 compositionend 后的文本
+                        setTimeout(() => {
+                            const md = editor.getMarkdown();
+                            log(`[Toast UI] 内容检查: "${md}"`, "warn");
+                        }, 50);
+                    },
+                    true,
+                );
+
+                pm.addEventListener(
+                    "keydown",
+                    (e) => {
+                        log(
+                            `[Toast UI] keydown key="${e.key}" code=${e.keyCode} isComposing=${e.isComposing}`,
+                            "key",
+                        );
+                    },
+                    true,
+                );
+
+                pm.addEventListener(
+                    "input",
+                    (e) => {
+                        log(
+                            `[Toast UI] input type="${e.inputType}" data="${e.data}" isComposing=${e.isComposing}`,
+                            "inp",
+                        );
+                    },
+                    true,
+                );
+
+                log("Debug listeners attached to Toast UI .ProseMirror");
+            }, 500);
+
+            // 编辑器 2：纯 contentEditable（对照组）
+            const ce = document.getElementById("editor2");
+            ce.addEventListener("compositionstart", (e) => {
+                log(`[对照组] compositionstart data="${e.data}"`, "comp");
+            });
+            ce.addEventListener("compositionend", (e) => {
+                log(
+                    `[对照组] compositionend data="${e.data}" | 内容="${ce.textContent}"`,
+                    "comp",
+                );
+            });
+            ce.addEventListener("keydown", (e) => {
+                log(
+                    `[对照组] keydown key="${e.key}" code=${e.keyCode} isComposing=${e.isComposing}`,
+                    "key",
+                );
+            });
+            ce.addEventListener("input", (e) => {
+                log(
+                    `[对照组] input type="${e.inputType}" data="${e.data}" isComposing=${e.isComposing}`,
+                    "inp",
+                );
+            });
+            log("对照组 contentEditable 已初始化");
+        </script>
+    </body>
+</html>

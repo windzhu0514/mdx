@@ -1,0 +1,8 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "/^npm run build && cargo check --manifest-path src-tauri/Cargo\\.toml && npm run tauri -- build$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
+}

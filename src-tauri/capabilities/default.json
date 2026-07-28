@@ -1,0 +1,11 @@
+{
+    "identifier": "default",
+    "description": "Default permissions for MDXNote",
+    "windows": ["main"],
+    "permissions": [
+        "core:default",
+        "core:window:allow-close",
+        "core:window:allow-destroy",
+        "dialog:default"
+    ]
+}

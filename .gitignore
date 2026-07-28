@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.vite/
+*.log
+.worktrees/
+.superpowers/
+
+src-tauri/target/
+src-tauri/gen/
+src-tauri/*.tmp
+src-tauri/*.bak
+
+.DS_Store
+Thumbs.db

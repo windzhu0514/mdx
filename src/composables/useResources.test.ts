@@ -1,0 +1,62 @@
+// @vitest-environment jsdom
+
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import type { PendingResource } from "../types/mdx";
+import { createResourceSession } from "./useResources";
+
+const newImage: PendingResource = {
+    path: "assets/a.png",
+    originalName: "a.png",
+    mimeType: "image/png",
+    size: 1,
+    base64: "YQ==",
+    objectUrl: "blob:a",
+    kind: "asset",
+    isNew: true,
+};
+
+describe("resource session", () => {
+    beforeEach(() => {
+        Object.defineProperty(URL, "revokeObjectURL", {
+            configurable: true,
+            value: vi.fn(),
+        });
+    });
+
+    it("clears and revokes every object URL", () => {
+        const session = createResourceSession();
+        session.registerLoaded({ ...newImage, isNew: false });
+
+        session.clear();
+
+        expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:a");
+        expect(session.objectUrls().size).toBe(0);
+    });
+
+    it("does not resend a resource after save", () => {
+        const session = createResourceSession();
+        session.registerNew(newImage);
+
+        expect(session.newResources()).toHaveLength(1);
+        session.markSaved();
+        expect(session.newResources()).toHaveLength(0);
+    });
+
+    it("keeps the persisted path while showing an object URL", () => {
+        const session = createResourceSession();
+        session.registerLoaded({ ...newImage, isNew: false });
+
+        expect(session.displayMarkdown("![图](assets/a.png)")).toBe("![图](blob:a)");
+        expect(session.persistedMarkdown("![图](blob:a)")).toBe("![图](assets/a.png)");
+    });
+
+    it("replaces an existing path without leaking its old URL", () => {
+        const session = createResourceSession();
+        session.registerLoaded({ ...newImage, isNew: false });
+        session.registerNew({ ...newImage, objectUrl: "blob:b" });
+
+        expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:a");
+        expect(session.objectUrls().get("assets/a.png")).toBe("blob:b");
+    });
+});
