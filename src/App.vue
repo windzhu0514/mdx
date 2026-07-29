@@ -13,6 +13,7 @@ import StatusBar from "./components/StatusBar.vue";
 import TagEditor from "./components/TagEditor.vue";
 import TableOfContents from "./components/TableOfContents.vue";
 import MoraEditor from "./components/editor/MoraEditor.vue";
+import { createOpenAICompatibleProvider } from "./ai/openAICompatible";
 import type {
     EditorCommand,
     EditorMode,
@@ -108,6 +109,13 @@ const {
     update: updatePreferences,
     dispose: disposePreferences,
 } = usePreferences();
+const aiProvider = createOpenAICompatibleProvider(
+    () => ({
+        baseUrl: preferences.value.aiBaseUrl,
+        model: preferences.value.aiModel,
+    }),
+    resourceSession.persistedMarkdown,
+);
 const showLeavePrompt = ref(false);
 let leavePromptResolver: ((decision: LeaveDecision) => void) | null = null;
 let unlistenClose: (() => void) | null = null;
@@ -635,8 +643,12 @@ function handleEditorUpdate(markdown: string) {
 }
 
 function handleAiError(message: string) {
-    errorMessage.value = `AI 操作失败：${message}`;
-    statusMessage.value = "AI 操作失败";
+    const needsSettings = /Base URL|模型|API Key/i.test(message);
+    const detail = needsSettings
+        ? `${message}，请在偏好设置中完成 AI 配置`
+        : message;
+    errorMessage.value = `AI 生成失败：${detail}`;
+    statusMessage.value = "AI 生成失败";
 }
 
 async function applyNote(note: MdxNote, saved: boolean) {
@@ -1761,6 +1773,7 @@ function stringifyError(error: unknown) {
                             :mode="editorMode"
                             :source-preview="sourcePreview"
                             :upload-image="registerPastedImage"
+                            :ai-provider="tauriRuntime ? aiProvider : undefined"
                             @update:model-value="handleEditorUpdate"
                             @ai-error="handleAiError"
                         />
@@ -1900,6 +1913,7 @@ function stringifyError(error: unknown) {
         height: auto;
     }
 
+    .markdown-editor .mora-editor,
     .markdown-editor .milkdown-editor,
     .markdown-editor .milkdown,
     .markdown-editor .ProseMirror {

@@ -1,27 +1,29 @@
 <template>
-    <MilkdownEditor
-        v-if="mode === 'wysiwyg'"
-        ref="milkdownEditor"
-        :model-value="displayValue ?? modelValue"
-        :readonly="readonly"
-        :upload-image="uploadImage"
-        :ai-provider="aiProvider"
-        @update:model-value="emit('update:modelValue', $event)"
-        @ai-error="emit('ai-error', $event)"
-    />
-    <div v-else class="source-layout" :class="{ split: sourcePreview }">
-        <SourceEditor
-            ref="sourceEditor"
-            :model-value="modelValue"
-            :readonly="readonly"
-            @update:model-value="emit('update:modelValue', $event)"
-        />
+    <div class="mora-editor">
         <MilkdownEditor
-            v-if="sourcePreview"
-            ref="previewEditor"
+            v-if="mode === 'wysiwyg'"
+            ref="milkdownEditor"
             :model-value="displayValue ?? modelValue"
-            readonly
+            :readonly="readonly"
+            :upload-image="uploadImage"
+            :ai-provider="aiProvider"
+            @update:model-value="emit('update:modelValue', $event)"
+            @ai-error="emit('ai-error', $event)"
         />
+        <div v-else class="source-layout" :class="{ split: sourcePreview }">
+            <SourceEditor
+                ref="sourceEditor"
+                :model-value="modelValue"
+                :readonly="readonly"
+                @update:model-value="emit('update:modelValue', $event)"
+            />
+            <MilkdownEditor
+                v-if="sourcePreview"
+                ref="previewEditor"
+                :model-value="displayValue ?? modelValue"
+                readonly
+            />
+        </div>
     </div>
 </template>
 
@@ -108,6 +110,14 @@ defineExpose<MoraEditorHandle>({
 </script>
 
 <style scoped>
+.mora-editor {
+    width: 100%;
+    height: 100%;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+}
+
 .source-layout {
     display: grid;
     min-width: 0;

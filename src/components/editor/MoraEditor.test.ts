@@ -1,4 +1,5 @@
 /** @vitest-environment jsdom */
+/* eslint-disable vue/one-component-per-file */
 
 import {
     createApp,

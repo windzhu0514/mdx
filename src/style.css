@@ -509,17 +509,24 @@ summary {
 }
 
 .markdown-editor > *,
+.markdown-editor .mora-editor,
 .markdown-editor .milkdown-editor,
-.markdown-editor .source-editor,
-.markdown-editor .cm-editor {
+.markdown-editor .source-editor {
     height: 100%;
     min-height: 0;
 }
 
+.markdown-editor .milkdown-editor,
+.markdown-editor .source-editor {
+    overflow: auto;
+}
+
+.markdown-editor .cm-editor {
+    height: 100%;
+}
+
 .markdown-editor .ProseMirror,
 .markdown-editor .cm-content {
-    font-size: 16px;
-    line-height: 1.75;
     color: var(--color-text-main);
 }
 

@@ -2,6 +2,7 @@
 
 import { createApp, h, nextTick, ref, type Ref } from "vue";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { MoraAIProvider } from "../../ai/openAICompatible";
 import type { MoraEditorHandle } from "./editorTypes";
 import MilkdownEditor from "./MilkdownEditor.vue";
 
@@ -34,8 +35,8 @@ const mocks = vi.hoisted(() => {
         dispatch: vi.fn(),
     };
     const commands = { call: vi.fn() };
-    let createEditor: () => Promise<void> = async () => undefined;
-    let destroyEditor: () => Promise<void> = async () => undefined;
+    const createEditor: () => Promise<void> = async () => undefined;
+    const destroyEditor: () => Promise<void> = async () => undefined;
     const instances: Array<{
         options: Record<string, unknown>;
         create: ReturnType<typeof vi.fn>;
@@ -145,6 +146,7 @@ type MountedEditor = {
     handle: Ref<MoraEditorHandle | null>;
     markdown: Ref<string>;
     readonly: Ref<boolean>;
+    errors: string[];
     updates: string[];
     unmount: () => void;
 };
@@ -175,8 +177,13 @@ async function flushPromises(): Promise<void> {
     await Promise.resolve();
 }
 
-function mountEditor(markdown = "# 初始", readonly = false): MountedEditor {
+function mountEditor(
+    markdown = "# 初始",
+    readonly = false,
+    aiProvider?: MoraAIProvider,
+): MountedEditor {
     const host = document.createElement("div");
+    const errors: string[] = [];
     const updates: string[] = [];
     const handle = ref<MoraEditorHandle | null>(null);
     const value = ref(markdown);
@@ -188,6 +195,8 @@ function mountEditor(markdown = "# 初始", readonly = false): MountedEditor {
                     ref: handle,
                     modelValue: value.value,
                     readonly: readonlyValue.value,
+                    aiProvider,
+                    onAiError: (message: string) => errors.push(message),
                     "onUpdate:modelValue": (updated: string) => {
                         updates.push(updated);
                         value.value = updated;
@@ -203,6 +212,7 @@ function mountEditor(markdown = "# 初始", readonly = false): MountedEditor {
         handle,
         markdown: value,
         readonly: readonlyValue,
+        errors,
         updates,
         unmount: () => {
             app.unmount();
@@ -232,6 +242,36 @@ afterEach(() => {
 });
 
 describe("MilkdownEditor", () => {
+    it("enables Crepe AI with diff review and forwards provider errors", async () => {
+        const provider: MoraAIProvider = async function* () {
+            yield "结果";
+        };
+        const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+        const editor = mountEditor("# AI", false, provider);
+        cleanup = editor.unmount;
+        await nextTick();
+
+        const options = mocks.instances[0].options as {
+            features: Record<string, boolean>;
+            featureConfigs: Record<
+                string,
+                {
+                    provider: MoraAIProvider;
+                    diffReviewOnEnd: boolean;
+                    onError: (error: Error) => void;
+                }
+            >;
+        };
+        expect(options.features.ai).toBe(true);
+        expect(options.featureConfigs.ai.provider).toBe(provider);
+        expect(options.featureConfigs.ai.diffReviewOnEnd).toBe(true);
+
+        options.featureConfigs.ai.onError(new Error("未找到 API Key"));
+
+        expect(editor.errors).toEqual(["未找到 API Key"]);
+        expect(consoleError).not.toHaveBeenCalled();
+    });
+
     it("initializes Crepe, emits editor input, synchronizes external Markdown, and destroys it", async () => {
         const editor = mountEditor("# 初始", true);
         cleanup = editor.unmount;

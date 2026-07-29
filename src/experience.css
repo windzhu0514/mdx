@@ -128,13 +128,39 @@ summary:focus-visible,
     cursor: pointer;
 }
 
-.markdown-editor .ProseMirror,
-.markdown-editor .cm-content {
+.markdown-editor .ProseMirror {
     max-width: var(--content-width);
     margin-inline: auto;
     font-family: var(--editor-font-family);
     font-size: var(--editor-font-size);
     line-height: var(--editor-line-height);
+}
+
+.markdown-editor .cm-content {
+    max-width: var(--content-width);
+    margin-inline: auto;
+    font-family: var(--font-mono);
+    font-size: var(--editor-font-size);
+    line-height: var(--editor-line-height);
+}
+
+.markdown-editor .milkdown {
+    min-height: 100%;
+    --crepe-color-background: var(--color-bg-surface);
+    --crepe-color-on-background: var(--color-text-main);
+    --crepe-color-surface: var(--color-bg-surface);
+    --crepe-color-surface-low: var(--color-bg-base);
+    --crepe-color-on-surface: var(--color-text-main);
+    --crepe-color-on-surface-variant: var(--color-text-muted);
+    --crepe-color-outline: var(--color-border);
+    --crepe-color-primary: var(--color-primary);
+    --crepe-color-secondary: var(--color-primary-light);
+    --crepe-color-on-secondary: var(--color-text-main);
+    --crepe-color-error: var(--color-danger);
+    --crepe-color-hover: var(--color-primary-light);
+    --crepe-color-selected: var(--color-primary-light);
+    --crepe-font-default: var(--editor-font-family);
+    --crepe-font-code: var(--font-mono);
 }
 
 .toc-list li {
@@ -371,7 +397,6 @@ summary:focus-visible,
     white-space: nowrap;
 }
 
-:root[data-theme="dark"] .markdown-editor .milkdown-editor,
 :root[data-theme="dark"] .markdown-editor .source-editor,
 :root[data-theme="dark"] .markdown-editor .cm-editor,
 :root[data-theme="dark"] .markdown-editor .cm-gutters {
@@ -379,7 +404,6 @@ summary:focus-visible,
     background: var(--color-bg-surface) !important;
 }
 
-:root[data-theme="dark"] .markdown-editor .ProseMirror,
 :root[data-theme="dark"] .markdown-editor .cm-content {
     color: var(--color-text-main);
     background: var(--color-bg-surface);

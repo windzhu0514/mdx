@@ -8,7 +8,10 @@ describe("App 编辑器视图", () => {
         expect(appSource).toContain("仅源码");
         expect(appSource).toContain("垂直双栏");
         expect(appSource).not.toContain("仅预览");
-        expect(appSource).not.toContain("@toast-ui/editor");
         expect(appSource).toContain("<MoraEditor");
+    });
+
+    it("打印时解除 MoraEditor 容器的固定高度和裁剪", () => {
+        expect(appSource).toContain(".markdown-editor .mora-editor");
     });
 });

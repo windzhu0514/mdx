@@ -105,7 +105,7 @@ function lowestEditorStub(kind: "milkdown" | "source") {
         props: {
             modelValue: { type: String, required: true },
             readonly: { type: Boolean, default: false },
-            uploadImage: { type: Function },
+            uploadImage: { type: Function, default: undefined },
         },
         emits: ["update:modelValue", "ai-error"],
         setup(props, { emit, expose }) {
