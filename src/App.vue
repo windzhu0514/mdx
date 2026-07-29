@@ -40,10 +40,7 @@ import { runLeaveDecision, type LeaveDecision } from "./utils/leaveGuard";
 import { base64ToBlob } from "./utils/base64";
 import { createEmptyMetadata } from "./utils/note";
 import { isTextInputTarget } from "./utils/shortcuts";
-import {
-    countNonWhitespaceCharacters,
-    extractMarkdownHeadings,
-} from "./utils/text";
+import { countNonWhitespaceCharacters, extractMarkdownHeadings } from "./utils/text";
 
 type MdxSaveRequest = {
     path: string | null;
@@ -101,6 +98,8 @@ const showHistory = ref(false);
 const historyItems = ref<HistoryListItem[]>([]);
 const historyLoading = ref(false);
 const showSettings = ref(false);
+const aiKeyConfigured = ref(false);
+const aiKeySaving = ref(false);
 
 const resourceSession = createResourceSession();
 const {
@@ -383,7 +382,7 @@ const viewMenu = computed<MarkdownCommand[]>(() => [
         action: toggleToc,
     },
     { label: "历史版本...", action: openHistoryPanel },
-    { label: "偏好设置...", action: () => (showSettings.value = true) },
+    { label: "偏好设置...", action: openSettingsPanel },
     {
         label: "光标移到文首",
         shortcut: "Ctrl+Home",
@@ -518,6 +517,57 @@ watch(
     { immediate: true },
 );
 
+async function refreshAiKeyConfigured() {
+    if (!tauriRuntime) {
+        aiKeyConfigured.value = false;
+        return;
+    }
+
+    try {
+        aiKeyConfigured.value = await invoke<boolean>("has_ai_api_key");
+    } catch (error) {
+        aiKeyConfigured.value = false;
+        console.warn("读取 AI API Key 状态失败", error);
+    }
+}
+
+async function openSettingsPanel() {
+    showSettings.value = true;
+    await refreshAiKeyConfigured();
+}
+
+async function saveAiApiKey(apiKey: string) {
+    if (!tauriRuntime || aiKeySaving.value) return;
+
+    aiKeySaving.value = true;
+    try {
+        await invoke("save_ai_api_key", { apiKey });
+        await refreshAiKeyConfigured();
+        statusMessage.value = "AI API Key 已保存";
+    } catch (error) {
+        errorMessage.value = `AI API Key 保存失败：${stringifyError(error)}`;
+        statusMessage.value = "AI API Key 保存失败";
+    } finally {
+        aiKeySaving.value = false;
+    }
+}
+
+async function deleteAiApiKey() {
+    if (!tauriRuntime || aiKeySaving.value) return;
+
+    aiKeySaving.value = true;
+    try {
+        await invoke("delete_ai_api_key");
+        await refreshAiKeyConfigured();
+        statusMessage.value = "AI API Key 已删除";
+    } catch (error) {
+        errorMessage.value = `AI API Key 删除失败：${stringifyError(error)}`;
+        statusMessage.value = "AI API Key 删除失败";
+    } finally {
+        aiKeySaving.value = false;
+    }
+}
+
 onMounted(async () => {
     window.addEventListener("pointerdown", handleWindowPointerDown, true);
     window.addEventListener("keydown", handleWindowKeyDown);
@@ -526,6 +576,8 @@ onMounted(async () => {
         meta.value = createEmptyMetadata(title.value);
         return;
     }
+
+    await refreshAiKeyConfigured();
 
     const appWindow = getCurrentWindow();
     unlistenDragDrop = await appWindow.onDragDropEvent(async (event) => {
@@ -1012,8 +1064,7 @@ async function saveNoteAs() {
 function setEditorMode(mode: EditorMode) {
     editorMode.value = mode;
     if (mode === "source") sourcePreview.value = false;
-    statusMessage.value =
-        mode === "wysiwyg" ? "已切换到所见即所得" : "已切换到仅源码";
+    statusMessage.value = mode === "wysiwyg" ? "已切换到所见即所得" : "已切换到仅源码";
     editorRef.value?.focus();
 }
 
@@ -1716,8 +1767,12 @@ function stringifyError(error: unknown) {
         <SettingsPanel
             :open="showSettings"
             :preferences="preferences"
+            :ai-key-configured="aiKeyConfigured"
+            :ai-key-saving="aiKeySaving"
             @close="showSettings = false"
             @update="updatePreferences"
+            @save-ai-key="saveAiApiKey"
+            @delete-ai-key="deleteAiApiKey"
         />
         <HistoryPanel
             :open="showHistory"

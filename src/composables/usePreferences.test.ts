@@ -48,6 +48,32 @@ describe("editor preferences", () => {
         expect(loadPreferences(storage).fontSize).toBe(19);
     });
 
+    it("normalizes damaged AI settings to empty strings", () => {
+        const preferences = normalizePreferences({
+            ...DEFAULT_PREFERENCES,
+            aiBaseUrl: 42,
+            aiModel: { name: "invalid" },
+        });
+
+        expect(preferences.aiBaseUrl).toBe("");
+        expect(preferences.aiModel).toBe("");
+    });
+
+    it("trims and persists valid AI settings", () => {
+        const storage = memoryStorage();
+        savePreferences(storage, {
+            ...DEFAULT_PREFERENCES,
+            aiBaseUrl: "  https://api.example.com/v1  ",
+            aiModel: "  example-model  ",
+        });
+
+        expect(loadPreferences(storage)).toEqual({
+            ...DEFAULT_PREFERENCES,
+            aiBaseUrl: "https://api.example.com/v1",
+            aiModel: "example-model",
+        });
+    });
+
     it("resolves the system theme", () => {
         expect(resolveTheme("system", true)).toBe("dark");
         expect(resolveTheme("system", false)).toBe("light");

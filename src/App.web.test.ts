@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
     closeHandler: undefined as
         ((event: { preventDefault: () => void }) => Promise<void>) | undefined,
     editorUpdate: undefined as ((markdown: string) => void) | undefined,
+    aiKeyConfigured: false,
     moraEditorMounted: vi.fn(),
     getCurrentWindow: vi.fn(() => ({
         onDragDropEvent: vi.fn(async () => () => undefined),
@@ -19,6 +20,15 @@ const mocks = vi.hoisted(() => ({
         close: mocks.windowClose,
     })),
     invoke: vi.fn(async (command: string) => {
+        if (command === "has_ai_api_key") return mocks.aiKeyConfigured;
+        if (command === "save_ai_api_key") {
+            mocks.aiKeyConfigured = true;
+            return undefined;
+        }
+        if (command === "delete_ai_api_key") {
+            mocks.aiKeyConfigured = false;
+            return undefined;
+        }
         if (command === "get_recent_files") return [];
         if (command === "read_latest_draft") return null;
         if (command === "create_mdx") {
@@ -94,6 +104,7 @@ beforeEach(() => {
     mocks.closeHandler = undefined;
     mocks.editorUpdate = undefined;
     mocks.isTauri.mockReturnValue(false);
+    mocks.aiKeyConfigured = false;
     window.matchMedia = vi.fn(() => ({
         matches: false,
         media: "(prefers-color-scheme: dark)",
@@ -198,6 +209,24 @@ describe("App Web 预览启动", () => {
         expect(chip?.textContent ?? "").toContain("测试");
         expect(mocks.invoke).not.toHaveBeenCalled();
     });
+
+    it("Web 预览打开 AI 设置时仍不访问凭据 IPC", async () => {
+        const host = document.createElement("div");
+        document.body.append(host);
+        const app = createApp(App);
+        app.mount(host);
+        cleanup = () => app.unmount();
+        const settingsButton = Array.from(host.querySelectorAll("button")).find(
+            (button) => button.textContent?.trim() === "偏好设置...",
+        );
+
+        settingsButton?.click();
+        await nextTick();
+
+        expect(host.querySelector('[aria-labelledby="settings-title"]')).not.toBeNull();
+        expect(host.textContent).toContain("未配置");
+        expect(mocks.invoke).not.toHaveBeenCalled();
+    });
 });
 
 describe("App 桌面关闭", () => {
@@ -220,5 +249,63 @@ describe("App 桌面关闭", () => {
 
         expect(event.preventDefault).not.toHaveBeenCalled();
         expect(mocks.windowClose).not.toHaveBeenCalled();
+    });
+
+    it("启动、打开设置、保存和删除时同步 API Key 配置状态", async () => {
+        mocks.isTauri.mockReturnValue(true);
+        mocks.aiKeyConfigured = true;
+        const host = document.createElement("div");
+        document.body.append(host);
+        const app = createApp(App);
+        app.mount(host);
+        cleanup = () => app.unmount();
+
+        await vi.waitFor(() => {
+            expect(
+                mocks.invoke.mock.calls.filter(([name]) => name === "has_ai_api_key"),
+            ).toHaveLength(1);
+        });
+        const settingsButton = Array.from(host.querySelectorAll("button")).find(
+            (button) => button.textContent?.trim() === "偏好设置...",
+        );
+        settingsButton?.click();
+        await vi.waitFor(() => {
+            expect(
+                mocks.invoke.mock.calls.filter(([name]) => name === "has_ai_api_key"),
+            ).toHaveLength(2);
+        });
+        expect(host.textContent).toContain("已配置");
+
+        const apiKey = host.querySelector<HTMLInputElement>(
+            'input[aria-label="AI API Key"]',
+        );
+        if (!apiKey) throw new Error("未找到 API Key 输入框");
+        apiKey.value = "replacement-key";
+        apiKey.dispatchEvent(new Event("input", { bubbles: true }));
+        await nextTick();
+        const saveButton = Array.from(host.querySelectorAll("button")).find((button) =>
+            button.textContent?.includes("保存/替换 API Key"),
+        );
+        saveButton?.click();
+        await vi.waitFor(() => {
+            expect(mocks.invoke).toHaveBeenCalledWith("save_ai_api_key", {
+                apiKey: "replacement-key",
+            });
+            expect(
+                mocks.invoke.mock.calls.filter(([name]) => name === "has_ai_api_key"),
+            ).toHaveLength(3);
+        });
+
+        const deleteButton = Array.from(host.querySelectorAll("button")).find(
+            (button) => button.textContent?.trim() === "删除 API Key",
+        );
+        deleteButton?.click();
+        await vi.waitFor(() => {
+            expect(mocks.invoke).toHaveBeenCalledWith("delete_ai_api_key");
+            expect(
+                mocks.invoke.mock.calls.filter(([name]) => name === "has_ai_api_key"),
+            ).toHaveLength(4);
+        });
+        expect(host.textContent).toContain("未配置");
     });
 });

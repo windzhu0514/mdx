@@ -226,7 +226,9 @@ summary:focus-visible,
 .library-search button,
 .panel-refresh,
 .history-item button,
-.setting-field select {
+.setting-field select,
+.setting-field input,
+.setting-actions button {
     padding: 8px 11px;
     border: 1px solid var(--color-border);
     border-radius: 7px;
@@ -322,6 +324,40 @@ summary:focus-visible,
     display: flex;
     align-items: center;
     gap: 8px;
+}
+
+.ai-settings {
+    display: grid;
+    gap: 12px;
+    padding-top: 14px;
+    border-top: 1px solid var(--color-border);
+}
+
+.ai-settings h3 {
+    margin: 0;
+    font-size: 16px;
+}
+
+.setting-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+.setting-actions button {
+    cursor: pointer;
+}
+
+.setting-actions button:disabled {
+    cursor: default;
+    opacity: 0.55;
+}
+
+.key-status {
+    margin-right: auto;
+    color: var(--color-text-muted);
+    font-size: 12px;
 }
 
 .status-left {

@@ -1,7 +1,7 @@
 /** @vitest-environment jsdom */
 
-import { createApp, h, type Component } from "vue";
-import { afterEach, describe, expect, it } from "vitest";
+import { createApp, h, nextTick, type Component } from "vue";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { DEFAULT_PREFERENCES } from "../composables/usePreferences";
 import HistoryPanel from "./HistoryPanel.vue";
@@ -32,7 +32,12 @@ describe("模态面板关闭按钮", () => {
         {
             name: "偏好设置",
             component: SettingsPanel,
-            props: { open: true, preferences: DEFAULT_PREFERENCES },
+            props: {
+                open: true,
+                preferences: DEFAULT_PREFERENCES,
+                aiKeyConfigured: false,
+                aiKeySaving: false,
+            },
             label: "关闭偏好设置",
         },
         {
@@ -58,5 +63,69 @@ describe("模态面板关闭按钮", () => {
         const closeButton = host.querySelector<HTMLButtonElement>(".icon-button");
 
         expect(closeButton?.getAttribute("aria-label")).toBe(label);
+    });
+});
+
+describe("AI 设置", () => {
+    it("更新非敏感设置，保存后清空本地 API Key 输入", async () => {
+        const update = vi.fn();
+        const saveAiKey = vi.fn();
+        const host = mountPanel(SettingsPanel, {
+            open: true,
+            preferences: DEFAULT_PREFERENCES,
+            aiKeyConfigured: false,
+            aiKeySaving: false,
+            onUpdate: update,
+            onSaveAiKey: saveAiKey,
+        });
+        const baseUrl = host.querySelector<HTMLInputElement>(
+            'input[aria-label="AI Base URL"]',
+        );
+        const apiKey = host.querySelector<HTMLInputElement>(
+            'input[aria-label="AI API Key"]',
+        );
+        if (!baseUrl || !apiKey) throw new Error("未找到 AI 设置输入框");
+
+        baseUrl.value = "https://api.example.com/v1";
+        baseUrl.dispatchEvent(new Event("input", { bubbles: true }));
+        apiKey.value = "secret-value";
+        apiKey.dispatchEvent(new Event("input", { bubbles: true }));
+        await nextTick();
+        const saveButton = Array.from(host.querySelectorAll("button")).find((button) =>
+            button.textContent?.includes("保存/替换 API Key"),
+        );
+        saveButton?.click();
+        await nextTick();
+
+        expect(update).toHaveBeenCalledWith({
+            aiBaseUrl: "https://api.example.com/v1",
+        });
+        expect(saveAiKey).toHaveBeenCalledWith("secret-value");
+        expect(apiKey.value).toBe("");
+        expect(host.textContent).not.toContain("secret-value");
+        expect(host.textContent).toContain("未配置");
+        const deleteButton = Array.from(host.querySelectorAll("button")).find(
+            (button) => button.textContent?.trim() === "删除 API Key",
+        );
+        expect(deleteButton?.disabled).toBe(true);
+    });
+
+    it("已配置时允许删除 API Key", () => {
+        const deleteAiKey = vi.fn();
+        const host = mountPanel(SettingsPanel, {
+            open: true,
+            preferences: DEFAULT_PREFERENCES,
+            aiKeyConfigured: true,
+            aiKeySaving: false,
+            onDeleteAiKey: deleteAiKey,
+        });
+        const deleteButton = Array.from(host.querySelectorAll("button")).find(
+            (button) => button.textContent?.trim() === "删除 API Key",
+        );
+
+        expect(host.textContent).toContain("已配置");
+        expect(deleteButton?.disabled).toBe(false);
+        deleteButton?.click();
+        expect(deleteAiKey).toHaveBeenCalledTimes(1);
     });
 });

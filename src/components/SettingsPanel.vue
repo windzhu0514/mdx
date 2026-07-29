@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { ref } from "vue";
 import type {
     EditorPreferences,
     FontPreference,
@@ -8,14 +9,25 @@ import type {
 defineProps<{
     open: boolean;
     preferences: EditorPreferences;
+    aiKeyConfigured: boolean;
+    aiKeySaving: boolean;
 }>();
 const emit = defineEmits<{
     close: [];
     update: [patch: Partial<EditorPreferences>];
+    "save-ai-key": [key: string];
+    "delete-ai-key": [];
 }>();
+
+const apiKey = ref("");
 
 function numberValue(event: Event) {
     return Number((event.target as HTMLInputElement).value);
+}
+
+function saveAiKey() {
+    emit("save-ai-key", apiKey.value);
+    apiKey.value = "";
 }
 </script>
 
@@ -124,6 +136,74 @@ function numberValue(event: Event) {
                 />
                 默认显示文档目录
             </label>
+
+            <div class="ai-settings">
+                <div>
+                    <p class="panel-eyebrow">AI</p>
+                    <h3>OpenAI-compatible 服务</h3>
+                </div>
+
+                <label class="setting-field">
+                    <span>Base URL</span>
+                    <input
+                        aria-label="AI Base URL"
+                        type="text"
+                        autocomplete="url"
+                        :value="preferences.aiBaseUrl"
+                        @input="
+                            emit('update', {
+                                aiBaseUrl: ($event.target as HTMLInputElement).value,
+                            })
+                        "
+                    />
+                </label>
+
+                <label class="setting-field">
+                    <span>模型</span>
+                    <input
+                        aria-label="AI 模型"
+                        type="text"
+                        autocomplete="off"
+                        :value="preferences.aiModel"
+                        @input="
+                            emit('update', {
+                                aiModel: ($event.target as HTMLInputElement).value,
+                            })
+                        "
+                    />
+                </label>
+
+                <label class="setting-field">
+                    <span>API Key</span>
+                    <input
+                        v-model="apiKey"
+                        aria-label="AI API Key"
+                        type="password"
+                        autocomplete="new-password"
+                        :disabled="aiKeySaving"
+                    />
+                </label>
+
+                <div class="setting-actions">
+                    <span class="key-status">
+                        {{ aiKeyConfigured ? "已配置" : "未配置" }}
+                    </span>
+                    <button
+                        type="button"
+                        :disabled="aiKeySaving || !apiKey"
+                        @click="saveAiKey"
+                    >
+                        保存/替换 API Key
+                    </button>
+                    <button
+                        type="button"
+                        :disabled="aiKeySaving || !aiKeyConfigured"
+                        @click="emit('delete-ai-key')"
+                    >
+                        删除 API Key
+                    </button>
+                </div>
+            </div>
         </section>
     </div>
 </template>

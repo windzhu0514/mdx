@@ -10,6 +10,8 @@ export type EditorPreferences = {
     lineHeight: number;
     contentWidth: number;
     showToc: boolean;
+    aiBaseUrl: string;
+    aiModel: string;
 };
 
 export type PreferenceStorage = Pick<Storage, "getItem" | "setItem">;
@@ -25,12 +27,18 @@ export const DEFAULT_PREFERENCES: EditorPreferences = {
     lineHeight: 1.75,
     contentWidth: 820,
     showToc: true,
+    aiBaseUrl: "",
+    aiModel: "",
 };
 
 function clamp(value: unknown, min: number, max: number, fallback: number) {
     return typeof value === "number" && Number.isFinite(value)
         ? Math.min(max, Math.max(min, value))
         : fallback;
+}
+
+function text(value: unknown) {
+    return typeof value === "string" ? value.trim() : "";
 }
 
 export function normalizePreferences(
@@ -55,6 +63,8 @@ export function normalizePreferences(
             typeof value.showToc === "boolean"
                 ? value.showToc
                 : DEFAULT_PREFERENCES.showToc,
+        aiBaseUrl: text(value.aiBaseUrl),
+        aiModel: text(value.aiModel),
     };
 }
 
