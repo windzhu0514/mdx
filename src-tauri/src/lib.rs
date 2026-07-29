@@ -1,3 +1,4 @@
+mod ai;
 mod archive_security;
 mod draft_store;
 mod export;
@@ -6,6 +7,7 @@ pub mod markdown_import;
 mod note_index;
 mod resource_import;
 
+use ai::AiRequestState;
 use archive_security::validate_archive;
 pub use archive_security::{
     parse_supported_format_version, validate_archive_entry_name, validate_new_resource_name,
@@ -817,8 +819,12 @@ fn new_resource_id() -> String {
 
 pub fn run() {
     tauri::Builder::default()
+        .manage(AiRequestState::default())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
+            ai::save_ai_api_key,
+            ai::delete_ai_api_key,
+            ai::has_ai_api_key,
             create_mdx,
             open_mdx,
             save_mdx,
