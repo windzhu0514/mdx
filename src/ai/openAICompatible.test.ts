@@ -121,7 +121,7 @@ describe("OpenAI-compatible Provider", () => {
         ).toHaveLength(1);
     });
 
-    it("预先中止时只取消一次且不启动 stream_ai 或残留 listener", async () => {
+    it("预先中止时不触碰全局请求且不残留 listener", async () => {
         const controller = new AbortController();
         controller.abort();
         const addEventListener = vi.spyOn(controller.signal, "addEventListener");
@@ -131,7 +131,7 @@ describe("OpenAI-compatible Provider", () => {
 
         await expect(collect(provider(context, controller.signal))).resolves.toEqual([]);
 
-        expect(mocks.invoke.mock.calls.map(([name]) => name)).toEqual(["cancel_ai"]);
+        expect(mocks.invoke).not.toHaveBeenCalled();
         expect(addEventListener).not.toHaveBeenCalled();
         expect(removeEventListener).not.toHaveBeenCalled();
     });

@@ -1,6 +1,7 @@
 use eventsource_stream::{Event, Eventsource};
 use futures_util::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
+use std::future::Future;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::Mutex;
 use tokio::sync::oneshot;
@@ -198,6 +199,36 @@ fn send_http_status_error(
     )
 }
 
+fn cancelled_event() -> AiStreamEvent {
+    AiStreamEvent::Error {
+        code: "AI_CANCELLED".to_string(),
+        message: "AI 请求已取消".to_string(),
+    }
+}
+
+fn send_cancelled_event(on_event: &tauri::ipc::Channel<AiStreamEvent>) -> Result<(), String> {
+    send_event(on_event, cancelled_event())
+}
+
+async fn wait_for_response<F, T>(
+    response: F,
+    cancel_rx: &mut oneshot::Receiver<()>,
+    on_event: &tauri::ipc::Channel<AiStreamEvent>,
+) -> Result<Option<T>, String>
+where
+    F: Future<Output = T>,
+{
+    tokio::pin!(response);
+    tokio::select! {
+        biased;
+        _ = cancel_rx => {
+            send_cancelled_event(on_event)?;
+            Ok(None)
+        },
+        response = &mut response => Ok(Some(response)),
+    }
+}
+
 async fn forward_stream<S, E>(
     mut events: S,
     mut cancel_rx: oneshot::Receiver<()>,
@@ -209,7 +240,10 @@ where
     loop {
         let event = tokio::select! {
             biased;
-            _ = &mut cancel_rx => return Ok(()),
+            _ = &mut cancel_rx => {
+                send_cancelled_event(on_event)?;
+                return Ok(());
+            },
             event = events.next() => event,
         };
 
@@ -352,17 +386,17 @@ pub(crate) async fn stream_ai(
     let api_key = credential_read_result(ai_key_entry()?.get_password())?;
     let client = build_ai_client()?;
 
-    let response = tokio::select! {
-        biased;
-        _ = &mut cancel_rx => return Ok(()),
-        response = client
-            .post(url)
-            .bearer_auth(api_key)
-            .json(&body)
-            .send() => response.map_err(|_| {
-                "无法连接 AI 服务，请检查网络和 Base URL 后重试".to_string()
-            })?,
+    let response = wait_for_response(
+        client.post(url).bearer_auth(api_key).json(&body).send(),
+        &mut cancel_rx,
+        &on_event,
+    )
+    .await?;
+    let Some(response) = response else {
+        return Ok(());
     };
+    let response =
+        response.map_err(|_| "无法连接 AI 服务，请检查网络和 Base URL 后重试".to_string())?;
 
     if !response.status().is_success() {
         send_http_status_error(response.status().as_u16(), &on_event)?;
@@ -620,7 +654,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn cancellation_stops_stream_without_emitting_an_event() {
+    async fn cancellation_terminates_stream_with_a_stable_event() {
         let input = stream::pending::<Result<Event, ()>>();
         let (cancel_tx, cancel_rx) = oneshot::channel();
         let (channel, messages) = recording_channel();
@@ -628,7 +662,14 @@ mod tests {
 
         forward_stream(input, cancel_rx, &channel).await.unwrap();
 
-        assert!(messages.lock().unwrap().is_empty());
+        assert_eq!(
+            *messages.lock().unwrap(),
+            vec![serde_json::json!({
+                "type": "error",
+                "code": "AI_CANCELLED",
+                "message": "AI 请求已取消"
+            })]
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -643,8 +684,58 @@ mod tests {
 
             forward_stream(input, cancel_rx, &channel).await.unwrap();
 
-            assert!(messages.lock().unwrap().is_empty());
+            assert_eq!(messages.lock().unwrap()[0]["code"], "AI_CANCELLED");
         }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn cancellation_while_waiting_for_response_emits_a_terminal_event() {
+        let pending_response = std::future::pending::<Result<(), ()>>();
+        let (cancel_tx, mut cancel_rx) = oneshot::channel();
+        let (channel, messages) = recording_channel();
+        cancel_tx.send(()).unwrap();
+
+        let response = wait_for_response(pending_response, &mut cancel_rx, &channel)
+            .await
+            .unwrap();
+
+        assert!(response.is_none());
+        assert_eq!(messages.lock().unwrap()[0]["code"], "AI_CANCELLED");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn replacing_a_request_terminates_the_old_stream_without_cancelling_the_new_one() {
+        let state = AiRequestState::default();
+        let old_cancel_rx = state.begin_request().unwrap();
+        let mut new_cancel_rx = state.begin_request().unwrap();
+        let (old_channel, old_messages) = recording_channel();
+
+        forward_stream(
+            stream::pending::<Result<Event, ()>>(),
+            old_cancel_rx,
+            &old_channel,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(old_messages.lock().unwrap()[0]["code"], "AI_CANCELLED");
+        assert_eq!(
+            new_cancel_rx.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn cancellation_event_channel_failure_rejects_the_command() {
+        let input = stream::pending::<Result<Event, ()>>();
+        let (cancel_tx, cancel_rx) = oneshot::channel();
+        cancel_tx.send(()).unwrap();
+
+        let error = forward_stream(input, cancel_rx, &failing_channel())
+            .await
+            .unwrap_err();
+
+        assert_eq!(error, "AI 事件通道已关闭");
     }
 
     #[tokio::test(flavor = "current_thread")]

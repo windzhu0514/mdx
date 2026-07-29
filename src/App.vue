@@ -554,7 +554,7 @@ async function saveAiApiKey(apiKey: string) {
 
     aiKeySaving.value = true;
     try {
-        await invoke("save_ai_api_key", { apiKey });
+        await invoke("save_ai_api_key", { key: apiKey });
         await refreshAiKeyConfigured();
         statusMessage.value = "AI API Key 已保存";
     } catch (error) {
@@ -644,9 +644,7 @@ function handleEditorUpdate(markdown: string) {
 
 function handleAiError(message: string) {
     const needsSettings = /Base URL|模型|API Key/i.test(message);
-    const detail = needsSettings
-        ? `${message}，请在偏好设置中完成 AI 配置`
-        : message;
+    const detail = needsSettings ? `${message}，请在偏好设置中完成 AI 配置` : message;
     errorMessage.value = `AI 生成失败：${detail}`;
     statusMessage.value = "AI 生成失败";
 }
@@ -1078,17 +1076,19 @@ async function saveNoteAs() {
     });
 }
 
-function setEditorMode(mode: EditorMode) {
+async function setEditorMode(mode: EditorMode) {
     editorMode.value = mode;
     if (mode === "source") sourcePreview.value = false;
     statusMessage.value = mode === "wysiwyg" ? "已切换到所见即所得" : "已切换到仅源码";
+    await nextTick();
     editorRef.value?.focus();
 }
 
-function setSourcePreview(visible: boolean) {
+async function setSourcePreview(visible: boolean) {
     editorMode.value = "source";
     sourcePreview.value = visible;
     statusMessage.value = visible ? "已切换到垂直双栏" : "已切换到仅源码";
+    await nextTick();
     editorRef.value?.focus();
 }
 function focusEditor() {

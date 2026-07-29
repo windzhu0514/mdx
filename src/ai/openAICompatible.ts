@@ -72,10 +72,7 @@ export function createOpenAICompatibleProvider(
         if (!baseUrl) throw new Error("请先配置 AI Base URL");
         if (!model) throw new Error("请先配置 AI 模型");
 
-        if (signal.aborted) {
-            await invoke<void>("cancel_ai").catch(() => undefined);
-            return;
-        }
+        if (signal.aborted) return;
 
         const request: AiRequest = {
             baseUrl,

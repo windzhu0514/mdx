@@ -342,7 +342,7 @@ describe("App 桌面关闭", () => {
         saveButton?.click();
         await vi.waitFor(() => {
             expect(mocks.invoke).toHaveBeenCalledWith("save_ai_api_key", {
-                apiKey: "replacement-key",
+                key: "replacement-key",
             });
             expect(
                 mocks.invoke.mock.calls.filter(([name]) => name === "has_ai_api_key"),

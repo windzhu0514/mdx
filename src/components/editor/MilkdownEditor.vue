@@ -25,7 +25,7 @@ import {
 import { toggleStrikethroughCommand } from "@milkdown/kit/preset/gfm";
 import { redo, undo } from "@milkdown/kit/prose/history";
 import { selectAll } from "@milkdown/kit/prose/commands";
-import { TextSelection } from "@milkdown/kit/prose/state";
+import { Selection, TextSelection } from "@milkdown/kit/prose/state";
 import { getMarkdown, replaceAll, replaceRange } from "@milkdown/kit/utils";
 import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { EditorCommand, ImageUploadHandler, MoraEditorHandle } from "./editorTypes";
@@ -95,16 +95,14 @@ onMounted(() => {
         });
     });
     instance.setReadonly(Boolean(props.readonly));
-    readiness = instance
-        .create()
-        .then(() => {
-            if (disposed || crepe !== instance) return;
+    readiness = instance.create().then(() => {
+        if (disposed || crepe !== instance) return;
 
-            ready = true;
-            instance.setReadonly(Boolean(props.readonly));
-            if (props.modelValue === currentMarkdown) return;
-            instance.editor.action(replaceAll(props.modelValue));
-            currentMarkdown = props.modelValue;
+        ready = true;
+        instance.setReadonly(Boolean(props.readonly));
+        if (props.modelValue === currentMarkdown) return;
+        instance.editor.action(replaceAll(props.modelValue));
+        currentMarkdown = props.modelValue;
     });
     void readiness.catch((error: unknown) => {
         reportLifecycleError("初始化", error);
@@ -175,8 +173,11 @@ function moveCursor(position: "start" | "end"): void {
     if (!crepe || !ready || disposed) return;
     crepe.editor.action((ctx) => {
         const view = ctx.get(editorViewCtx);
-        const target = position === "start" ? 0 : view.state.doc.content.size;
-        view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, target)));
+        const selection =
+            position === "start"
+                ? Selection.atStart(view.state.doc)
+                : Selection.atEnd(view.state.doc);
+        view.dispatch(view.state.tr.setSelection(selection));
     });
 }
 

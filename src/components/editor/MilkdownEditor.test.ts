@@ -7,28 +7,34 @@ import type { MoraEditorHandle } from "./editorTypes";
 import MilkdownEditor from "./MilkdownEditor.vue";
 
 const mocks = vi.hoisted(() => {
+    const selection = {
+        atStart: vi.fn((_doc: unknown) => ({ boundary: "start" })),
+        atEnd: vi.fn((_doc: unknown) => ({ boundary: "end" })),
+    };
+    const textSelectionCreate = vi.fn((_doc: unknown, position: number) => ({
+        position,
+    }));
     const editorView = {
         focus: vi.fn(),
         state: {
             doc: {
                 content: { size: 8 },
-                descendants: vi.fn<
-                    (
-                        visit: (
-                            node: { type: { name: string }; textContent: string },
-                            position: number,
-                        ) => boolean | void,
-                    ) => void
-                >(),
+                descendants:
+                    vi.fn<
+                        (
+                            visit: (
+                                node: { type: { name: string }; textContent: string },
+                                position: number,
+                            ) => boolean | void,
+                        ) => void
+                    >(),
                 textBetween: vi.fn(() => "选中文本"),
             },
             selection: { from: 2, to: 5 },
             tr: {
                 insertText: vi.fn(() => ({ kind: "insert" })),
                 setSelection: vi.fn<
-                    () =>
-                        | { kind: string }
-                        | { scrollIntoView: () => { kind: string } }
+                    () => { kind: string } | { scrollIntoView: () => { kind: string } }
                 >(() => ({ kind: "selection" })),
             },
         },
@@ -52,7 +58,9 @@ const mocks = vi.hoisted(() => {
         destroyEditor,
         editorView,
         instances,
+        selection,
         selectedMarkdown: "item one\nitem two",
+        textSelectionCreate,
     };
 });
 
@@ -73,7 +81,13 @@ vi.mock("@milkdown/crepe", () => {
             ),
         };
         readonly on = vi.fn(
-            (configure: (listeners: { markdownUpdated: (listener: (context: unknown, markdown: string) => void) => void }) => void) => {
+            (
+                configure: (listeners: {
+                    markdownUpdated: (
+                        listener: (context: unknown, markdown: string) => void,
+                    ) => void;
+                }) => void,
+            ) => {
                 configure({
                     markdownUpdated: (listener) => {
                         const instance = mocks.instances[mocks.instances.length - 1];
@@ -114,8 +128,9 @@ vi.mock("@milkdown/kit/utils", () => ({
 }));
 
 vi.mock("@milkdown/kit/prose/state", () => ({
+    Selection: mocks.selection,
     TextSelection: {
-        create: vi.fn((_doc: unknown, position: number) => ({ position })),
+        create: mocks.textSelectionCreate,
     },
 }));
 
@@ -233,6 +248,9 @@ afterEach(() => {
     mocks.editorView.state.doc.textBetween.mockClear();
     mocks.editorView.state.tr.insertText.mockClear();
     mocks.editorView.state.tr.setSelection.mockClear();
+    mocks.selection.atStart.mockClear();
+    mocks.selection.atEnd.mockClear();
+    mocks.textSelectionCreate.mockClear();
     mocks.editorView.state.selection = { from: 2, to: 5 };
     mocks.createEditor = async () => undefined;
     mocks.destroyEditor = async () => undefined;
@@ -246,7 +264,9 @@ describe("MilkdownEditor", () => {
         const provider: MoraAIProvider = async function* () {
             yield "结果";
         };
-        const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+        const consoleError = vi
+            .spyOn(console, "error")
+            .mockImplementation(() => undefined);
         const editor = mountEditor("# AI", false, provider);
         cleanup = editor.unmount;
         await nextTick();
@@ -312,8 +332,25 @@ describe("MilkdownEditor", () => {
         expect(mocks.editorView.state.tr.insertText).toHaveBeenCalledWith("替换", 2, 5);
         expect(mocks.editorView.dispatch).toHaveBeenCalledWith({ kind: "insert" });
 
+        editor.handle.value?.moveCursor("start");
+        expect(mocks.selection.atStart).toHaveBeenCalledWith(mocks.editorView.state.doc);
+        expect(mocks.editorView.state.tr.setSelection).toHaveBeenLastCalledWith({
+            boundary: "start",
+        });
+
         editor.handle.value?.moveCursor("end");
-        expect(mocks.editorView.state.tr.setSelection).toHaveBeenCalledWith({ position: 8 });
+        expect(mocks.selection.atEnd).toHaveBeenCalledWith(mocks.editorView.state.doc);
+        expect(mocks.editorView.state.tr.setSelection).toHaveBeenLastCalledWith({
+            boundary: "end",
+        });
+        expect(mocks.textSelectionCreate).not.toHaveBeenCalledWith(
+            mocks.editorView.state.doc,
+            0,
+        );
+        expect(mocks.textSelectionCreate).not.toHaveBeenCalledWith(
+            mocks.editorView.state.doc,
+            mocks.editorView.state.doc.content.size,
+        );
         expect(mocks.editorView.dispatch).toHaveBeenLastCalledWith({ kind: "selection" });
 
         editor.handle.value?.execute({ name: "heading", level: 2 });

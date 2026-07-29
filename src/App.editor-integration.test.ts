@@ -7,6 +7,7 @@ import { countNonWhitespaceCharacters } from "./utils/text";
 
 type LowestEditorControls = {
     emitUpdate: (markdown: string) => void;
+    focus: ReturnType<typeof vi.fn>;
     uploadImage?: (file: File) => Promise<string>;
     whenReadyCalls: number;
 };
@@ -63,7 +64,10 @@ function createMeta(overrides: Partial<MdxMetadata> = {}): MdxMetadata {
     };
 }
 
-function createNote(content: string, path: string | null = "C:\\notes\\test.mdx"): MdxNote {
+function createNote(
+    content: string,
+    path: string | null = "C:\\notes\\test.mdx",
+): MdxNote {
     return {
         path,
         title: "测试笔记",
@@ -116,9 +120,9 @@ function lowestEditorStub(kind: "milkdown" | "source") {
             if (kind === "milkdown") mocks.nextMilkdownReadiness = undefined;
             const controls: LowestEditorControls = {
                 emitUpdate: (markdown) => emit("update:modelValue", markdown),
+                focus: vi.fn(),
                 uploadImage: props.uploadImage as
-                    | ((file: File) => Promise<string>)
-                    | undefined,
+                    ((file: File) => Promise<string>) | undefined,
                 whenReadyCalls: 0,
             };
             mocks[kind] = controls;
@@ -130,7 +134,7 @@ function lowestEditorStub(kind: "milkdown" | "source") {
 
             expose({
                 execute: vi.fn(),
-                focus: vi.fn(),
+                focus: controls.focus,
                 getSelectedText: vi.fn(() => ""),
                 moveCursor: vi.fn(),
                 replaceSelection: vi.fn(),
@@ -164,9 +168,10 @@ import App from "./App.vue";
 let cleanup: (() => void) | undefined;
 
 function editorValue(host: HTMLElement, kind: "milkdown" | "source"): string | null {
-    return host
-        .querySelector(`.${kind}-editor-stub`)
-        ?.getAttribute("data-model-value") ?? null;
+    return (
+        host.querySelector(`.${kind}-editor-stub`)?.getAttribute("data-model-value") ??
+        null
+    );
 }
 
 function findButton(host: HTMLElement, label: string): HTMLButtonElement {
@@ -202,16 +207,20 @@ beforeEach(() => {
         if (command === "read_asset") return "aW1hZ2U=";
         if (command === "get_recent_files" || command === "push_recent_file") return [];
         if (command === "save_mdx_as" || command === "save_mdx") {
-            const request = (args as { request: { content: string; path?: string } }).request;
+            const request = (args as { request: { content: string; path?: string } })
+                .request;
             return createNote(request.content, request.path ?? "C:\\notes\\saved.mdx");
         }
         return undefined;
     });
-    vi.stubGlobal("matchMedia", vi.fn(() => ({
-        matches: false,
-        addEventListener: vi.fn(),
-        removeEventListener: vi.fn(),
-    })));
+    vi.stubGlobal(
+        "matchMedia",
+        vi.fn(() => ({
+            matches: false,
+            addEventListener: vi.fn(),
+            removeEventListener: vi.fn(),
+        })),
+    );
     vi.stubGlobal("crypto", { randomUUID: () => "resource-id" });
     Object.defineProperty(URL, "createObjectURL", {
         configurable: true,
@@ -242,8 +251,8 @@ describe("App 编辑器状态集成", () => {
         findButton(host, "打开...").click();
         await vi.waitFor(() => {
             expect(
-                Array.from(host.querySelectorAll(".toc-list button")).map(
-                    (button) => button.textContent?.trim(),
+                Array.from(host.querySelectorAll(".toc-list button")).map((button) =>
+                    button.textContent?.trim(),
                 ),
             ).toEqual(["缩进标题"]);
         });
@@ -256,8 +265,8 @@ describe("App 编辑器状态集成", () => {
         findButton(host, "打开...").click();
         await vi.waitFor(() => {
             expect(
-                Array.from(host.querySelectorAll(".toc-list button")).map(
-                    (button) => button.textContent?.trim(),
+                Array.from(host.querySelectorAll(".toc-list button")).map((button) =>
+                    button.textContent?.trim(),
                 ),
             ).toEqual(["外部"]);
         });
@@ -288,15 +297,17 @@ describe("App 编辑器状态集成", () => {
     it("打开外部内容时，子编辑器回传同一内容不会误标脏", async () => {
         const canonical = "## **标题** ##\n![图](assets/a.png)";
         const note = createNote(canonical);
-        note.meta.assets = [{
-            id: "asset-1",
-            originalName: "a.png",
-            storedName: "a.png",
-            path: "assets/a.png",
-            type: "image/png",
-            size: 5,
-            createdAt: "2026-07-29T00:00:00Z",
-        }];
+        note.meta.assets = [
+            {
+                id: "asset-1",
+                originalName: "a.png",
+                storedName: "a.png",
+                path: "assets/a.png",
+                type: "image/png",
+                size: 5,
+                createdAt: "2026-07-29T00:00:00Z",
+            },
+        ];
         mocks.openedNote = note;
         const host = await mountApp();
 
@@ -313,6 +324,26 @@ describe("App 编辑器状态集成", () => {
         findButton(host, "仅源码").click();
         await nextTick();
         expect(editorValue(host, "source")).toBe(canonical);
+    });
+
+    it("切换视图后聚焦新挂载的可编辑实例", async () => {
+        const host = await mountApp();
+        const initialMilkdown = mocks.milkdown;
+
+        findButton(host, "仅源码").click();
+        await nextTick();
+        expect(initialMilkdown?.focus).not.toHaveBeenCalled();
+        expect(mocks.source?.focus).toHaveBeenCalledTimes(1);
+
+        const source = mocks.source;
+        findButton(host, "所见即所得编辑").click();
+        await nextTick();
+        expect(source?.focus).toHaveBeenCalledTimes(1);
+        expect(mocks.milkdown?.focus).toHaveBeenCalledTimes(1);
+
+        findButton(host, "垂直双栏").click();
+        await nextTick();
+        expect(mocks.source?.focus).toHaveBeenCalledTimes(1);
     });
 });
 
@@ -336,9 +367,9 @@ describe("App PDF 打印视图", () => {
         expect(window.print).not.toHaveBeenCalled();
         await nextTick();
         expect(host.querySelectorAll(".source-editor-stub")).toHaveLength(1);
-        expect(host.querySelector(".milkdown-editor-stub")?.getAttribute("data-readonly")).toBe(
-            "true",
-        );
+        expect(
+            host.querySelector(".milkdown-editor-stub")?.getAttribute("data-readonly"),
+        ).toBe("true");
         expect(host.textContent).not.toContain("未保存");
 
         findButton(host, "导出 PDF / 打印...").click();
@@ -388,10 +419,14 @@ describe("App PDF 打印视图", () => {
 
         await nextTick();
         expect(host.querySelectorAll(".source-editor-stub")).toHaveLength(1);
-        expect(host.querySelectorAll(".milkdown-editor-stub")).toHaveLength(split ? 1 : 0);
+        expect(host.querySelectorAll(".milkdown-editor-stub")).toHaveLength(
+            split ? 1 : 0,
+        );
         if (split) {
             expect(
-                host.querySelector(".milkdown-editor-stub")?.getAttribute("data-readonly"),
+                host
+                    .querySelector(".milkdown-editor-stub")
+                    ?.getAttribute("data-readonly"),
             ).toBe("true");
         }
         expect(host.textContent).not.toContain("未保存");

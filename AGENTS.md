@@ -21,7 +21,7 @@
 | 桌面框架        | Tauri 2                   |
 | 前端框架        | Vue 3 + TypeScript + Vite |
 | 系统后端        | Rust                      |
-| Markdown 编辑器 | Toast UI Editor           |
+| Markdown 编辑器 | Milkdown/Crepe + CodeMirror 6 |
 
 ---
 
@@ -106,8 +106,10 @@ thumbnails/        # 缩略图
 - [x] 另存为 `.mdx`
 - [x] 编辑标题
 - [x] 编辑 Markdown 正文
-- [x] Toast UI 所见即所得（WYSIWYG）编辑
-- [x] Markdown 源码 + 垂直预览模式
+- [x] Milkdown/Crepe 所见即所得（WYSIWYG）编辑
+- [x] CodeMirror 6 源码编辑
+- [x] 源码 + 只读 Milkdown 垂直预览
+- [x] OpenAI-compatible WYSIWYG AI（流式生成、取消和 Diff 审阅）
 - [x] 菜单栏：文件 / 格式 / 插入·Markdown / 视图 / 关于
 - [x] 桌面风格菜单栏和状态栏
 - [x] `.tmp` + `.bak` 安全保存机制
@@ -137,14 +139,11 @@ thumbnails/        # 缩略图
 - 使用 **TypeScript**，禁止使用 `any`。
 - UI 风格：简洁、清爽、接近原生桌面软件，避免 Web 感过强。
 - 菜单栏和状态栏保持**紧凑**，不占用多余编辑空间。
-- Markdown 编辑器固定使用 **Toast UI Editor**，优先调用其官方 API：
-    ```ts
-    initialEditType: "wysiwyg";
-    editor.changeMode("wysiwyg");
-    editor.changeMode("markdown");
-    editor.changePreviewStyle("vertical");
-    ```
-- **禁止**自行实现复杂 Markdown 输入规则，避免与 Toast UI Editor 产生冲突。
+- Markdown 编辑器固定使用 **Milkdown/Crepe + CodeMirror 6**：Milkdown/Crepe 负责 WYSIWYG 和只读预览，CodeMirror 6 负责源码编辑。
+- 编辑区只允许三种视图：WYSIWYG、仅源码、源码 + 只读预览；禁止新增独立 Preview renderer 或第二份正文状态。
+- `App.vue` 中的规范 Markdown 是唯一权威正文，必须保持 `content.md` 使用 `assets/...`、`attachments/...` 相对路径；Blob URL 只能由资源会话投影给 Milkdown 显示，禁止进入源码、草稿或保存请求。
+- AI 只接入可编辑 WYSIWYG；仅源码和只读预览不得启用 AI。
+- 优先使用 Milkdown、ProseMirror 和 CodeMirror 的官方公开 API；禁止访问编辑器内部 DOM、复制实现第二套 Markdown 输入规则或用定时器/事件拦截打补丁。
 
 ### 后端规则
 
