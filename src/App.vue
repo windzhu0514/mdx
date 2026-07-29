@@ -100,6 +100,7 @@ const historyLoading = ref(false);
 const showSettings = ref(false);
 const aiKeyConfigured = ref(false);
 const aiKeySaving = ref(false);
+let aiKeyStatusRequestId = 0;
 
 const resourceSession = createResourceSession();
 const {
@@ -518,14 +519,18 @@ watch(
 );
 
 async function refreshAiKeyConfigured() {
+    const requestId = ++aiKeyStatusRequestId;
     if (!tauriRuntime) {
         aiKeyConfigured.value = false;
         return;
     }
 
     try {
-        aiKeyConfigured.value = await invoke<boolean>("has_ai_api_key");
+        const configured = await invoke<boolean>("has_ai_api_key");
+        if (requestId !== aiKeyStatusRequestId) return;
+        aiKeyConfigured.value = configured;
     } catch (error) {
+        if (requestId !== aiKeyStatusRequestId) return;
         aiKeyConfigured.value = false;
         console.warn("读取 AI API Key 状态失败", error);
     }

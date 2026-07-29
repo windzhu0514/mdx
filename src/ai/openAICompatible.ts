@@ -27,16 +27,29 @@ function commandErrorMessage(error: unknown) {
 function createEventQueue() {
     const events: AiStreamEvent[] = [];
     let waiting: ((event: AiStreamEvent) => void) | undefined;
+    let closed = false;
+
+    function deliver(event: AiStreamEvent) {
+        if (waiting) {
+            const resolve = waiting;
+            waiting = undefined;
+            resolve(event);
+            return;
+        }
+        events.push(event);
+    }
 
     return {
         push(event: AiStreamEvent) {
-            if (waiting) {
-                const resolve = waiting;
-                waiting = undefined;
-                resolve(event);
-                return;
-            }
-            events.push(event);
+            if (closed) return;
+            if (event.type !== "delta") closed = true;
+            deliver(event);
+        },
+        stop() {
+            if (closed) return;
+            closed = true;
+            events.length = 0;
+            deliver({ type: "done" });
         },
         next(): Promise<AiStreamEvent> {
             const event = events.shift();
@@ -59,6 +72,11 @@ export function createOpenAICompatibleProvider(
         if (!baseUrl) throw new Error("请先配置 AI Base URL");
         if (!model) throw new Error("请先配置 AI 模型");
 
+        if (signal.aborted) {
+            await invoke<void>("cancel_ai").catch(() => undefined);
+            return;
+        }
+
         const request: AiRequest = {
             baseUrl,
             model,
@@ -74,10 +92,10 @@ export function createOpenAICompatibleProvider(
         const handleAbort = () => {
             if (cancelRequested) return;
             cancelRequested = true;
+            queue.stop();
             void invoke<void>("cancel_ai").catch(() => undefined);
         };
         signal.addEventListener("abort", handleAbort, { once: true });
-        if (signal.aborted) handleAbort();
 
         const handledInvoke = invoke<void>("stream_ai", {
             request,

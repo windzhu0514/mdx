@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
         ((event: { preventDefault: () => void }) => Promise<void>) | undefined,
     editorUpdate: undefined as ((markdown: string) => void) | undefined,
     aiKeyConfigured: false,
+    aiKeyStatusResponses: [] as Array<boolean | Promise<boolean>>,
     moraEditorMounted: vi.fn(),
     getCurrentWindow: vi.fn(() => ({
         onDragDropEvent: vi.fn(async () => () => undefined),
@@ -20,7 +21,10 @@ const mocks = vi.hoisted(() => ({
         close: mocks.windowClose,
     })),
     invoke: vi.fn(async (command: string) => {
-        if (command === "has_ai_api_key") return mocks.aiKeyConfigured;
+        if (command === "has_ai_api_key") {
+            const response = mocks.aiKeyStatusResponses.shift();
+            return response ?? mocks.aiKeyConfigured;
+        }
         if (command === "save_ai_api_key") {
             mocks.aiKeyConfigured = true;
             return undefined;
@@ -100,11 +104,20 @@ import App from "./App.vue";
 
 let cleanup: (() => void) | undefined;
 
+function deferred<T>() {
+    let resolve!: (value: T | PromiseLike<T>) => void;
+    const promise = new Promise<T>((resolvePromise) => {
+        resolve = resolvePromise;
+    });
+    return { promise, resolve };
+}
+
 beforeEach(() => {
     mocks.closeHandler = undefined;
     mocks.editorUpdate = undefined;
     mocks.isTauri.mockReturnValue(false);
     mocks.aiKeyConfigured = false;
+    mocks.aiKeyStatusResponses = [];
     window.matchMedia = vi.fn(() => ({
         matches: false,
         media: "(prefers-color-scheme: dark)",
@@ -230,6 +243,41 @@ describe("App Web 预览启动", () => {
 });
 
 describe("App 桌面关闭", () => {
+    it("较旧的 API Key 状态请求不会覆盖较新的结果", async () => {
+        mocks.isTauri.mockReturnValue(true);
+        const firstStatus = deferred<boolean>();
+        const secondStatus = deferred<boolean>();
+        mocks.aiKeyStatusResponses = [firstStatus.promise, secondStatus.promise];
+        const host = document.createElement("div");
+        document.body.append(host);
+        const app = createApp(App);
+        app.mount(host);
+        cleanup = () => app.unmount();
+
+        await vi.waitFor(() => {
+            expect(
+                mocks.invoke.mock.calls.filter(([name]) => name === "has_ai_api_key"),
+            ).toHaveLength(1);
+        });
+        const settingsButton = Array.from(host.querySelectorAll("button")).find(
+            (button) => button.textContent?.trim() === "偏好设置...",
+        );
+        settingsButton?.click();
+        await vi.waitFor(() => {
+            expect(
+                mocks.invoke.mock.calls.filter(([name]) => name === "has_ai_api_key"),
+            ).toHaveLength(2);
+        });
+
+        secondStatus.resolve(true);
+        await vi.waitFor(() => expect(host.textContent).toContain("已配置"));
+        firstStatus.resolve(false);
+        await new Promise((resolve) => window.setTimeout(resolve, 0));
+        await nextTick();
+
+        expect(host.textContent).toContain("已配置");
+    });
+
     it("全新空白笔记不拦截原生关闭请求", async () => {
         mocks.isTauri.mockReturnValue(true);
         const host = document.createElement("div");

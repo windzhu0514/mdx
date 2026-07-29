@@ -41,6 +41,16 @@ async function collect(iterable: AsyncIterable<string>) {
     return values;
 }
 
+function deferred<T>() {
+    let resolve!: (value: T | PromiseLike<T>) => void;
+    let reject!: (reason?: unknown) => void;
+    const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+        resolve = resolvePromise;
+        reject = rejectPromise;
+    });
+    return { promise, resolve, reject };
+}
+
 function emit(args: unknown, event: AiStreamEvent) {
     const channel = (args as { onEvent: InstanceType<typeof mocks.Channel> }).onEvent;
     channel.emit(event);
@@ -86,25 +96,71 @@ describe("OpenAI-compatible Provider", () => {
     });
 
     it("AbortSignal 只调用一次 cancel_ai", async () => {
-        let streamArgs: unknown;
-        mocks.invoke.mockImplementation((command: string, args: unknown) => {
-            if (command === "stream_ai") streamArgs = args;
+        const streamCommand = deferred<void>();
+        mocks.invoke.mockImplementation((command: string, _args: unknown) => {
+            if (command === "stream_ai") return streamCommand.promise;
             return Promise.resolve();
         });
         const controller = new AbortController();
         const provider = createOpenAICompatibleProvider(config, (value) => value);
         const iterator = provider(context, controller.signal)[Symbol.asyncIterator]();
         const first = iterator.next();
-        await vi.waitFor(() => expect(streamArgs).toBeDefined());
+        await vi.waitFor(() =>
+            expect(mocks.invoke.mock.calls.some(([name]) => name === "stream_ai")).toBe(
+                true,
+            ),
+        );
 
         controller.abort();
         controller.abort();
-        emit(streamArgs, { type: "done" });
-        await first;
+        streamCommand.resolve();
+        await expect(first).resolves.toMatchObject({ done: true });
 
         expect(
             mocks.invoke.mock.calls.filter(([name]) => name === "cancel_ai"),
         ).toHaveLength(1);
+    });
+
+    it("预先中止时只取消一次且不启动 stream_ai 或残留 listener", async () => {
+        const controller = new AbortController();
+        controller.abort();
+        const addEventListener = vi.spyOn(controller.signal, "addEventListener");
+        const removeEventListener = vi.spyOn(controller.signal, "removeEventListener");
+        mocks.invoke.mockResolvedValue(undefined);
+        const provider = createOpenAICompatibleProvider(config, (value) => value);
+
+        await expect(collect(provider(context, controller.signal))).resolves.toEqual([]);
+
+        expect(mocks.invoke.mock.calls.map(([name]) => name)).toEqual(["cancel_ai"]);
+        expect(addEventListener).not.toHaveBeenCalled();
+        expect(removeEventListener).not.toHaveBeenCalled();
+    });
+
+    it("中止会主动唤醒事件队列并在命令结束后终止迭代", async () => {
+        const streamCommand = deferred<void>();
+        mocks.invoke.mockImplementation((command: string) => {
+            if (command === "stream_ai") return streamCommand.promise;
+            return Promise.resolve();
+        });
+        const controller = new AbortController();
+        const provider = createOpenAICompatibleProvider(config, (value) => value);
+        const result = collect(provider(context, controller.signal));
+        let settled = false;
+        void result.finally(() => {
+            settled = true;
+        });
+        await vi.waitFor(() =>
+            expect(mocks.invoke.mock.calls.some(([name]) => name === "stream_ai")).toBe(
+                true,
+            ),
+        );
+
+        controller.abort();
+        await Promise.resolve();
+        expect(settled).toBe(false);
+
+        streamCommand.resolve();
+        await expect(result).resolves.toEqual([]);
     });
 
     it.each([
@@ -164,5 +220,61 @@ describe("OpenAI-compatible Provider", () => {
         await expect(
             collect(provider(context, new AbortController().signal)),
         ).rejects.toThrow("未找到 API Key");
+    });
+
+    it("收到 done 后仍等待 stream_ai 命令完成", async () => {
+        const streamCommand = deferred<void>();
+        let streamArgs: unknown;
+        mocks.invoke.mockImplementation((command: string, args: unknown) => {
+            if (command === "stream_ai") {
+                streamArgs = args;
+                return streamCommand.promise;
+            }
+            return Promise.resolve();
+        });
+        const provider = createOpenAICompatibleProvider(config, (value) => value);
+        const result = collect(provider(context, new AbortController().signal));
+        let settled = false;
+        void result.then(() => {
+            settled = true;
+        });
+        await vi.waitFor(() => expect(streamArgs).toBeDefined());
+
+        emit(streamArgs, { type: "done" });
+        await Promise.resolve();
+        expect(settled).toBe(false);
+
+        streamCommand.resolve();
+        await expect(result).resolves.toEqual([]);
+    });
+
+    it("协议 error 优先且等待后续 stream_ai rejection 被观察", async () => {
+        const streamCommand = deferred<void>();
+        let streamArgs: unknown;
+        mocks.invoke.mockImplementation((command: string, args: unknown) => {
+            if (command === "stream_ai") {
+                streamArgs = args;
+                return streamCommand.promise;
+            }
+            return Promise.resolve();
+        });
+        const provider = createOpenAICompatibleProvider(config, (value) => value);
+        const result = collect(provider(context, new AbortController().signal));
+        let settled = false;
+        void result.catch(() => {
+            settled = true;
+        });
+        await vi.waitFor(() => expect(streamArgs).toBeDefined());
+
+        emit(streamArgs, {
+            type: "error",
+            code: "AI_REMOTE",
+            message: "模型返回了协议错误",
+        });
+        await Promise.resolve();
+        expect(settled).toBe(false);
+
+        streamCommand.reject(new Error("命令随后失败"));
+        await expect(result).rejects.toThrow("模型返回了协议错误");
     });
 });
