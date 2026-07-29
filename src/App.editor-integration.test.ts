@@ -14,6 +14,7 @@ type LowestEditorControls = {
 type Deferred<T> = {
     promise: Promise<T>;
     resolve: (value?: T) => void;
+    reject: (reason: unknown) => void;
 };
 
 const mocks = vi.hoisted(() => ({
@@ -30,10 +31,16 @@ const mocks = vi.hoisted(() => ({
 
 function createDeferred<T>(): Deferred<T> {
     let resolve: ((value: T) => void) | undefined;
-    const promise = new Promise<T>((accept) => {
+    let reject: ((reason: unknown) => void) | undefined;
+    const promise = new Promise<T>((accept, decline) => {
         resolve = accept;
+        reject = decline;
     });
-    return { promise, resolve: (value) => resolve?.(value as T) };
+    return {
+        promise,
+        resolve: (value) => resolve?.(value as T),
+        reject: (reason) => reject?.(reason),
+    };
 }
 
 function createMeta(overrides: Partial<MdxMetadata> = {}): MdxMetadata {
@@ -228,6 +235,20 @@ afterEach(() => {
 });
 
 describe("App 编辑器状态集成", () => {
+    it("shows an ATX heading with three leading spaces in the App TOC", async () => {
+        mocks.openedNote = createNote("   ## 缩进标题\n    ### 非标题");
+        const host = await mountApp();
+
+        findButton(host, "打开...").click();
+        await vi.waitFor(() => {
+            expect(
+                Array.from(host.querySelectorAll(".toc-list button")).map(
+                    (button) => button.textContent?.trim(),
+                ),
+            ).toEqual(["缩进标题"]);
+        });
+    });
+
     it("does not put fenced-code pseudo headings in the App TOC", async () => {
         mocks.openedNote = createNote("# 外部\n```ts\n## 伪标题\n```");
         const host = await mountApp();
@@ -296,6 +317,34 @@ describe("App 编辑器状态集成", () => {
 });
 
 describe("App PDF 打印视图", () => {
+    it("prevents concurrent exports, recovers from rejected readiness, and releases the print guard", async () => {
+        mocks.openedNote = createNote("# 原文");
+        const host = await mountApp();
+        findButton(host, "打开...").click();
+        await vi.waitFor(() => expect(editorValue(host, "milkdown")).toBe("# 原文"));
+        findButton(host, "垂直双栏").click();
+        await nextTick();
+
+        const deferred = createDeferred<void>();
+        mocks.nextMilkdownReadiness = deferred.promise;
+        findButton(host, "导出 PDF / 打印...").click();
+        findButton(host, "导出 PDF / 打印...").click();
+        await vi.waitFor(() => expect(mocks.milkdown?.whenReadyCalls).toBe(1));
+
+        deferred.reject(new Error("Crepe 初始化失败"));
+        await vi.waitFor(() => expect(host.textContent).toContain("Crepe 初始化失败"));
+        expect(window.print).not.toHaveBeenCalled();
+        await nextTick();
+        expect(host.querySelectorAll(".source-editor-stub")).toHaveLength(1);
+        expect(host.querySelector(".milkdown-editor-stub")?.getAttribute("data-readonly")).toBe(
+            "true",
+        );
+        expect(host.textContent).not.toContain("未保存");
+
+        findButton(host, "导出 PDF / 打印...").click();
+        await vi.waitFor(() => expect(window.print).toHaveBeenCalledTimes(1));
+    });
+
     it("waits for the temporary WYSIWYG editor and ignores its normalization until printing ends", async () => {
         mocks.openedNote = createNote("# 原文");
         const host = await mountApp();

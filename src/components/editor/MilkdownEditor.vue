@@ -105,10 +105,10 @@ onMounted(() => {
             if (props.modelValue === currentMarkdown) return;
             instance.editor.action(replaceAll(props.modelValue));
             currentMarkdown = props.modelValue;
-        })
-        .catch((error: unknown) => {
-            reportLifecycleError("初始化", error);
-        });
+    });
+    void readiness.catch((error: unknown) => {
+        reportLifecycleError("初始化", error);
+    });
 });
 
 watch(
@@ -135,10 +135,11 @@ onBeforeUnmount(() => {
     disposed = true;
     ready = false;
     crepe = undefined;
-    readiness = readiness
-        .then(async () => {
-            await instance.destroy();
-        })
+    void readiness
+        .then(
+            async () => instance.destroy(),
+            async () => instance.destroy(),
+        )
         .catch((error: unknown) => {
             reportLifecycleError("销毁", error);
         });

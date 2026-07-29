@@ -27,6 +27,17 @@ describe("normalizeMarkdownHeadingText", () => {
 });
 
 describe("extractMarkdownHeadings", () => {
+    it("recognizes ATX headings with up to three leading spaces while excluding four-space lines and fenced pseudo headings", () => {
+        expect(
+            extractMarkdownHeadings(
+                "   ## 缩进标题\n    ### 代码缩进\n   ```md\n   ### 围栏伪标题\n    ```\n   ## 仍在围栏\n   ```\n   ## 第二标题\n    ```\n    ### 非围栏也非标题",
+            ).map(({ level, text }) => ({ level, text })),
+        ).toEqual([
+            { level: 2, text: "缩进标题" },
+            { level: 2, text: "第二标题" },
+        ]);
+    });
+
     it("忽略反引号和波浪围栏代码块中的伪 ATX 标题", () => {
         expect(
             extractMarkdownHeadings(

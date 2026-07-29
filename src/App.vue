@@ -940,16 +940,21 @@ async function exportMarkdown() {
 }
 
 async function exportPdf() {
-    if (!(await ensureSavedForExport())) return;
+    if (printing) return;
+
+    printing = true;
     const previousMode = editorMode.value;
     const previousSourcePreview = sourcePreview.value;
-    printing = true;
     try {
+        if (!(await ensureSavedForExport())) return;
         editorMode.value = "wysiwyg";
         await nextTick();
         await (editorRef.value?.whenReady() ?? Promise.resolve());
         statusMessage.value = "已打开系统打印对话框，可选择另存为 PDF";
         window.print();
+    } catch (error) {
+        errorMessage.value = stringifyError(error);
+        statusMessage.value = "PDF 导出失败";
     } finally {
         editorMode.value = previousMode;
         sourcePreview.value = previousSourcePreview;

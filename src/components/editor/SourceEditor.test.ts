@@ -141,6 +141,20 @@ describe("SourceEditor", () => {
         ]);
         expect(editor.handle.value?.scrollToHeading("不存在")).toBe(false);
     });
+
+    it("finds an ATX heading with three leading spaces and moves the source cursor to it", async () => {
+        const editor = mountEditor("前言\n   ## 缩进标题\n正文\n    ### 非标题");
+        cleanup = editor.unmount;
+        await nextTick();
+
+        expect(editor.handle.value?.scrollToHeading("缩进标题")).toBe(true);
+        editor.handle.value?.replaceSelection("定位：");
+        await nextTick();
+
+        expect(editor.updates).toEqual([
+            "前言\n定位：   ## 缩进标题\n正文\n    ### 非标题",
+        ]);
+    });
 });
 
     it("does not scroll to an ATX-looking line inside a fenced code block", async () => {

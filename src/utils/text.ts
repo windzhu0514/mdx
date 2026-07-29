@@ -54,7 +54,7 @@ export function extractMarkdownHeadings(markdown: string): MarkdownHeading[] {
             continue;
         }
 
-        const headingMatch = /^(#{1,6})[ \t]+(.+)$/.exec(line);
+        const headingMatch = /^[ \t]{0,3}(#{1,6})[ \t]+(.+)$/.exec(line);
         if (headingMatch) {
             const text = normalizeMarkdownHeadingText(headingMatch[2]);
             if (text) {

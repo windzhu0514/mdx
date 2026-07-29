@@ -360,6 +360,28 @@ describe("MilkdownEditor", () => {
         expect(settled).toBe(true);
     });
 
+    it("keeps rejected Crepe creation observable through readiness while reporting and cleaning up", async () => {
+        const deferred = createDeferred<void>();
+        const failure = new Error("Crepe 初始化失败");
+        const report = vi.spyOn(console, "error").mockImplementation(() => undefined);
+        mocks.createEditor = () => deferred.promise;
+        const editor = mountEditor();
+        await nextTick();
+
+        const readyHandle = editor.handle.value as MoraEditorHandle & {
+            whenReady(): Promise<void>;
+        };
+        const readiness = readyHandle.whenReady();
+        deferred.reject(failure);
+
+        await expect(readiness).rejects.toThrow("Crepe 初始化失败");
+        expect(report).toHaveBeenCalledWith("Crepe 初始化失败", failure);
+
+        editor.unmount();
+        await flushPromises();
+        expect(mocks.instances[0].destroy).toHaveBeenCalledTimes(1);
+    });
+
     it("destroys Crepe once only after a pending creation settles", async () => {
         const deferred = createDeferred<void>();
         mocks.createEditor = () => deferred.promise;
