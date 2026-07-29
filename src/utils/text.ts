@@ -34,18 +34,21 @@ export function extractMarkdownHeadings(markdown: string): MarkdownHeading[] {
 
     for (const rawLine of markdown.split("\n")) {
         const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
-        const fenceMatch = /^[ \t]{0,3}(`{3,}|~{3,})/.exec(line);
+        const fenceMatch = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
 
         if (fence) {
             const closingFence = new RegExp(
-                `^[ \\t]{0,3}${fence.character}{${fence.length},}[ \\t]*$`,
+                `^ {0,3}${fence.character}{${fence.length},}[ \\t]*$`,
             );
             if (closingFence.test(line)) fence = undefined;
             offset += rawLine.length + 1;
             continue;
         }
 
-        if (fenceMatch) {
+        if (
+            fenceMatch &&
+            (fenceMatch[1][0] !== "`" || !fenceMatch[2].includes("`"))
+        ) {
             fence = {
                 character: fenceMatch[1][0] as "`" | "~",
                 length: fenceMatch[1].length,
@@ -54,7 +57,7 @@ export function extractMarkdownHeadings(markdown: string): MarkdownHeading[] {
             continue;
         }
 
-        const headingMatch = /^[ \t]{0,3}(#{1,6})[ \t]+(.+)$/.exec(line);
+        const headingMatch = /^ {0,3}(#{1,6})[ \t]+(.+)$/.exec(line);
         if (headingMatch) {
             const text = normalizeMarkdownHeadingText(headingMatch[2]);
             if (text) {

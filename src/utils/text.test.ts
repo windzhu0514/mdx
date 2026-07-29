@@ -45,4 +45,24 @@ describe("extractMarkdownHeadings", () => {
             ),
         ).toEqual([{ level: 1, text: "外部", id: 0 }]);
     });
+
+    it("does not treat tab-indented headings or fences as block syntax", () => {
+        expect(
+            extractMarkdownHeadings(
+                "\t# Tab 标题\n\t```\n# 反引号 Tab 围栏后\n\t~~~\n# 波浪 Tab 围栏后\n```\n# 围栏内\n\t```\n# Tab 关闭围栏后仍在围栏内\n```\n# 真正关闭围栏后",
+            ).map(({ text }) => text),
+        ).toEqual([
+            "反引号 Tab 围栏后",
+            "波浪 Tab 围栏后",
+            "真正关闭围栏后",
+        ]);
+    });
+
+    it("rejects backtick fences whose info string contains a backtick while allowing tilde fences", () => {
+        expect(
+            extractMarkdownHeadings(
+                "```info`invalid\n# 无效反引号围栏后的标题\n~~~info`allowed\n# 波浪围栏内\n~~~\n# 波浪围栏后的标题",
+            ).map(({ text }) => text),
+        ).toEqual(["无效反引号围栏后的标题", "波浪围栏后的标题"]);
+    });
 });
