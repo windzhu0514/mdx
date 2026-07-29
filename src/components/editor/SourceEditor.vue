@@ -10,7 +10,7 @@ import { basicSetup, EditorView } from "codemirror";
 import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { EditorCommand, MoraEditorHandle } from "./editorTypes";
 import { transformSourceSelection } from "./sourceTransforms";
-import { normalizeMarkdownHeadingText } from "../../utils/text";
+import { extractMarkdownHeadings, normalizeMarkdownHeadingText } from "../../utils/text";
 
 const props = defineProps<{ modelValue: string; readonly?: boolean }>();
 const emit = defineEmits<{ "update:modelValue": [markdown: string] }>();
@@ -99,25 +99,22 @@ function scrollToHeading(text: string): boolean {
     if (!editorView) return false;
 
     const doc = editorView.state.doc;
-    for (let lineNumber = 1; lineNumber <= doc.lines; lineNumber += 1) {
-        const line = doc.line(lineNumber);
-        const match = /^(#{1,6})\s+(.+)$/.exec(line.text);
-        if (
-            !match ||
-            normalizeMarkdownHeadingText(match[2]) !==
-                normalizeMarkdownHeadingText(text)
-        ) {
-            continue;
-        }
+    const heading = extractMarkdownHeadings(doc.toString()).find(
+        (candidate) =>
+            candidate.text === normalizeMarkdownHeadingText(text),
+    );
+    if (!heading) return false;
 
-        editorView.dispatch({
-            selection: { anchor: line.from },
-            effects: EditorView.scrollIntoView(line.from, { y: "start" }),
-        });
-        return true;
-    }
+    const line = doc.lineAt(heading.id);
+    editorView.dispatch({
+        selection: { anchor: line.from },
+        effects: EditorView.scrollIntoView(line.from, { y: "start" }),
+    });
+    return true;
+}
 
-    return false;
+function whenReady(): Promise<void> {
+    return Promise.resolve();
 }
 
 function execute(command: EditorCommand): void {
@@ -159,5 +156,6 @@ defineExpose<MoraEditorHandle>({
     moveCursor,
     execute,
     scrollToHeading,
+    whenReady,
 });
 </script>

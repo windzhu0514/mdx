@@ -148,6 +148,7 @@ type MoraEditorHandle = {
     moveCursor(position: "start" | "end"): void;
     execute(command: EditorCommand): void;
     scrollToHeading(text: string): boolean;
+    whenReady(): Promise<void>;
 };
 ```
 
@@ -186,10 +187,12 @@ content / content.md：assets/... 或 attachments/...
 ### 8.1 PDF 与目录辅助行为
 
 - 从源码或垂直双栏导出 PDF 时，临时切换为单一可编辑 WYSIWYG，等待 Vue
-  完成渲染后调用系统打印，再恢复原模式；不建立独立 Markdown Renderer，且该切换
-  不改变正文或脏状态。
-- App、CodeMirror 与 Milkdown 的目录定位共用一个最小标题文本规范化函数，处理
-  尾部闭合 `#`、链接、行内代码和常见强调标记；它不是完整 Markdown 解析器。
+  完成渲染和当前编辑器的 `whenReady()` 后调用系统打印，再恢复原模式；打印期间
+  忽略新挂载 Milkdown 的规范化更新，保证正文和脏状态不变；不建立独立 Markdown
+  Renderer。
+- App、CodeMirror 与 Milkdown 的目录定位共用最小标题提取/规范化函数，处理尾部闭合
+  `#`、链接、行内代码和常见强调标记，并忽略 ``` 或 ~~~ fenced code 内的伪 ATX
+  标题；它不是完整 Markdown 解析器。
 
 ## 9. 第一阶段 AI 功能
 
@@ -225,6 +228,12 @@ type MoraAIProvider = (
   `AsyncIterable<string>`。
 - `createCrepeAIProvider`：将 Mora 请求和流式结果适配到 Crepe 官方
   `AIProvider` 契约。
+
+当前 Task 4 的 App 未传入 `aiProvider`，因此没有 AI 请求，也不在本任务提前增加
+无调用方的规范化 wrapper。Task 5 的 Provider 构造必须接收
+`canonicalizeMarkdown: (markdown: string) => string`，在创建 `AiRequest` 前对
+`AIPromptContext.document` 与 `selection` 分别规范化。Task 8 在 App 创建 Provider 时
+传入 `resourceSession.persistedMarkdown`；验收必须证明 AI IPC payload 不含 `blob:` URL。
 
 完整数据流：
 

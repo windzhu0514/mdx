@@ -92,6 +92,10 @@ function scrollToHeading(text: string): boolean {
     return sourceFound || previewFound;
 }
 
+function whenReady(): Promise<void> {
+    return editableEditor()?.whenReady() ?? Promise.resolve();
+}
+
 defineExpose<MoraEditorHandle>({
     focus,
     getSelectedText,
@@ -99,6 +103,7 @@ defineExpose<MoraEditorHandle>({
     moveCursor,
     execute,
     scrollToHeading,
+    whenReady,
 });
 </script>
 

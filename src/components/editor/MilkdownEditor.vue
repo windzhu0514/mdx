@@ -292,6 +292,10 @@ function executeTaskList(): void {
     });
 }
 
+function whenReady(): Promise<void> {
+    return readiness;
+}
+
 defineExpose<MoraEditorHandle>({
     focus,
     getSelectedText,
@@ -299,5 +303,6 @@ defineExpose<MoraEditorHandle>({
     moveCursor,
     execute,
     scrollToHeading,
+    whenReady,
 });
 </script>

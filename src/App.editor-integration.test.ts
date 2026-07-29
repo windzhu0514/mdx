@@ -8,6 +8,12 @@ import { countNonWhitespaceCharacters } from "./utils/text";
 type LowestEditorControls = {
     emitUpdate: (markdown: string) => void;
     uploadImage?: (file: File) => Promise<string>;
+    whenReadyCalls: number;
+};
+
+type Deferred<T> = {
+    promise: Promise<T>;
+    resolve: (value?: T) => void;
 };
 
 const mocks = vi.hoisted(() => ({
@@ -16,10 +22,19 @@ const mocks = vi.hoisted(() => ({
     objectUrl: "blob:mora-image",
     openedNote: undefined as MdxNote | undefined,
     printSnapshots: [] as string[],
+    nextMilkdownReadiness: undefined as Promise<void> | undefined,
     invoke: vi.fn(),
     openDialog: vi.fn(),
     saveDialog: vi.fn(),
 }));
+
+function createDeferred<T>(): Deferred<T> {
+    let resolve: ((value: T) => void) | undefined;
+    const promise = new Promise<T>((accept) => {
+        resolve = accept;
+    });
+    return { promise, resolve: (value) => resolve?.(value as T) };
+}
 
 function createMeta(overrides: Partial<MdxMetadata> = {}): MdxMetadata {
     return {
@@ -87,11 +102,17 @@ function lowestEditorStub(kind: "milkdown" | "source") {
         },
         emits: ["update:modelValue", "ai-error"],
         setup(props, { emit, expose }) {
+            const readiness =
+                kind === "milkdown"
+                    ? (mocks.nextMilkdownReadiness ?? Promise.resolve())
+                    : Promise.resolve();
+            if (kind === "milkdown") mocks.nextMilkdownReadiness = undefined;
             const controls: LowestEditorControls = {
                 emitUpdate: (markdown) => emit("update:modelValue", markdown),
                 uploadImage: props.uploadImage as
                     | ((file: File) => Promise<string>)
                     | undefined,
+                whenReadyCalls: 0,
             };
             mocks[kind] = controls;
 
@@ -107,6 +128,10 @@ function lowestEditorStub(kind: "milkdown" | "source") {
                 moveCursor: vi.fn(),
                 replaceSelection: vi.fn(),
                 scrollToHeading: vi.fn(() => false),
+                whenReady: () => {
+                    controls.whenReadyCalls += 1;
+                    return readiness;
+                },
             });
 
             return () =>
@@ -162,6 +187,7 @@ beforeEach(() => {
     mocks.source = undefined;
     mocks.openedNote = undefined;
     mocks.printSnapshots = [];
+    mocks.nextMilkdownReadiness = undefined;
     mocks.openDialog.mockResolvedValue("C:\\notes\\test.mdx");
     mocks.saveDialog.mockResolvedValue("C:\\notes\\saved.mdx");
     mocks.invoke.mockImplementation(async (command: string, args?: unknown) => {
@@ -202,6 +228,20 @@ afterEach(() => {
 });
 
 describe("App 编辑器状态集成", () => {
+    it("does not put fenced-code pseudo headings in the App TOC", async () => {
+        mocks.openedNote = createNote("# 外部\n```ts\n## 伪标题\n```");
+        const host = await mountApp();
+
+        findButton(host, "打开...").click();
+        await vi.waitFor(() => {
+            expect(
+                Array.from(host.querySelectorAll(".toc-list button")).map(
+                    (button) => button.textContent?.trim(),
+                ),
+            ).toEqual(["外部"]);
+        });
+    });
+
     it("把 Milkdown 更新归一化为持久 Markdown，并仅向 Milkdown 投影 Blob URL", async () => {
         const host = await mountApp();
         const file = new File(["image"], "paste.png", { type: "image/png" });
@@ -256,6 +296,31 @@ describe("App 编辑器状态集成", () => {
 });
 
 describe("App PDF 打印视图", () => {
+    it("waits for the temporary WYSIWYG editor and ignores its normalization until printing ends", async () => {
+        mocks.openedNote = createNote("# 原文");
+        const host = await mountApp();
+        findButton(host, "打开...").click();
+        await vi.waitFor(() => expect(editorValue(host, "milkdown")).toBe("# 原文"));
+        findButton(host, "仅源码").click();
+        await nextTick();
+
+        const deferred = createDeferred<void>();
+        mocks.nextMilkdownReadiness = deferred.promise;
+        findButton(host, "导出 PDF / 打印...").click();
+        await vi.waitFor(() => expect(mocks.milkdown?.whenReadyCalls).toBe(1));
+
+        expect(window.print).not.toHaveBeenCalled();
+        mocks.milkdown?.emitUpdate("# Crepe 规范化后的内容");
+        await nextTick();
+        expect(host.textContent).not.toContain("未保存");
+
+        deferred.resolve();
+        await vi.waitFor(() => expect(window.print).toHaveBeenCalledTimes(1));
+        await nextTick();
+        expect(editorValue(host, "source")).toBe("# 原文");
+        expect(host.textContent).not.toContain("未保存");
+    });
+
     it.each([
         ["仅源码", false],
         ["垂直双栏", true],

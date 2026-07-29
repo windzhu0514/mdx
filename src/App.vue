@@ -42,7 +42,7 @@ import { createEmptyMetadata } from "./utils/note";
 import { isTextInputTarget } from "./utils/shortcuts";
 import {
     countNonWhitespaceCharacters,
-    normalizeMarkdownHeadingText,
+    extractMarkdownHeadings,
 } from "./utils/text";
 
 type MdxSaveRequest = {
@@ -85,6 +85,7 @@ const findPanel = ref<InstanceType<typeof FindReplacePanel> | null>(null);
 
 const editorMode = ref<EditorMode>("wysiwyg");
 const sourcePreview = ref(true);
+let printing = false;
 const showToc = ref(true);
 const recentFiles = ref<RecentFileEntry[]>([]);
 const showFindPanel = ref(false);
@@ -185,19 +186,7 @@ const modeLabel = computed(() => {
 });
 
 const toc = computed(() => {
-    const headings: { level: number; text: string; id: number }[] = [];
-    const regex = /^(#{1,6})\s+(.+)$/gm;
-    let match;
-    while ((match = regex.exec(content.value)) !== null) {
-        const text = normalizeMarkdownHeadingText(match[2]);
-        if (!text) continue;
-        headings.push({
-            level: match[1].length,
-            text,
-            id: match.index,
-        });
-    }
-    return headings;
+    return extractMarkdownHeadings(content.value);
 });
 
 function scrollToHeading(text: string) {
@@ -580,6 +569,7 @@ function markDirty() {
 }
 
 function handleEditorUpdate(markdown: string) {
+    if (printing) return;
     const persistedContent = resourceSession.persistedMarkdown(markdown);
     if (persistedContent === content.value) return;
 
@@ -953,15 +943,18 @@ async function exportPdf() {
     if (!(await ensureSavedForExport())) return;
     const previousMode = editorMode.value;
     const previousSourcePreview = sourcePreview.value;
+    printing = true;
     try {
         editorMode.value = "wysiwyg";
         await nextTick();
+        await (editorRef.value?.whenReady() ?? Promise.resolve());
         statusMessage.value = "已打开系统打印对话框，可选择另存为 PDF";
         window.print();
     } finally {
         editorMode.value = previousMode;
         sourcePreview.value = previousSourcePreview;
         await nextTick();
+        printing = false;
     }
 }
 

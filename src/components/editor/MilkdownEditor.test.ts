@@ -338,6 +338,28 @@ describe("MilkdownEditor", () => {
         });
     });
 
+    it("exposes the pending Crepe creation promise as editor readiness", async () => {
+        const deferred = createDeferred<void>();
+        mocks.createEditor = () => deferred.promise;
+        const editor = mountEditor();
+        cleanup = editor.unmount;
+        await nextTick();
+
+        const readyHandle = editor.handle.value as MoraEditorHandle & {
+            whenReady(): Promise<void>;
+        };
+        let settled = false;
+        const waiting = readyHandle.whenReady().then(() => {
+            settled = true;
+        });
+        await flushPromises();
+        expect(settled).toBe(false);
+
+        deferred.resolve();
+        await waiting;
+        expect(settled).toBe(true);
+    });
+
     it("destroys Crepe once only after a pending creation settles", async () => {
         const deferred = createDeferred<void>();
         mocks.createEditor = () => deferred.promise;

@@ -116,6 +116,17 @@ describe("SourceEditor", () => {
         ).toBe("false");
     });
 
+    it("is ready immediately after CodeMirror mounts", async () => {
+        const editor = mountEditor("ready");
+        cleanup = editor.unmount;
+        await nextTick();
+
+        const readyHandle = editor.handle.value as MoraEditorHandle & {
+            whenReady(): Promise<void>;
+        };
+        await expect(readyHandle.whenReady()).resolves.toBeUndefined();
+    });
+
     it("finds the first ATX heading by TOC text and moves the source cursor to it", async () => {
         const editor = mountEditor("# 开始\n正文\n## **目标标题** ##\n结尾");
         cleanup = editor.unmount;
@@ -131,3 +142,12 @@ describe("SourceEditor", () => {
         expect(editor.handle.value?.scrollToHeading("不存在")).toBe(false);
     });
 });
+
+    it("does not scroll to an ATX-looking line inside a fenced code block", async () => {
+        const editor = mountEditor("# 外部\n```ts\n## 伪标题\n```");
+        cleanup = editor.unmount;
+        await nextTick();
+
+        expect(editor.handle.value?.scrollToHeading("伪标题")).toBe(false);
+        expect(editor.handle.value?.scrollToHeading("外部")).toBe(true);
+    });

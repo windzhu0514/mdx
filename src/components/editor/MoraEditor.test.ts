@@ -26,6 +26,7 @@ type ChildHandle = MoraEditorHandle & {
         moveCursor: Array<"start" | "end">;
         replaceSelection: string[];
         scrollToHeading: string[];
+        whenReady: number;
         unmounted: number;
     };
 };
@@ -46,6 +47,7 @@ function createChildHandle(
         moveCursor: [],
         replaceSelection: [],
         scrollToHeading: [],
+        whenReady: 0,
         unmounted: 0,
     };
 
@@ -65,6 +67,10 @@ function createChildHandle(
         scrollToHeading: (text) => {
             calls.scrollToHeading.push(text);
             return text === "目标标题";
+        },
+        whenReady: () => {
+            calls.whenReady += 1;
+            return Promise.resolve();
         },
     };
 }
@@ -268,6 +274,16 @@ describe("MoraEditor", () => {
         expect(childHandles.milkdown[0].calls.scrollToHeading).toEqual([
             "目标标题",
         ]);
+    });
+
+    it("delegates readiness only to the current editable child", async () => {
+        const editor = mountEditor("source", true);
+        cleanup = editor.unmount;
+        await nextTick();
+
+        await expect(editor.handle.value?.whenReady()).resolves.toBeUndefined();
+        expect(childHandles.source[0].calls.whenReady).toBe(1);
+        expect(childHandles.milkdown[0].calls.whenReady).toBe(0);
     });
 
     it("forwards a real child update event to its parent", async () => {

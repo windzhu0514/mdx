@@ -721,7 +721,7 @@ Expected: PASS。
 - Modify: `src/App.vue`
 
 **Interfaces:**
-- Produces: `createOpenAICompatibleProvider(getConfig)`。
+- Produces: `createOpenAICompatibleProvider(getConfig, canonicalizeMarkdown)`。
 - Consumes: Tauri `invoke`、`Channel` 和 Crepe `AIPromptContext`。
 
 - [ ] **Step 1: 扩展非敏感偏好并写失败测试**
@@ -760,6 +760,8 @@ Mock `Channel` and `invoke` in `openAICompatible.test.ts` and cover:
 3. error throws the supplied Chinese message。
 4. AbortSignal invokes `cancel_ai` once。
 5. Base URL or model empty throws before `stream_ai`。
+6. A context whose `document` and `selection` contain Blob URLs invokes `stream_ai`
+   only with both fields passed through `canonicalizeMarkdown`。
 
 - [ ] **Step 3: 实现事件队列和 Provider**
 
@@ -787,12 +789,16 @@ export type MoraAIProvider = (
 ```ts
 export function createOpenAICompatibleProvider(
     getConfig: () => AiConfig,
+    canonicalizeMarkdown: (markdown: string) => string,
 ): MoraAIProvider;
 ```
 
 Implementation requirements:
 
 - Create `new Channel<AiStreamEvent>()` per request.
+- Before constructing `AiRequest`, pass both `context.document` and
+  `context.selection` through `canonicalizeMarkdown`; the IPC payload must never
+  contain a Blob URL.
 - Invoke `stream_ai` with `{ request, onEvent: channel }`。
 - Queue events arriving before the iterator is awaiting.
 - Yield only delta text.
@@ -1169,7 +1175,7 @@ Create once:
 const aiProvider = createOpenAICompatibleProvider(() => ({
     baseUrl: preferences.value.aiBaseUrl,
     model: preferences.value.aiModel,
-}));
+}), resourceSession.persistedMarkdown);
 ```
 
 Pass it only to editable WYSIWYG:
@@ -1182,6 +1188,9 @@ Pass it only to editable WYSIWYG:
 
 The provider closure reads latest preferences without recreating Milkdown.
 Readonly preview never enables Crepe AI.
+The current Task 4 App does not pass an `aiProvider` and makes no AI request.
+Task 5/8 acceptance must prove the AI IPC request has canonicalized both
+`AIPromptContext.document` and `selection`, with no `blob:` URL remaining.
 
 - [ ] **Step 2: 映射 AI 错误到可见状态**
 
