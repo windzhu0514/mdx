@@ -168,43 +168,72 @@ fn protocol_error_event() -> AiStreamEvent {
     }
 }
 
+fn build_ai_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|_| "无法初始化 AI 网络客户端".to_string())
+}
+
+fn send_event(
+    on_event: &tauri::ipc::Channel<AiStreamEvent>,
+    event: AiStreamEvent,
+) -> Result<(), String> {
+    on_event
+        .send(event)
+        .map_err(|_| "AI 事件通道已关闭".to_string())
+}
+
+fn send_http_status_error(
+    status: u16,
+    on_event: &tauri::ipc::Channel<AiStreamEvent>,
+) -> Result<(), String> {
+    let error = http_status_error(status);
+    send_event(
+        on_event,
+        AiStreamEvent::Error {
+            code: error.code.to_string(),
+            message: error.message.to_string(),
+        },
+    )
+}
+
 async fn forward_stream<S, E>(
     mut events: S,
     mut cancel_rx: oneshot::Receiver<()>,
     on_event: &tauri::ipc::Channel<AiStreamEvent>,
-) where
+) -> Result<(), String>
+where
     S: Stream<Item = Result<Event, E>> + Unpin,
 {
     loop {
         let event = tokio::select! {
             biased;
-            _ = &mut cancel_rx => return,
+            _ = &mut cancel_rx => return Ok(()),
             event = events.next() => event,
         };
 
         let Some(event) = event else {
-            let _ = on_event.send(protocol_error_event());
-            return;
+            send_event(on_event, protocol_error_event())?;
+            return Ok(());
         };
         let Ok(event) = event else {
-            let _ = on_event.send(protocol_error_event());
-            return;
+            send_event(on_event, protocol_error_event())?;
+            return Ok(());
         };
 
         match parse_stream_data(&event.data) {
             Ok(StreamData::Done) => {
-                let _ = on_event.send(AiStreamEvent::Done);
-                return;
+                send_event(on_event, AiStreamEvent::Done)?;
+                return Ok(());
             }
             Ok(StreamData::Delta(Some(text))) => {
-                if on_event.send(AiStreamEvent::Delta { text }).is_err() {
-                    return;
-                }
+                send_event(on_event, AiStreamEvent::Delta { text })?;
             }
             Ok(StreamData::Delta(None)) => {}
             Err(()) => {
-                let _ = on_event.send(protocol_error_event());
-                return;
+                send_event(on_event, protocol_error_event())?;
+                return Ok(());
             }
         }
     }
@@ -321,11 +350,12 @@ pub(crate) async fn stream_ai(
     let body = build_chat_request(&request);
     let mut cancel_rx = state.begin_request()?;
     let api_key = credential_read_result(ai_key_entry()?.get_password())?;
+    let client = build_ai_client()?;
 
     let response = tokio::select! {
         biased;
         _ = &mut cancel_rx => return Ok(()),
-        response = reqwest::Client::new()
+        response = client
             .post(url)
             .bearer_auth(api_key)
             .json(&body)
@@ -335,16 +365,11 @@ pub(crate) async fn stream_ai(
     };
 
     if !response.status().is_success() {
-        let error = http_status_error(response.status().as_u16());
-        let _ = on_event.send(AiStreamEvent::Error {
-            code: error.code.to_string(),
-            message: error.message.to_string(),
-        });
+        send_http_status_error(response.status().as_u16(), &on_event)?;
         return Ok(());
     }
 
-    forward_stream(response.bytes_stream().eventsource(), cancel_rx, &on_event).await;
-    Ok(())
+    forward_stream(response.bytes_stream().eventsource(), cancel_rx, &on_event).await
 }
 
 #[tauri::command]
@@ -356,6 +381,8 @@ pub(crate) fn cancel_ai(state: tauri::State<'_, AiRequestState>) -> Result<(), S
 mod tests {
     use super::*;
     use futures_util::{stream, StreamExt};
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
     use std::sync::Arc;
 
     fn event(data: &str) -> Event {
@@ -378,6 +405,12 @@ mod tests {
             Ok(())
         });
         (channel, messages)
+    }
+
+    fn failing_channel() -> tauri::ipc::Channel<AiStreamEvent> {
+        tauri::ipc::Channel::new(|_| {
+            Err(std::io::Error::other("secret channel failure detail").into())
+        })
     }
 
     #[test]
@@ -545,7 +578,7 @@ mod tests {
         let (cancel_tx, cancel_rx) = oneshot::channel();
         let (channel, messages) = recording_channel();
 
-        forward_stream(input, cancel_rx, &channel).await;
+        forward_stream(input, cancel_rx, &channel).await.unwrap();
         drop(cancel_tx);
 
         assert_eq!(
@@ -563,7 +596,7 @@ mod tests {
         let (_cancel_tx, cancel_rx) = oneshot::channel();
         let (channel, messages) = recording_channel();
 
-        forward_stream(input, cancel_rx, &channel).await;
+        forward_stream(input, cancel_rx, &channel).await.unwrap();
 
         assert_eq!(
             *messages.lock().unwrap(),
@@ -581,7 +614,7 @@ mod tests {
         let (_cancel_tx, cancel_rx) = oneshot::channel();
         let (channel, messages) = recording_channel();
 
-        forward_stream(input, cancel_rx, &channel).await;
+        forward_stream(input, cancel_rx, &channel).await.unwrap();
 
         assert_eq!(messages.lock().unwrap()[0]["code"], "AI_PROTOCOL");
     }
@@ -593,7 +626,7 @@ mod tests {
         let (channel, messages) = recording_channel();
         cancel_tx.send(()).unwrap();
 
-        forward_stream(input, cancel_rx, &channel).await;
+        forward_stream(input, cancel_rx, &channel).await.unwrap();
 
         assert!(messages.lock().unwrap().is_empty());
     }
@@ -608,7 +641,7 @@ mod tests {
             let (channel, messages) = recording_channel();
             cancel_tx.send(()).unwrap();
 
-            forward_stream(input, cancel_rx, &channel).await;
+            forward_stream(input, cancel_rx, &channel).await.unwrap();
 
             assert!(messages.lock().unwrap().is_empty());
         }
@@ -627,12 +660,125 @@ mod tests {
             Ok::<_, ()>(item)
         });
         let (_cancel_tx, cancel_rx) = oneshot::channel();
-        let channel =
-            tauri::ipc::Channel::new(|_| Err(std::io::Error::other("channel closed").into()));
+        let channel = failing_channel();
 
-        forward_stream(input, cancel_rx, &channel).await;
+        let error = forward_stream(input, cancel_rx, &channel)
+            .await
+            .unwrap_err();
 
         assert_eq!(polled.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(error, "AI 事件通道已关闭");
+        assert!(!error.contains("secret channel failure detail"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn done_channel_failure_rejects_the_command_with_a_stable_error() {
+        let input = stream::iter(vec![Ok::<_, ()>(event("[DONE]"))]);
+        let (_cancel_tx, cancel_rx) = oneshot::channel();
+
+        let error = forward_stream(input, cancel_rx, &failing_channel())
+            .await
+            .unwrap_err();
+
+        assert_eq!(error, "AI 事件通道已关闭");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn protocol_error_channel_failure_rejects_the_command() {
+        for input in ["not-json", ""] {
+            let events = if input.is_empty() {
+                Vec::new()
+            } else {
+                vec![Ok::<_, ()>(event(input))]
+            };
+            let (_cancel_tx, cancel_rx) = oneshot::channel();
+
+            let error = forward_stream(stream::iter(events), cancel_rx, &failing_channel())
+                .await
+                .unwrap_err();
+
+            assert_eq!(error, "AI 事件通道已关闭");
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn sse_error_channel_failure_rejects_the_command() {
+        let input = stream::iter(vec![Err::<Event, _>("secret stream failure detail")]);
+        let (_cancel_tx, cancel_rx) = oneshot::channel();
+
+        let error = forward_stream(input, cancel_rx, &failing_channel())
+            .await
+            .unwrap_err();
+
+        assert_eq!(error, "AI 事件通道已关闭");
+        assert!(!error.contains("secret stream failure detail"));
+    }
+
+    #[test]
+    fn http_status_error_channel_failure_rejects_the_command() {
+        let error = send_http_status_error(401, &failing_channel()).unwrap_err();
+
+        assert_eq!(error, "AI 事件通道已关闭");
+        assert!(!error.contains("secret channel failure detail"));
+    }
+
+    #[test]
+    fn http_status_error_successfully_sent_keeps_command_successful() {
+        let (channel, messages) = recording_channel();
+
+        send_http_status_error(429, &channel).unwrap();
+
+        assert_eq!(
+            *messages.lock().unwrap(),
+            vec![serde_json::json!({
+                "type": "error",
+                "code": "AI_RATE_LIMIT",
+                "message": "AI 请求频率或额度受限"
+            })]
+        );
+    }
+
+    async fn assert_redirect_is_not_followed(status: u16) {
+        let target = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        target.set_nonblocking(true).unwrap();
+        let target_url = format!("http://{}/private", target.local_addr().unwrap());
+
+        let redirect = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let redirect_url = format!(
+            "http://{}/v1/chat/completions",
+            redirect.local_addr().unwrap()
+        );
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = redirect.accept().unwrap();
+            let mut request = [0_u8; 1024];
+            let _ = socket.read(&mut request).unwrap();
+            write!(
+                socket,
+                "HTTP/1.1 {status} Redirect\r\nLocation: {target_url}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            )
+            .unwrap();
+        });
+
+        let response = build_ai_client()
+            .unwrap()
+            .post(redirect_url)
+            .send()
+            .await
+            .unwrap();
+        server.join().unwrap();
+
+        assert_eq!(response.status().as_u16(), status);
+        assert_eq!(
+            target.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock,
+            "{status} redirect target must not be visited"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn ai_client_does_not_follow_307_or_308_redirects() {
+        assert_redirect_is_not_followed(307).await;
+        assert_redirect_is_not_followed(308).await;
     }
 
     #[test]
