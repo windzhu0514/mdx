@@ -8,8 +8,10 @@ import {
     nextTick,
     onUnmounted,
     ref,
+    type PropType,
     type Ref,
 } from "vue";
+import type { AIProvider } from "@milkdown/crepe/feature/ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
     EditorCommand,
@@ -83,6 +85,10 @@ vi.mock("./MilkdownEditor.vue", () => ({
         props: {
             modelValue: { type: String, required: true },
             readonly: Boolean,
+            aiProvider: {
+                type: Function as PropType<AIProvider>,
+                default: undefined,
+            },
         },
         emits: ["update:modelValue", "ai-error"],
         setup(props, { emit, expose }) {
@@ -99,6 +105,7 @@ vi.mock("./MilkdownEditor.vue", () => ({
                     class: "milkdown-editor-stub",
                     "data-model-value": props.modelValue,
                     "data-readonly": String(props.readonly),
+                    "data-has-ai": String(Boolean(props.aiProvider)),
                 });
         },
     }),
@@ -139,7 +146,12 @@ type MountedEditor = {
     unmount: () => void;
 };
 
-function mountEditor(mode: EditorMode, sourcePreview: boolean): MountedEditor {
+function mountEditor(
+    mode: EditorMode,
+    sourcePreview: boolean,
+    readonly = false,
+    aiProvider?: AIProvider,
+): MountedEditor {
     const host = document.createElement("div");
     const handle = ref<MoraEditorHandle | null>(null);
     const modeValue = ref<EditorMode>(mode);
@@ -154,6 +166,8 @@ function mountEditor(mode: EditorMode, sourcePreview: boolean): MountedEditor {
                     displayValue: "# 显示标题",
                     mode: modeValue.value,
                     sourcePreview: previewValue.value,
+                    readonly,
+                    aiProvider,
                     "onUpdate:modelValue": (markdown: string) => updates.push(markdown),
                 });
         },
@@ -186,7 +200,8 @@ afterEach(() => {
 
 describe("MoraEditor", () => {
     it("renders one editable Milkdown editor in WYSIWYG mode", async () => {
-        const editor = mountEditor("wysiwyg", false);
+        const aiProvider = vi.fn() as unknown as AIProvider;
+        const editor = mountEditor("wysiwyg", false, false, aiProvider);
         cleanup = editor.unmount;
         await nextTick();
 
@@ -202,6 +217,29 @@ describe("MoraEditor", () => {
                 .querySelector(".milkdown-editor-stub")
                 ?.getAttribute("data-model-value"),
         ).toBe("# 显示标题");
+        expect(
+            editor.host
+                .querySelector(".milkdown-editor-stub")
+                ?.getAttribute("data-has-ai"),
+        ).toBe("true");
+    });
+
+    it("does not forward AI to readonly WYSIWYG", async () => {
+        const aiProvider = vi.fn() as unknown as AIProvider;
+        const editor = mountEditor("wysiwyg", false, true, aiProvider);
+        cleanup = editor.unmount;
+        await nextTick();
+
+        expect(
+            editor.host
+                .querySelector(".milkdown-editor-stub")
+                ?.getAttribute("data-readonly"),
+        ).toBe("true");
+        expect(
+            editor.host
+                .querySelector(".milkdown-editor-stub")
+                ?.getAttribute("data-has-ai"),
+        ).toBe("false");
     });
 
     it("renders only SourceEditor in source-only mode", async () => {
@@ -219,7 +257,8 @@ describe("MoraEditor", () => {
     });
 
     it("renders SourceEditor with one readonly Milkdown preview in split mode", async () => {
-        const editor = mountEditor("source", true);
+        const aiProvider = vi.fn() as unknown as AIProvider;
+        const editor = mountEditor("source", true, false, aiProvider);
         cleanup = editor.unmount;
         await nextTick();
 
@@ -235,6 +274,11 @@ describe("MoraEditor", () => {
                 .querySelector(".milkdown-editor-stub")
                 ?.getAttribute("data-model-value"),
         ).toBe("# 显示标题");
+        expect(
+            editor.host
+                .querySelector(".milkdown-editor-stub")
+                ?.getAttribute("data-has-ai"),
+        ).toBe("false");
     });
 
     it("forwards editing operations only to the currently editable child", async () => {

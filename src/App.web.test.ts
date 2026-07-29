@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
     editorUpdate: undefined as ((markdown: string) => void) | undefined,
     aiKeyConfigured: false,
     aiKeyStatusResponses: [] as Array<boolean | Promise<boolean>>,
+    getMoraEditorAiProvider: undefined as (() => unknown) | undefined,
     moraEditorMounted: vi.fn(),
     getCurrentWindow: vi.fn(() => ({
         onDragDropEvent: vi.fn(async () => () => undefined),
@@ -81,11 +82,13 @@ vi.mock("./components/editor/MoraEditor.vue", async () => {
                 modelValue: { type: String, required: true },
                 mode: { type: String, required: true },
                 sourcePreview: { type: Boolean, required: true },
+                aiProvider: { type: Function, default: undefined },
             },
             emits: ["update:modelValue", "ai-error"],
-            setup(_props, { emit, expose }) {
+            setup(props, { emit, expose }) {
                 mocks.moraEditorMounted();
                 mocks.editorUpdate = (markdown) => emit("update:modelValue", markdown);
+                mocks.getMoraEditorAiProvider = () => props.aiProvider;
                 expose({
                     execute: vi.fn(),
                     focus: vi.fn(),
@@ -115,6 +118,7 @@ function deferred<T>() {
 beforeEach(() => {
     mocks.closeHandler = undefined;
     mocks.editorUpdate = undefined;
+    mocks.getMoraEditorAiProvider = undefined;
     mocks.isTauri.mockReturnValue(false);
     mocks.aiKeyConfigured = false;
     mocks.aiKeyStatusResponses = [];
@@ -151,6 +155,7 @@ describe("App Web 预览启动", () => {
 
         expect(mocks.getCurrentWindow).not.toHaveBeenCalled();
         expect(mocks.invoke).not.toHaveBeenCalled();
+        expect(mocks.getMoraEditorAiProvider?.()).toBeUndefined();
     });
 
     it("编辑内容后仍不调用 Tauri 草稿 IPC", async () => {

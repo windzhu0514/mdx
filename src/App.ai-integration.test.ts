@@ -109,7 +109,9 @@ vi.mock("./components/editor/MilkdownEditor.vue", () => ({
         emits: ["update:modelValue", "ai-error"],
         setup(props, { emit, expose }) {
             const controls: MilkdownControls = {
-                aiProvider: props.aiProvider,
+                get aiProvider() {
+                    return props.aiProvider;
+                },
                 emitAiError: (message) => emit("ai-error", message),
                 uploadImage: props.uploadImage,
             };

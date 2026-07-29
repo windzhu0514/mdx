@@ -6,7 +6,7 @@
             :model-value="displayValue ?? modelValue"
             :readonly="readonly"
             :upload-image="uploadImage"
-            :ai-provider="aiProvider"
+            :ai-provider="readonly ? undefined : aiProvider"
             @update:model-value="emit('update:modelValue', $event)"
             @ai-error="emit('ai-error', $event)"
         />
