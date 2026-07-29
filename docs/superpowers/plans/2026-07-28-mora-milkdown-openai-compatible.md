@@ -473,7 +473,10 @@ Expected: PASS。
 - Modify: `src/App.vue:1580-1730`
 - Modify: `src/App.vue:1850-1920`
 - Modify: `src/App.web.test.ts`
+- Create: `src/App.editor-integration.test.ts`
 - Modify: `src/App.markdown-layout.test.ts`
+- Modify: `src/utils/text.ts`
+- Modify: `src/utils/text.test.ts`
 - Modify: `src/env.d.ts`
 - Modify: `package.json`
 - Modify: `package-lock.json`
@@ -506,6 +509,7 @@ Props/emits:
 ```ts
 const props = defineProps<{
     modelValue: string;
+    displayValue?: string;
     mode: EditorMode;
     sourcePreview: boolean;
     readonly?: boolean;
@@ -525,7 +529,7 @@ Template rules:
 <MilkdownEditor
     v-if="mode === 'wysiwyg'"
     ref="milkdownEditor"
-    :model-value="modelValue"
+    :model-value="displayValue ?? modelValue"
     :readonly="readonly"
     :upload-image="uploadImage"
     :ai-provider="aiProvider"
@@ -542,13 +546,14 @@ Template rules:
     />
     <MilkdownEditor
         v-if="sourcePreview"
-        :model-value="modelValue"
+        :model-value="displayValue ?? modelValue"
         readonly
     />
 </div>
 ```
 
-Forward the five `MoraEditorHandle` methods to the writable child only.
+Forward the six `MoraEditorHandle` methods to the writable child only; in split mode,
+`scrollToHeading()` also synchronizes the readonly preview.
 
 - [ ] **Step 3: 迁移 App 状态和模板**
 
@@ -567,6 +572,14 @@ with:
 const editorRef = ref<MoraEditorHandle | null>(null);
 const editorMode = ref<EditorMode>("wysiwyg");
 const sourcePreview = ref(true);
+const displayContent = computed(() => resourceSession.displayMarkdown(content.value));
+
+function handleEditorUpdate(markdown: string) {
+    const persistedContent = resourceSession.persistedMarkdown(markdown);
+    if (persistedContent === content.value) return;
+    content.value = persistedContent;
+    markDirty();
+}
 ```
 
 Use:
@@ -574,11 +587,12 @@ Use:
 ```vue
 <MoraEditor
     ref="editorRef"
-    v-model="content"
+    :model-value="content"
+    :display-value="displayContent"
     :mode="editorMode"
     :source-preview="sourcePreview"
     :upload-image="registerPastedImage"
-    @update:model-value="markDirty"
+    @update:model-value="handleEditorUpdate"
     @ai-error="handleAiError"
 />
 ```
@@ -586,6 +600,14 @@ Use:
 Delete `initializeEditor`、`setEditorMarkdown`、`syncContentFromEditor` and all
 `editorInstance` lifecycle code. `buildDraftSnapshot()` and `buildRequest()` read
 `content.value` directly.
+
+`applyNote()` and draft restore write persisted Markdown directly to `content.value`.
+CodeMirror always receives `modelValue`; editable and readonly Milkdown receive
+`displayValue`. Blob URL must never become App authoritative content.
+
+`exportPdf()` temporarily switches source-only or split mode to one editable WYSIWYG,
+awaits `nextTick()`, calls `window.print()`, and restores the previous mode in `finally`.
+This view-only transition must not mark the note dirty.
 
 Mode actions become:
 
@@ -665,13 +687,19 @@ Then delete all Toast module declarations from `src/env.d.ts`, leaving:
 
 - `App.web.test.ts` Mock `MoraEditor.vue`，通过 emitting
   `update:modelValue` 验证字数、脏状态和 Web 预览不调用 Tauri。
+- `App.editor-integration.test.ts` 保留真实 `App -> MoraEditor`，只 Mock 最底层
+  `MilkdownEditor` 和 `SourceEditor`，验证子更新规范化、字数/脏状态、外部同内容
+  回传不标脏，以及 Blob URL 只进入 Milkdown `displayValue`。
+- PDF 测试验证源码和垂直双栏打印时临时只挂载一个可编辑 Milkdown，随后恢复原视图。
+- `src/utils/text.ts` 提供 App、Source 与 Milkdown 共用的最小标题规范化函数，测试
+  `## **标题** ##`、链接和行内代码；不实现完整 Markdown 解析器。
 - `App.markdown-layout.test.ts` 不再匹配 Toast CSS；改为断言 App 只提供
   “所见即所得”“仅源码”“垂直双栏”，且不出现“仅预览”。
 
 Run:
 
 ```bash
-npm test -- src/components/editor/MoraEditor.test.ts src/App.web.test.ts src/App.markdown-layout.test.ts
+npm test -- src/App.editor-integration.test.ts src/components/editor/MoraEditor.test.ts src/App.web.test.ts src/App.markdown-layout.test.ts
 npm run build
 ```
 

@@ -29,6 +29,7 @@ import { TextSelection } from "@milkdown/kit/prose/state";
 import { getMarkdown, replaceAll, replaceRange } from "@milkdown/kit/utils";
 import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { EditorCommand, ImageUploadHandler, MoraEditorHandle } from "./editorTypes";
+import { normalizeMarkdownHeadingText } from "../../utils/text";
 
 const props = defineProps<{
     modelValue: string;
@@ -188,7 +189,8 @@ function scrollToHeading(text: string): boolean {
             if (
                 headingPosition === undefined &&
                 node.type.name === "heading" &&
-                node.textContent.trim() === text
+                normalizeMarkdownHeadingText(node.textContent) ===
+                    normalizeMarkdownHeadingText(text)
             ) {
                 headingPosition = position + 1;
             }

@@ -1,10 +1,12 @@
 import type { PendingResource, ResourceSaveData } from "../types/mdx";
 import { toDisplayMarkdown, toPersistedMarkdown } from "../utils/resourcePaths";
+import { ref } from "vue";
 
 export type ResourceSession = ReturnType<typeof createResourceSession>;
 
 export function createResourceSession() {
     const resources = new Map<string, PendingResource>();
+    const revision = ref(0);
 
     function register(resource: PendingResource) {
         const previous = resources.get(resource.path);
@@ -12,6 +14,7 @@ export function createResourceSession() {
             URL.revokeObjectURL(previous.objectUrl);
         }
         resources.set(resource.path, { ...resource });
+        revision.value += 1;
     }
 
     function registerLoaded(resource: PendingResource) {
@@ -29,6 +32,7 @@ export function createResourceSession() {
     }
 
     function displayMarkdown(markdown: string) {
+        void revision.value;
         return toDisplayMarkdown(markdown, objectUrls());
     }
 
@@ -60,6 +64,7 @@ export function createResourceSession() {
             URL.revokeObjectURL(resource.objectUrl);
         }
         resources.clear();
+        revision.value += 1;
     }
 
     return {

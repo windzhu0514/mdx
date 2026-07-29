@@ -2,7 +2,7 @@
     <MilkdownEditor
         v-if="mode === 'wysiwyg'"
         ref="milkdownEditor"
-        :model-value="modelValue"
+        :model-value="displayValue ?? modelValue"
         :readonly="readonly"
         :upload-image="uploadImage"
         :ai-provider="aiProvider"
@@ -19,7 +19,7 @@
         <MilkdownEditor
             v-if="sourcePreview"
             ref="previewEditor"
-            :model-value="modelValue"
+            :model-value="displayValue ?? modelValue"
             readonly
         />
     </div>
@@ -39,6 +39,7 @@ import SourceEditor from "./SourceEditor.vue";
 
 const props = defineProps<{
     modelValue: string;
+    displayValue?: string;
     mode: EditorMode;
     sourcePreview: boolean;
     readonly?: boolean;

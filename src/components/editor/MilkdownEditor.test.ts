@@ -295,7 +295,7 @@ describe("MilkdownEditor", () => {
             visit(
                 {
                     type: { name: "heading" },
-                    textContent: "目标标题",
+                    textContent: "**目标标题** ##",
                 },
                 4,
             );

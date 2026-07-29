@@ -64,8 +64,10 @@ App.vue
 编辑器组件只处理正文编辑、选择区和编辑命令，不管理标题、文件路径、元数据、
 资源持久化、草稿或保存流程。
 
-`App.vue` 继续持有 Markdown 字符串，并通过 `v-model` 与 `MoraEditor.vue`
-同步。该字符串是保存到 `content.md` 的唯一正文状态，不持久化
+`App.vue` 继续持有 Markdown 字符串。`content` 始终是使用 `assets/...`、
+`attachments/...` 相对路径的规范持久态，也是保存到 `content.md` 的唯一正文状态。
+`displayContent` 仅由 `resourceSession.displayMarkdown(content)` 计算，用于向
+Milkdown 投影 Blob URL；CodeMirror 始终接收规范持久态。应用不持久化 Blob URL、
 ProseMirror JSON、Milkdown 内部状态或 CodeMirror EditorState。
 
 ## 5. 编辑视图
@@ -97,19 +99,22 @@ ProseMirror JSON、Milkdown 内部状态或 CodeMirror EditorState。
 数据流如下：
 
 ```text
-Milkdown 或 CodeMirror
-        ↓ 内容变化
-App.vue 中的 Markdown
-        ├─ 保存为 content.md
-        └─ 同步给分屏只读 Milkdown
+Milkdown 内容变化 ── persistedMarkdown() ──┐
+CodeMirror 内容变化 ────────────────────────┤
+                                            ↓
+App.vue 中的规范 Markdown（content）
+        ├─ 保存为 content.md / 草稿
+        ├─ 原样传给 CodeMirror
+        └─ displayMarkdown() → 可编辑或只读 Milkdown
 ```
 
 规则：
 
-1. 打开或新建笔记时，将正文写入 `v-model`。
-2. 当前可写编辑器持续更新 `v-model` 和现有脏状态。
-3. 保存和草稿快照直接读取 `v-model`，不再调用第三方 `getMarkdown()`。
-4. 子组件收到外部正文时先比较新旧字符串，避免更新循环。
+1. 打开、新建或恢复草稿时，将规范相对路径正文直接写入 `content`。
+2. `MoraEditor` 的更新事件先经过 `resourceSession.persistedMarkdown()`；只有规范化
+   结果与当前 `content` 不同时才写入并标脏。
+3. 保存和草稿快照直接读取规范 `content`，不再调用第三方 `getMarkdown()`。
+4. 子组件收到外部正文时先比较新旧字符串；相同内容的回传不得误标脏。
 5. 使用 `v-if` 只挂载当前需要的编辑器实例。
 6. 切换编辑器后，目标实例以最新 Markdown 初始化。
 7. 不在 Milkdown 与 CodeMirror 之间转换撤销历史；切换模式形成新的撤销边界。
@@ -127,7 +132,8 @@ Milkdown 和 CodeMirror 类型。
 
 正文和模式通过 props/emits 传递：
 
-- `v-model`：Markdown 正文。
+- `modelValue`：使用包内相对路径的规范 Markdown 正文。
+- `displayValue?`：只供 Milkdown 使用的显示投影；未提供时回退到 `modelValue`。
 - `mode`：`"wysiwyg" | "source"`。
 - `sourcePreview`：源码模式是否显示右侧预览。
 - `readonly`：文件级只读状态。
@@ -141,13 +147,14 @@ type MoraEditorHandle = {
     replaceSelection(text: string): void;
     moveCursor(position: "start" | "end"): void;
     execute(command: EditorCommand): void;
+    scrollToHeading(text: string): boolean;
 };
 ```
 
 其中：
 
 - `undo`、`redo`、`selectAll` 和格式操作统一走 `execute()`。
-- 不暴露 `getMarkdown()`、`setMarkdown()`，正文统一走 `v-model`。
+- 不暴露 `getMarkdown()`、`setMarkdown()`，正文统一走 props/emits。
 - `EditorCommand` 只列出现有菜单实际使用的命令，不为未来命令创建注册机制。
 - `MoraEditor.vue` 根据当前模式将命令交给 Milkdown 或 CodeMirror 的官方 API。
 
@@ -156,13 +163,15 @@ type MoraEditorHandle = {
 现有 `resourceSession` 保留，不新增资源适配层：
 
 ```text
-content.md 中的 assets/... 或 attachments/...
-        ↓ 打开
-resourceSession 转为 Blob URL
-        ↓
-Milkdown / CodeMirror 显示
-        ↓ 保存
-resourceSession 恢复包内相对路径
+content / content.md：assets/... 或 attachments/...
+        ├─ 原样传给 CodeMirror、保存和草稿
+        └─ resourceSession.displayMarkdown()
+                  ↓
+          Blob URL 仅进入 Milkdown displayValue
+                  ↓ 编辑事件
+          resourceSession.persistedMarkdown()
+                  ↓
+          与 content 比较后更新
 ```
 
 要求：
@@ -172,6 +181,15 @@ resourceSession 恢复包内相对路径
 - 不查询或修改 Milkdown 内部 DOM。
 - 不拦截原生事件制造编辑器补丁。
 - 保存、另存为、草稿恢复和重新打开后，资源引用必须继续有效。
+- Blob URL 不得进入 App 权威正文、CodeMirror、草稿或保存请求。
+
+### 8.1 PDF 与目录辅助行为
+
+- 从源码或垂直双栏导出 PDF 时，临时切换为单一可编辑 WYSIWYG，等待 Vue
+  完成渲染后调用系统打印，再恢复原模式；不建立独立 Markdown Renderer，且该切换
+  不改变正文或脏状态。
+- App、CodeMirror 与 Milkdown 的目录定位共用一个最小标题文本规范化函数，处理
+  尾部闭合 `#`、链接、行内代码和常见强调标记；它不是完整 Markdown 解析器。
 
 ## 9. 第一阶段 AI 功能
 

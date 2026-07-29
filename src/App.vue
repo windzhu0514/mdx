@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open, save } from "@tauri-apps/plugin-dialog";
@@ -40,7 +40,10 @@ import { runLeaveDecision, type LeaveDecision } from "./utils/leaveGuard";
 import { base64ToBlob } from "./utils/base64";
 import { createEmptyMetadata } from "./utils/note";
 import { isTextInputTarget } from "./utils/shortcuts";
-import { countNonWhitespaceCharacters } from "./utils/text";
+import {
+    countNonWhitespaceCharacters,
+    normalizeMarkdownHeadingText,
+} from "./utils/text";
 
 type MdxSaveRequest = {
     path: string | null;
@@ -170,6 +173,7 @@ async function registerPastedImage(file: File): Promise<string> {
 }
 
 const wordCount = computed(() => countNonWhitespaceCharacters(content.value));
+const displayContent = computed(() => resourceSession.displayMarkdown(content.value));
 const findMatchCount = computed(() => countOccurrences(content.value, findQuery.value));
 const windowTitle = computed(
     () => `${dirty.value ? "* " : ""}${title.value || "无标题笔记"} - ${APP_NAME}`,
@@ -185,9 +189,11 @@ const toc = computed(() => {
     const regex = /^(#{1,6})\s+(.+)$/gm;
     let match;
     while ((match = regex.exec(content.value)) !== null) {
+        const text = normalizeMarkdownHeadingText(match[2]);
+        if (!text) continue;
         headings.push({
             level: match[1].length,
-            text: match[2].trim(),
+            text,
             id: match.index,
         });
     }
@@ -481,7 +487,7 @@ async function restoreDraft(snapshot: DraftSnapshot) {
         });
     }
 
-    content.value = resourceSession.displayMarkdown(snapshot.content);
+    content.value = resourceSession.persistedMarkdown(snapshot.content);
     dirty.value = true;
     statusMessage.value = "已恢复未保存草稿";
 }
@@ -573,6 +579,14 @@ function markDirty() {
     if (tauriRuntime) draftRecovery.schedule();
 }
 
+function handleEditorUpdate(markdown: string) {
+    const persistedContent = resourceSession.persistedMarkdown(markdown);
+    if (persistedContent === content.value) return;
+
+    content.value = persistedContent;
+    markDirty();
+}
+
 function handleAiError(message: string) {
     errorMessage.value = `AI 操作失败：${message}`;
     statusMessage.value = "AI 操作失败";
@@ -625,7 +639,7 @@ async function applyNote(note: MdxNote, saved: boolean) {
         }
     }
 
-    content.value = resourceSession.displayMarkdown(persistedContent);
+    content.value = persistedContent;
     dirty.value = !saved;
     errorMessage.value = "";
 }
@@ -937,8 +951,18 @@ async function exportMarkdown() {
 
 async function exportPdf() {
     if (!(await ensureSavedForExport())) return;
-    statusMessage.value = "已打开系统打印对话框，可选择另存为 PDF";
-    window.print();
+    const previousMode = editorMode.value;
+    const previousSourcePreview = sourcePreview.value;
+    try {
+        editorMode.value = "wysiwyg";
+        await nextTick();
+        statusMessage.value = "已打开系统打印对话框，可选择另存为 PDF";
+        window.print();
+    } finally {
+        editorMode.value = previousMode;
+        sourcePreview.value = previousSourcePreview;
+        await nextTick();
+    }
 }
 
 async function saveNote() {
@@ -1678,11 +1702,12 @@ function stringifyError(error: unknown) {
                     <div class="markdown-editor">
                         <MoraEditor
                             ref="editorRef"
-                            v-model="content"
+                            :model-value="content"
+                            :display-value="displayContent"
                             :mode="editorMode"
                             :source-preview="sourcePreview"
                             :upload-image="registerPastedImage"
-                            @update:model-value="markDirty"
+                            @update:model-value="handleEditorUpdate"
                             @ai-error="handleAiError"
                         />
                     </div>

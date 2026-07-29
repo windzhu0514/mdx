@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { computed } from "vue";
 
 import type { PendingResource } from "../types/mdx";
 import { createResourceSession } from "./useResources";
@@ -58,5 +59,18 @@ describe("resource session", () => {
 
         expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:a");
         expect(session.objectUrls().get("assets/a.png")).toBe("blob:b");
+    });
+
+    it("invalidates a computed display projection when only the URL mapping changes", () => {
+        const session = createResourceSession();
+        const display = computed(() =>
+            session.displayMarkdown("![图](assets/a.png)"),
+        );
+        session.registerLoaded({ ...newImage, isNew: false });
+        expect(display.value).toBe("![图](blob:a)");
+
+        session.registerLoaded({ ...newImage, objectUrl: "blob:b", isNew: false });
+
+        expect(display.value).toBe("![图](blob:b)");
     });
 });

@@ -10,6 +10,7 @@ import { basicSetup, EditorView } from "codemirror";
 import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { EditorCommand, MoraEditorHandle } from "./editorTypes";
 import { transformSourceSelection } from "./sourceTransforms";
+import { normalizeMarkdownHeadingText } from "../../utils/text";
 
 const props = defineProps<{ modelValue: string; readonly?: boolean }>();
 const emit = defineEmits<{ "update:modelValue": [markdown: string] }>();
@@ -101,7 +102,13 @@ function scrollToHeading(text: string): boolean {
     for (let lineNumber = 1; lineNumber <= doc.lines; lineNumber += 1) {
         const line = doc.line(lineNumber);
         const match = /^(#{1,6})\s+(.+)$/.exec(line.text);
-        if (match?.[2].trim() !== text) continue;
+        if (
+            !match ||
+            normalizeMarkdownHeadingText(match[2]) !==
+                normalizeMarkdownHeadingText(text)
+        ) {
+            continue;
+        }
 
         editorView.dispatch({
             selection: { anchor: line.from },
