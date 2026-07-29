@@ -825,6 +825,8 @@ pub fn run() {
             ai::save_ai_api_key,
             ai::delete_ai_api_key,
             ai::has_ai_api_key,
+            ai::stream_ai,
+            ai::cancel_ai,
             create_mdx,
             open_mdx,
             save_mdx,
