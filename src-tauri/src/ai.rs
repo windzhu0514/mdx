@@ -53,6 +53,18 @@ pub(crate) fn delete_ai_api_key() -> Result<(), String> {
     credential_delete_result(ai_key_entry()?.delete_credential())
 }
 
+fn is_parser_normalized_http_loopback(host: Host<&str>) -> bool {
+    // `url` applies standard URL host canonicalization before producing `Host`.
+    // Compare that typed result exactly: equivalent loopback spellings are safe,
+    // while trailing-dot domains, subdomains, and mapped/non-loopback IPs stay rejected.
+    matches!(
+        host,
+        Host::Domain("localhost")
+            | Host::Ipv4(Ipv4Addr::LOCALHOST)
+            | Host::Ipv6(Ipv6Addr::LOCALHOST)
+    )
+}
+
 pub fn validate_base_url(value: &str) -> Result<Url, String> {
     let value = value.trim();
     if value.is_empty() {
@@ -60,19 +72,16 @@ pub fn validate_base_url(value: &str) -> Result<Url, String> {
     }
 
     let mut url = Url::parse(value).map_err(|_| "AI Base URL 格式无效".to_string())?;
+    if !url.username().is_empty() || url.password().is_some_and(|password| !password.is_empty()) {
+        return Err("AI Base URL 不允许包含用户名或密码".to_string());
+    }
     let host = url
         .host()
         .ok_or_else(|| "AI Base URL 必须包含主机".to_string())?;
 
     match url.scheme() {
         "https" => {}
-        "http"
-            if matches!(
-                host,
-                Host::Domain("localhost")
-                    | Host::Ipv4(Ipv4Addr::LOCALHOST)
-                    | Host::Ipv6(Ipv6Addr::LOCALHOST)
-            ) => {}
+        "http" if is_parser_normalized_http_loopback(host) => {}
         "http" => return Err("远程 AI Base URL 必须使用 HTTPS".to_string()),
         _ => return Err("AI Base URL 仅支持 HTTP 或 HTTPS".to_string()),
     }
@@ -91,9 +100,70 @@ mod tests {
     #[test]
     fn accepts_https_and_local_http() {
         assert!(validate_base_url("https://api.openai.com/v1").is_ok());
-        assert!(validate_base_url("http://localhost:11434/v1").is_ok());
+        assert_eq!(
+            validate_base_url("http://LOCALHOST:11434/v1")
+                .unwrap()
+                .as_str(),
+            "http://localhost:11434/v1/chat/completions"
+        );
         assert!(validate_base_url("http://127.0.0.1:1234/v1").is_ok());
         assert!(validate_base_url("http://[::1]:1234/v1").is_ok());
+    }
+
+    #[test]
+    fn accepts_parser_normalized_ipv4_loopback_spellings() {
+        for value in [
+            "http://127.1/v1",
+            "http://2130706433/v1",
+            "http://0x7f000001/v1",
+            "http://0177.0.0.1/v1",
+        ] {
+            assert_eq!(
+                validate_base_url(value).unwrap().host_str(),
+                Some("127.0.0.1"),
+                "{value}"
+            );
+        }
+    }
+
+    #[test]
+    fn accepts_expanded_ipv6_loopback() {
+        let url = validate_base_url("http://[0:0:0:0:0:0:0:1]:11434/v1").unwrap();
+
+        assert_eq!(url.host_str(), Some("[::1]"));
+    }
+
+    #[test]
+    fn rejects_deceptive_or_non_loopback_http_hosts() {
+        for value in [
+            "http://localhost./v1",
+            "http://evil.localhost/v1",
+            "http://127.0.0.2/v1",
+            "http://[::2]/v1",
+            "http://[::ffff:127.0.0.1]/v1",
+        ] {
+            assert_eq!(
+                validate_base_url(value),
+                Err("远程 AI Base URL 必须使用 HTTPS".to_string()),
+                "{value}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_non_empty_userinfo_for_every_supported_scheme_without_leaking_it() {
+        for value in [
+            "https://alice@api.openai.com/v1",
+            "https://alice:secret-value@api.openai.com/v1",
+            "https://:secret-value@api.openai.com/v1",
+            "http://alice:secret-value@localhost:11434/v1",
+        ] {
+            let error = validate_base_url(value).unwrap_err();
+
+            assert_eq!(error, "AI Base URL 不允许包含用户名或密码", "{value}");
+            assert!(!error.contains("alice"));
+            assert!(!error.contains("secret-value"));
+        }
     }
 
     #[test]
@@ -112,6 +182,19 @@ mod tests {
         assert_eq!(url.as_str(), "https://api.openai.com/v1/chat/completions");
         assert_eq!(url.query(), None);
         assert_eq!(url.fragment(), None);
+
+        assert_eq!(
+            validate_base_url("https://api.openai.com")
+                .unwrap()
+                .as_str(),
+            "https://api.openai.com/chat/completions"
+        );
+        assert_eq!(
+            validate_base_url("https://api.openai.com/custom/path///?q=1#section")
+                .unwrap()
+                .as_str(),
+            "https://api.openai.com/custom/path/chat/completions"
+        );
     }
 
     #[test]
