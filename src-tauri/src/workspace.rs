@@ -117,12 +117,12 @@ fn scan_directory(
     remaining: &mut usize,
     truncated: &mut bool,
 ) -> Result<Vec<WorkspaceTreeEntry>, String> {
+    let (directories, files) = candidates_in(directory)?;
     if *remaining == 0 {
-        *truncated = true;
+        *truncated |= !directories.is_empty() || !files.is_empty();
         return Ok(Vec::new());
     }
 
-    let (directories, files) = candidates_in(directory)?;
     let mut entries = Vec::new();
 
     for candidate in directories {

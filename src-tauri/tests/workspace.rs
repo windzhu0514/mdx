@@ -96,6 +96,25 @@ fn scan_sorts_numeric_names_and_stops_at_the_entry_limit() {
     fs::remove_dir_all(root).unwrap();
 }
 
+#[test]
+fn scan_limit_zero_does_not_truncate_empty_or_ignored_directories() {
+    let empty_root = test_dir();
+    let empty = scan_folder(&empty_root, 0).unwrap();
+    assert!(empty.entries.is_empty());
+    assert_eq!(empty.entry_count, 0);
+    assert!(!empty.truncated);
+    fs::remove_dir_all(empty_root).unwrap();
+
+    let ignored_root = test_dir();
+    fs::create_dir(ignored_root.join(".hidden")).unwrap();
+    write(&ignored_root.join("ignored.txt"), "x");
+    let ignored = scan_folder(&ignored_root, 0).unwrap();
+    assert!(ignored.entries.is_empty());
+    assert_eq!(ignored.entry_count, 0);
+    assert!(!ignored.truncated);
+    fs::remove_dir_all(ignored_root).unwrap();
+}
+
 #[cfg(windows)]
 #[test]
 fn scan_does_not_probe_directories_after_the_entry_budget_is_exhausted() {
