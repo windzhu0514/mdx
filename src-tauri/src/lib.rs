@@ -9,6 +9,7 @@ mod path_identity;
 mod recent_files;
 mod resource_import;
 pub mod workspace;
+mod workspace_session;
 
 use ai::AiRequestState;
 use archive_security::validate_archive;
@@ -16,7 +17,8 @@ pub use archive_security::{
     parse_supported_format_version, validate_archive_entry_name, validate_new_resource_name,
 };
 pub use draft_store::{
-    delete_draft_file, read_latest_draft_file, validate_draft_key, write_draft_file,
+    delete_draft_file, read_draft_file, read_latest_draft_file, validate_draft_key,
+    write_draft_file,
 };
 pub use export::export_markdown_file;
 pub use history::{
@@ -36,6 +38,9 @@ pub use resource_import::{
 };
 pub use workspace::{
     disk_revision, scan_folder, DiskRevision, DiskRevisionResult, FolderScan, WorkspaceTreeEntry,
+};
+pub use workspace_session::{
+    read_workspace_session_file, write_workspace_session_file, WorkspaceSessionRead,
 };
 
 use chrono::Local;
@@ -435,10 +440,31 @@ fn write_draft(app: AppHandle, key: String, draft: serde_json::Value) -> Result<
 }
 
 #[tauri::command]
+fn read_draft(app: AppHandle, key: String) -> Result<Option<serde_json::Value>, String> {
+    read_draft_file(&drafts_directory(&app)?, &key)
+}
+#[tauri::command]
 fn read_latest_draft(app: AppHandle) -> Result<Option<serde_json::Value>, String> {
     read_latest_draft_file(&drafts_directory(&app)?)
 }
 
+fn workspace_session_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(app
+        .path()
+        .app_data_dir()
+        .map_err(|err| err.to_string())?
+        .join("workspace-session.json"))
+}
+
+#[tauri::command]
+fn read_workspace_session(app: AppHandle) -> Result<WorkspaceSessionRead, String> {
+    read_workspace_session_file(&workspace_session_path(&app)?)
+}
+
+#[tauri::command]
+fn write_workspace_session(app: AppHandle, session: serde_json::Value) -> Result<(), String> {
+    write_workspace_session_file(&workspace_session_path(&app)?, &session)
+}
 #[tauri::command]
 fn delete_draft(app: AppHandle, key: String) -> Result<(), String> {
     delete_draft_file(&drafts_directory(&app)?, &key)
@@ -844,7 +870,10 @@ pub fn run() {
             list_history,
             read_history,
             write_draft,
+            read_draft,
             read_latest_draft,
+            read_workspace_session,
+            write_workspace_session,
             delete_draft,
             get_recent_files,
             push_recent_file,

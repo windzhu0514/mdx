@@ -130,12 +130,12 @@ const tauriRuntime = isTauri();
 const draftStore: DraftStore = tauriRuntime
     ? {
           write: (key, draft) => invoke("write_draft", { key, draft }),
-          readLatest: () => invoke<DraftSnapshot | null>("read_latest_draft"),
+          read: (key) => invoke<DraftSnapshot | null>("read_draft", { key }),
           remove: (key) => invoke("delete_draft", { key }),
       }
     : {
           write: async () => undefined,
-          readLatest: async () => null,
+          read: async () => null,
           remove: async () => undefined,
       };
 const draftRecovery = createDraftRecovery(
@@ -496,7 +496,9 @@ async function restoreDraft(snapshot: DraftSnapshot) {
 
 async function restoreLatestDraft() {
     try {
-        const latest = await draftRecovery.readLatest();
+        const latest = tauriRuntime
+            ? await invoke<DraftSnapshot | null>("read_latest_draft")
+            : null;
         if (!latest) return false;
         const key = draftKey(latest.path, latest.meta?.id || "unsaved");
         if (!shouldOfferDraftRestore(latest.updatedAt, latest.meta?.updatedAt)) {

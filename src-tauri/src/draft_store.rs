@@ -39,6 +39,16 @@ pub fn write_draft_file(directory: &Path, key: &str, draft: &Value) -> Result<()
     fs::rename(&temporary, &target).map_err(|err| err.to_string())
 }
 
+pub fn read_draft_file(directory: &Path, key: &str) -> Result<Option<Value>, String> {
+    let path = draft_path(directory, key)?;
+    match fs::read(path) {
+        Ok(bytes) => serde_json::from_slice(&bytes)
+            .map(Some)
+            .map_err(|error| error.to_string()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.to_string()),
+    }
+}
 fn draft_updated_at(value: &Value) -> Option<DateTime<FixedOffset>> {
     value
         .get("updatedAt")?

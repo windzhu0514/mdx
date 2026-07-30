@@ -43,3 +43,26 @@ export type WorkspaceFolder = FolderScan & {
     unavailable: boolean;
     error: string | null;
 };
+
+export type WorkspaceSessionDocument = {
+    id: string;
+    path: string | null;
+    sourceKind: "mdx" | "markdown-import" | "untitled";
+    importSourcePath: string | null;
+    draftKey: string;
+};
+
+export type WorkspaceSessionSnapshot = {
+    version: 1;
+    documents: WorkspaceSessionDocument[];
+    folderPaths: string[];
+    expandedPaths: string[];
+    activeDocumentId: string | null;
+    sidebarCollapsed: boolean;
+    sidebarWidth: number;
+};
+
+export type WorkspaceSessionRead = {
+    session: WorkspaceSessionSnapshot | null;
+    warning: string | null;
+};

@@ -11,7 +11,7 @@ export type DraftSnapshot = {
 
 export type DraftStore = {
     write: (key: string, draft: DraftSnapshot) => Promise<void>;
-    readLatest: () => Promise<DraftSnapshot | null>;
+    read: (key: string) => Promise<DraftSnapshot | null>;
     remove: (key: string) => Promise<void>;
 };
 
@@ -82,7 +82,7 @@ export function createDraftRecovery(
     return {
         schedule,
         flush,
-        readLatest: store.readLatest,
+        read: (key: string) => store.read(key),
         remove,
         dispose,
     };

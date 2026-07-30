@@ -41,7 +41,7 @@ describe("draft recovery", () => {
         vi.useFakeTimers();
         const store: DraftStore = {
             write: vi.fn().mockResolvedValue(undefined),
-            readLatest: vi.fn().mockResolvedValue(null),
+            read: vi.fn().mockResolvedValue(snapshot),
             remove: vi.fn().mockResolvedValue(undefined),
         };
         const recovery = createDraftRecovery(
@@ -58,5 +58,17 @@ describe("draft recovery", () => {
         await vi.advanceTimersByTimeAsync(1);
         expect(store.write).toHaveBeenCalledTimes(1);
         expect(store.write).toHaveBeenCalledWith("draft-key", snapshot);
+    });
+    it("reads the draft for the supplied key", async () => {
+        const store = {
+            write: vi.fn().mockResolvedValue(undefined),
+            readLatest: vi.fn().mockResolvedValue(null),
+            read: vi.fn().mockResolvedValue(snapshot),
+            remove: vi.fn().mockResolvedValue(undefined),
+        };
+        const recovery = createDraftRecovery(store, () => "draft-key", () => snapshot);
+
+        await expect(recovery.read("note-a")).resolves.toEqual(snapshot);
+        expect(store.read).toHaveBeenCalledWith("note-a");
     });
 });

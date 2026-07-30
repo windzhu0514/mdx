@@ -25,5 +25,6 @@ eventsource-stream = "0.2.3"
 futures-util = "0.3.33"
 keyring = "4.1.5"
 reqwest = { version = "0.13.4", features = ["json", "stream"] }
+tempfile = "3"
 tokio = { version = "1.53.1", features = ["macros", "sync"] }
 url = "2.5.8"
