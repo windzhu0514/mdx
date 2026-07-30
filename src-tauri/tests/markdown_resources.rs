@@ -66,12 +66,36 @@ fn deduplicates_sources_and_uses_numeric_collision_suffixes() {
 fn keeps_explicit_uri_schemes_and_unreadable_references_unchanged() {
     let root = fixture();
     fs::create_dir(root.join("folder")).unwrap();
-    let markdown = "[mail](mailto:test@example.com) [anchor](#heading) <a href=\"custom:thing\">x</a> [dir](folder/)";
+    let markdown = "[mail](mailto:test@example.com) [data](data:text/plain,ok) [file](file:///tmp/note.txt) [anchor](#heading) <a href=\"custom:thing\">x</a> [dir](folder/)";
 
     let plan = prepare_markdown_resources(&root.join("note.md"), markdown).unwrap();
 
     assert_eq!(plan.rewritten_content, markdown);
     assert!(plan.items.iter().any(|item| item.status == "unreadable"));
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn treats_windows_drive_paths_as_local_references() {
+    let root = fixture();
+    let image = root.join("drive-image.png");
+    write(&image, b"png");
+    let backslash = image.to_string_lossy();
+    let forward_slash = backslash.replace('\\', "/");
+    let markdown = format!(
+        "![back]({backslash}) ![forward]({forward_slash}) ![relative](C:drive-relative.png)"
+    );
+
+    let plan = prepare_markdown_resources(&root.join("note.md"), &markdown).unwrap();
+
+    assert_eq!(plan.resources.len(), 1);
+    assert_eq!(plan.resources[0].name, "assets/drive-image.png");
+    assert!(plan.rewritten_content.contains("assets/drive-image.png"));
+    assert!(plan
+        .items
+        .iter()
+        .any(|item| item.original_reference == "C:drive-relative.png" && item.status == "missing"));
 
     fs::remove_dir_all(root).unwrap();
 }

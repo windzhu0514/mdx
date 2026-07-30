@@ -137,14 +137,19 @@ fn push_reference(references: &mut Vec<Reference>, matched: regex::Match<'_>) {
 }
 
 fn is_external_reference(reference: &str) -> bool {
-    reference.starts_with('#')
-        || reference.find(':').is_some_and(|index| {
-            index > 0
-                && reference.as_bytes()[0].is_ascii_alphabetic()
-                && reference[..index]
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'-' | b'.'))
-        })
+    !is_windows_drive_reference(reference)
+        && (reference.starts_with('#')
+            || reference.find(':').is_some_and(|index| {
+                index > 0
+                    && reference.as_bytes()[0].is_ascii_alphabetic()
+                    && reference[..index].bytes().all(|byte| {
+                        byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'-' | b'.')
+                    })
+            }))
+}
+
+fn is_windows_drive_reference(reference: &str) -> bool {
+    matches!(reference.as_bytes(), [drive, b':', ..] if drive.is_ascii_alphabetic())
 }
 
 fn resolve_local_path(source_directory: &Path, reference: &str) -> PathBuf {
