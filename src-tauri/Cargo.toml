@@ -28,3 +28,4 @@ reqwest = { version = "0.13.4", features = ["json", "stream"] }
 tempfile = "3"
 tokio = { version = "1.53.1", features = ["macros", "sync"] }
 url = "2.5.8"
+regex = "1"

@@ -2321,6 +2321,7 @@ dependencies = [
  "eventsource-stream",
  "futures-util",
  "keyring",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",

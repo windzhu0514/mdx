@@ -66,3 +66,26 @@ export type WorkspaceSessionRead = {
     session: WorkspaceSessionSnapshot | null;
     warning: string | null;
 };
+
+export type ResourceSaveData = {
+    name: string;
+    originalName: string;
+    mimeType: string;
+    size: number;
+    kind: "asset" | "attachment";
+    base64: string;
+};
+
+export type MarkdownResourceItem = {
+    originalReference: string;
+    resolvedPath: string | null;
+    status: "ready" | "missing" | "unreadable" | "oversized";
+    targetPath: string | null;
+    message: string | null;
+};
+
+export type MarkdownResourcePlan = {
+    rewrittenContent: string;
+    resources: ResourceSaveData[];
+    items: MarkdownResourceItem[];
+};

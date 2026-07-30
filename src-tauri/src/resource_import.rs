@@ -4,7 +4,8 @@ use std::fs;
 use std::path::Path;
 use uuid::Uuid;
 
-const MAX_IMPORTED_RESOURCE_BYTES: u64 = 512 * 1024 * 1024;
+pub const MAX_IMPORTED_RESOURCE_BYTES: u64 = 512 * 1024 * 1024;
+pub const MAX_TOTAL_IMPORTED_RESOURCE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -55,6 +56,25 @@ fn safe_extension(file_name: &str) -> String {
         })
         .map(|value| value.to_ascii_lowercase())
         .unwrap_or_else(|| "bin".to_string())
+}
+
+pub fn safe_resource_file_name(file_name: &str) -> String {
+    let stem = Path::new(file_name)
+        .file_stem()
+        .map(|value| value.to_string_lossy())
+        .unwrap_or_default()
+        .chars()
+        .map(|character| {
+            if character.is_alphanumeric() || matches!(character, '-' | '_') {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    let stem = stem.trim_matches('-');
+    let stem = if stem.is_empty() { "file" } else { stem };
+    format!("{stem}.{}", safe_extension(file_name))
 }
 
 pub fn resource_path_for(file_name: &str, is_image: bool) -> String {

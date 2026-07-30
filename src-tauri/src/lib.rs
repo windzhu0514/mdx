@@ -4,6 +4,7 @@ mod draft_store;
 mod export;
 mod history;
 pub mod markdown_import;
+pub mod markdown_resources;
 mod note_index;
 mod path_identity;
 mod recent_files;
@@ -25,6 +26,9 @@ pub use history::{
     list_history_file, new_history_entry, read_history_file, trim_history_entries,
     HistoryArchiveEntry, HistoryListItem, HistorySnapshot,
 };
+pub use markdown_resources::{
+    prepare_markdown_resources, MarkdownResourceItem, MarkdownResourcePlan,
+};
 pub use note_index::{
     list_index_entries, search_index_entries, upsert_index_entry, NoteIndexEntry, NoteSearchResult,
 };
@@ -35,6 +39,7 @@ pub use recent_files::{
 };
 pub use resource_import::{
     import_resource_file, infer_mime_type, resource_path_for, ImportedResource,
+    MAX_IMPORTED_RESOURCE_BYTES, MAX_TOTAL_IMPORTED_RESOURCE_BYTES,
 };
 pub use workspace::{
     disk_revision, scan_folder, DiskRevision, DiskRevisionResult, FolderScan, WorkspaceTreeEntry,
@@ -359,6 +364,14 @@ fn export_markdown(source_path: String, destination_path: String) -> Result<(), 
 #[tauri::command]
 fn import_resource(path: String) -> Result<ImportedResource, String> {
     import_resource_file(Path::new(&path))
+}
+
+#[tauri::command(rename = "prepare_markdown_resources")]
+fn prepare_markdown_resources_command(
+    source_path: String,
+    markdown: String,
+) -> Result<MarkdownResourcePlan, String> {
+    markdown_resources::prepare_markdown_resources(Path::new(&source_path), &markdown)
 }
 
 #[tauri::command]
@@ -864,6 +877,7 @@ pub fn run() {
             import_markdown,
             export_markdown,
             import_resource,
+            prepare_markdown_resources_command,
             read_asset,
             list_notes,
             search_notes,
