@@ -96,6 +96,65 @@ fn scan_sorts_numeric_names_and_stops_at_the_entry_limit() {
     fs::remove_dir_all(root).unwrap();
 }
 
+#[cfg(windows)]
+#[test]
+fn scan_does_not_probe_directories_after_the_entry_budget_is_exhausted() {
+    let zero_root = test_dir();
+    let zero_blocked = zero_root.join("blocked");
+    fs::create_dir(&zero_blocked).unwrap();
+    write(&zero_blocked.join("note.md"), "x");
+    deny_directory_listing(&zero_blocked);
+
+    let zero_result = scan_folder(&zero_root, 0);
+    allow_directory_listing(&zero_blocked);
+    let zero_result = zero_result.unwrap();
+    assert!(zero_result.entries.is_empty());
+    assert_eq!(zero_result.entry_count, 0);
+    assert!(zero_result.truncated);
+    fs::remove_dir_all(zero_root).unwrap();
+
+    let limited_root = test_dir();
+    let visible = limited_root.join("01-visible");
+    let blocked = limited_root.join("02-blocked");
+    fs::create_dir(&visible).unwrap();
+    fs::create_dir(&blocked).unwrap();
+    write(&visible.join("note.md"), "x");
+    write(&blocked.join("note.md"), "x");
+    deny_directory_listing(&blocked);
+
+    let limited_result = scan_folder(&limited_root, 1);
+    allow_directory_listing(&blocked);
+    let limited_result = limited_result.unwrap();
+    assert_eq!(limited_result.entry_count, 1);
+    assert!(limited_result.truncated);
+    assert_eq!(limited_result.entries[0].name, "01-visible");
+    fs::remove_dir_all(limited_root).unwrap();
+}
+
+#[cfg(windows)]
+fn deny_directory_listing(path: &Path) {
+    let username = std::env::var("USERNAME").unwrap();
+    let status = std::process::Command::new("icacls")
+        .arg(path)
+        .arg("/deny")
+        .arg(format!("{username}:(RD)"))
+        .status()
+        .unwrap();
+    assert!(status.success());
+}
+
+#[cfg(windows)]
+fn allow_directory_listing(path: &Path) {
+    let username = std::env::var("USERNAME").unwrap();
+    let status = std::process::Command::new("icacls")
+        .arg(path)
+        .arg("/remove:d")
+        .arg(username)
+        .status()
+        .unwrap();
+    assert!(status.success());
+}
+
 #[test]
 fn revision_reports_size_mtime_and_missing_path() {
     let root = test_dir();

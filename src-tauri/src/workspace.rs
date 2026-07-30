@@ -117,15 +117,20 @@ fn scan_directory(
     remaining: &mut usize,
     truncated: &mut bool,
 ) -> Result<Vec<WorkspaceTreeEntry>, String> {
+    if *remaining == 0 {
+        *truncated = true;
+        return Ok(Vec::new());
+    }
+
     let (directories, files) = candidates_in(directory)?;
     let mut entries = Vec::new();
 
     for candidate in directories {
-        if !has_visible_markdown_descendant(&candidate.path)? {
-            continue;
-        }
         if *remaining == 0 {
             *truncated = true;
+            break;
+        }
+        if !has_visible_markdown_descendant(&candidate.path)? {
             continue;
         }
 
