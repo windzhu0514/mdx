@@ -8,6 +8,7 @@ mod note_index;
 mod path_identity;
 mod recent_files;
 mod resource_import;
+pub mod workspace;
 
 use ai::AiRequestState;
 use archive_security::validate_archive;
@@ -32,6 +33,9 @@ pub use recent_files::{
 };
 pub use resource_import::{
     import_resource_file, infer_mime_type, resource_path_for, ImportedResource,
+};
+pub use workspace::{
+    disk_revision, scan_folder, DiskRevision, DiskRevisionResult, FolderScan, WorkspaceTreeEntry,
 };
 
 use chrono::Local;
@@ -242,6 +246,16 @@ fn resolve_path(path: String) -> Result<PathIdentity, String> {
         available: Path::new(&normalized).exists(),
         path: normalized,
     })
+}
+
+#[tauri::command]
+fn scan_workspace_folder(path: String) -> Result<FolderScan, String> {
+    scan_folder(Path::new(&path), 10_000)
+}
+
+#[tauri::command]
+fn get_disk_revisions(paths: Vec<String>) -> Vec<DiskRevisionResult> {
+    workspace::get_disk_revisions(paths)
 }
 
 #[tauri::command]
@@ -835,7 +849,9 @@ pub fn run() {
             get_recent_files,
             push_recent_file,
             remove_recent_file,
-            clear_recent_files
+            clear_recent_files,
+            scan_workspace_folder,
+            get_disk_revisions
         ])
         .run(tauri::generate_context!())
         .expect("error while running MDXNote application");
