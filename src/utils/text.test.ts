@@ -2,9 +2,22 @@ import { describe, expect, it } from "vitest";
 
 import {
     countNonWhitespaceCharacters,
+    documentNameFromPath,
     extractMarkdownHeadings,
     normalizeMarkdownHeadingText,
 } from "./text";
+
+describe("documentNameFromPath", () => {
+    it.each([
+        ["C:\\notes\\项目计划.mdx", "项目计划"],
+        ["/notes/项目计划.MDX", "项目计划"],
+        ["/notes/archive.mdx.backup", "archive.mdx.backup"],
+        ["", "未命名文档"],
+        ["C:\\notes\\", "未命名文档"],
+    ])("从路径 %s 提取文档名称", (path, expected) => {
+        expect(documentNameFromPath(path)).toBe(expected);
+    });
+});
 
 describe("countNonWhitespaceCharacters", () => {
     it("忽略空白并按 Unicode 字符计数", () => {
@@ -19,9 +32,7 @@ describe("normalizeMarkdownHeadingText", () => {
 
     it("keeps link labels and inline-code text without their Markdown syntax", () => {
         expect(
-            normalizeMarkdownHeadingText(
-                "[文档](https://example.com) 与 `代码`",
-            ),
+            normalizeMarkdownHeadingText("[文档](https://example.com) 与 `代码`"),
         ).toBe("文档 与 代码");
     });
 });
@@ -51,11 +62,7 @@ describe("extractMarkdownHeadings", () => {
             extractMarkdownHeadings(
                 "\t# Tab 标题\n\t```\n# 反引号 Tab 围栏后\n\t~~~\n# 波浪 Tab 围栏后\n```\n# 围栏内\n\t```\n# Tab 关闭围栏后仍在围栏内\n```\n# 真正关闭围栏后",
             ).map(({ text }) => text),
-        ).toEqual([
-            "反引号 Tab 围栏后",
-            "波浪 Tab 围栏后",
-            "真正关闭围栏后",
-        ]);
+        ).toEqual(["反引号 Tab 围栏后", "波浪 Tab 围栏后", "真正关闭围栏后"]);
     });
 
     it("rejects backtick fences whose info string contains a backtick while allowing tilde fences", () => {

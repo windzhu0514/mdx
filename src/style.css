@@ -184,6 +184,19 @@ summary {
     box-shadow: 0 1px 0 rgba(255, 255, 255, 0.5) inset;
 }
 
+.menu-document-name {
+    flex: 1;
+    min-width: 0;
+    padding-inline: 16px;
+    overflow: hidden;
+    color: var(--color-text-muted);
+    font-size: 13px;
+    font-weight: 600;
+    text-align: center;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 .menu-group {
     position: relative;
 }
@@ -394,32 +407,6 @@ summary {
     filter: blur(1px);
 }
 
-.title-row {
-    display: flex;
-    align-items: center;
-    padding: 12px 32px 4px 32px;
-}
-
-.title-input {
-    width: 100%;
-    background: transparent;
-    border: none;
-    color: var(--color-text-main);
-    font-size: 36px;
-    font-weight: 800;
-    letter-spacing: -0.02em;
-    padding: 8px 0;
-    transition: color 0.2s ease;
-}
-
-.title-input::placeholder {
-    color: rgba(15, 23, 42, 0.2);
-}
-
-.title-input:focus {
-    color: var(--color-primary);
-}
-
 /* Editor Container */
 .editor-card {
     position: relative;
@@ -588,9 +575,6 @@ summary {
 @media (max-width: 900px) {
     .note-panel {
         padding: 16px 20px;
-    }
-    .title-input {
-        font-size: 28px;
     }
     .status-bar {
         flex-wrap: wrap;

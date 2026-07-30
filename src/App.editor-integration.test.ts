@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => ({
     objectUrl: "blob:mora-image",
     openedNote: undefined as MdxNote | undefined,
     printSnapshots: [] as string[],
+    printTitles: [] as string[],
     nextMilkdownReadiness: undefined as Promise<void> | undefined,
     invoke: vi.fn(),
     openDialog: vi.fn(),
@@ -199,6 +200,7 @@ beforeEach(() => {
     mocks.source = undefined;
     mocks.openedNote = undefined;
     mocks.printSnapshots = [];
+    mocks.printTitles = [];
     mocks.nextMilkdownReadiness = undefined;
     mocks.openDialog.mockResolvedValue("C:\\notes\\test.mdx");
     mocks.saveDialog.mockResolvedValue("C:\\notes\\saved.mdx");
@@ -232,6 +234,7 @@ beforeEach(() => {
     });
     window.print = vi.fn(() => {
         mocks.printSnapshots.push(document.body.innerHTML);
+        mocks.printTitles.push(document.title);
     });
 });
 
@@ -244,6 +247,77 @@ afterEach(() => {
 });
 
 describe("App 编辑器状态集成", () => {
+    it("打开旧笔记时以文件名显示文档名称而不是包内标题", async () => {
+        const note = createNote("# 正文", "C:\\notes\\项目计划.MDX");
+        note.title = "包内旧标题";
+        note.meta = createMeta({ title: "包内旧标题", tags: ["保留标签"] });
+        mocks.openedNote = note;
+        const host = await mountApp();
+
+        findButton(host, "打开...").click();
+        await vi.waitFor(() => {
+            expect(host.querySelector(".menu-document-name")?.textContent?.trim()).toBe(
+                "项目计划",
+            );
+        });
+
+        expect(document.title).toBe("项目计划 - Mora");
+        expect(mocks.invoke).toHaveBeenCalledWith("push_recent_file", {
+            path: "C:\\notes\\项目计划.MDX",
+            title: "项目计划",
+        });
+        expect(host.querySelector(".title-input")).toBeNull();
+        expect(host.querySelector('input[aria-label="添加标签"]')).toBeNull();
+    });
+
+    it("保存旧笔记时用当前文件名同步标题并保留标签", async () => {
+        const note = createNote("# 正文", "C:\\notes\\文件标题.mdx");
+        note.title = "包内旧标题";
+        note.meta = createMeta({ title: "包内旧标题", tags: ["保留标签"] });
+        mocks.openedNote = note;
+        const host = await mountApp();
+
+        findButton(host, "打开...").click();
+        await vi.waitFor(() =>
+            expect(host.querySelector(".menu-document-name")?.textContent).toContain(
+                "文件标题",
+            ),
+        );
+        findButton(host, "保存").click();
+
+        await vi.waitFor(() => {
+            const call = mocks.invoke.mock.calls.find(([name]) => name === "save_mdx");
+            expect(call).toBeDefined();
+            const request = (
+                call?.[1] as {
+                    request: { title: string; meta: MdxMetadata };
+                }
+            ).request;
+            expect(request.title).toBe("文件标题");
+            expect(request.meta.title).toBe("文件标题");
+            expect(request.meta.tags).toEqual(["保留标签"]);
+        });
+    });
+
+    it("另存为时从用户选择的路径生成标题", async () => {
+        mocks.saveDialog.mockResolvedValue("C:\\notes\\用户命名.mdx");
+        const host = await mountApp();
+
+        findButton(host, "另存为...").click();
+
+        await vi.waitFor(() => {
+            const call = mocks.invoke.mock.calls.find(([name]) => name === "save_mdx_as");
+            expect(call).toBeDefined();
+            const request = (
+                call?.[1] as {
+                    request: { title: string; meta: MdxMetadata };
+                }
+            ).request;
+            expect(request.title).toBe("用户命名");
+            expect(request.meta.title).toBe("用户命名");
+        });
+    });
+
     it("shows an ATX heading with three leading spaces in the App TOC", async () => {
         mocks.openedNote = createNote("   ## 缩进标题\n    ### 非标题");
         const host = await mountApp();
@@ -348,6 +422,25 @@ describe("App 编辑器状态集成", () => {
 });
 
 describe("App PDF 打印视图", () => {
+    it("打印期间用文档文件名作为标题且不注入额外正文标题", async () => {
+        mocks.openedNote = createNote("## Markdown 中的标题", "C:\\notes\\项目计划.mdx");
+        const host = await mountApp();
+        findButton(host, "打开...").click();
+        await vi.waitFor(() =>
+            expect(host.querySelector(".menu-document-name")?.textContent).toContain(
+                "项目计划",
+            ),
+        );
+
+        findButton(host, "导出 PDF / 打印...").click();
+        await vi.waitFor(() => expect(window.print).toHaveBeenCalledTimes(1));
+
+        expect(mocks.printTitles).toEqual(["项目计划"]);
+        expect(mocks.printSnapshots[0]).not.toContain("title-row");
+        await nextTick();
+        expect(document.title).toBe("项目计划 - Mora");
+    });
+
     it("prevents concurrent exports, recovers from rejected readiness, and releases the print guard", async () => {
         mocks.openedNote = createNote("# 原文");
         const host = await mountApp();

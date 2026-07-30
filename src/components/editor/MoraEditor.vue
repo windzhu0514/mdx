@@ -130,6 +130,11 @@ defineExpose<MoraEditorHandle>({
     grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.source-layout :deep(.cm-content) {
+    max-width: none;
+    margin-inline: 0;
+}
+
 .source-layout.split > :last-child {
     border-left: 1px solid var(--color-border);
 }

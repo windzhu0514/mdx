@@ -1,6 +1,6 @@
 # Mora 墨笺
 
-Mora 墨笺是一款本地优先、所见即所得的 MDX 扩展笔记编辑器，使用 Tauri 2、Vue 3、TypeScript、Rust 和 Toast UI Editor 构建。
+Mora 墨笺是一款本地优先、所见即所得的 MDX 扩展笔记编辑器，使用 Tauri 2、Vue 3、TypeScript、Rust、Milkdown/Crepe 和 CodeMirror 6 构建。
 
 > 本项目中的 `.mdx` 表示自定义的 **MDXNote 笔记包**，与 Web 开发中的 Markdown + JSX（MDX）无关。
 
@@ -8,10 +8,10 @@ Mora 墨笺是一款本地优先、所见即所得的 MDX 扩展笔记编辑器�
 
 ### 编辑体验
 
-- Toast UI 所见即所得编辑、Markdown 源码、预览和垂直双栏模式。
-- 标题、标签、文档目录、当前文档查找替换和常用 Markdown 命令。
+- Milkdown/Crepe 所见即所得编辑，以及 CodeMirror 6 仅源码和垂直双栏模式。
+- 文档名由 `.mdx` 文件名决定；支持文档目录、当前文档查找替换和常用 Markdown 命令。
 - 浅色、深色、跟随系统主题，以及字体、字号、行高、阅读宽度偏好。
-- 紧凑桌面菜单和状态栏，支持 760px 最小窗口、键盘焦点和减少动态效果。
+- 完整桌面菜单和紧凑状态栏，支持 760px 最小窗口、键盘焦点和减少动态效果。
 
 ### 本地笔记与资源
 
@@ -128,9 +128,9 @@ src-tauri/target/release/bundle/nsis/Mora_0.1.0_x64-setup.exe
 ```text
 src/                         Vue 3 前端
   App.vue                    主应用编排
-  components/                面板、状态栏、目录、标签等组件
+  components/                编辑器、面板、状态栏和目录等组件
   composables/               资源、草稿、偏好等状态逻辑
-  utils/                     快捷键、路径、标签、离开守卫
+  utils/                     文本、快捷键、路径和离开守卫
 
 src-tauri/src/               Rust / Tauri 后端
   lib.rs                     Commands 与笔记包读写编排
@@ -146,7 +146,7 @@ docs/                        需求、设计和分阶段实施计划
 
 ## 技术文档
 
-- [Markdown 编辑器组件调研与迁移决策](docs/research/2026-07-21-markdown-editor-component-evaluation.md)：记录 Toast UI Editor 后续替代方案、能力矩阵、阶段性决策和 PoC 验收标准。
+- [Markdown 编辑器组件调研与迁移决策](docs/research/2026-07-21-markdown-editor-component-evaluation.md)：记录编辑器能力矩阵、Milkdown/Crepe 与 CodeMirror 6 迁移决策和验收标准。
 
 ## 当前限制
 

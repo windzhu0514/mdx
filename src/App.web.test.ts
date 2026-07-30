@@ -199,7 +199,7 @@ describe("App Web 预览启动", () => {
         expect(host.textContent).toContain("3 字");
     });
 
-    it("Web 预览的新笔记可以添加标签", async () => {
+    it("新笔记在菜单栏显示只读名称且不渲染标题和标签输入", async () => {
         const host = document.createElement("div");
         document.body.append(host);
         const app = createApp(App);
@@ -210,21 +210,11 @@ describe("App Web 预览启动", () => {
             expect(mocks.moraEditorMounted).toHaveBeenCalledTimes(1);
         });
 
-        const input = host.querySelector<HTMLInputElement>(
-            'input[aria-label="添加标签"]',
-        );
-        if (!input) throw new Error("未找到标签输入框");
-
-        input.value = "测试";
-        input.dispatchEvent(new Event("input", { bubbles: true }));
-        input.dispatchEvent(
-            new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
-        );
-        await nextTick();
-
-        const chip = host.querySelector(".tag-chip");
-        expect(chip).not.toBeNull();
-        expect(chip?.textContent ?? "").toContain("测试");
+        const documentName = host.querySelector(".menu-document-name");
+        expect(documentName?.textContent?.trim()).toBe("未命名文档");
+        expect(documentName?.getAttribute("title")).toBe("未命名文档");
+        expect(host.querySelector(".title-input")).toBeNull();
+        expect(host.querySelector('input[aria-label="添加标签"]')).toBeNull();
         expect(mocks.invoke).not.toHaveBeenCalled();
     });
 

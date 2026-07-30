@@ -10,7 +10,6 @@ import LeaveConfirmDialog from "./components/LeaveConfirmDialog.vue";
 import LibraryPanel from "./components/LibraryPanel.vue";
 import SettingsPanel from "./components/SettingsPanel.vue";
 import StatusBar from "./components/StatusBar.vue";
-import TagEditor from "./components/TagEditor.vue";
 import TableOfContents from "./components/TableOfContents.vue";
 import MoraEditor from "./components/editor/MoraEditor.vue";
 import { createOpenAICompatibleProvider } from "./ai/openAICompatible";
@@ -41,7 +40,12 @@ import { runLeaveDecision, type LeaveDecision } from "./utils/leaveGuard";
 import { base64ToBlob } from "./utils/base64";
 import { createEmptyMetadata } from "./utils/note";
 import { isTextInputTarget } from "./utils/shortcuts";
-import { countNonWhitespaceCharacters, extractMarkdownHeadings } from "./utils/text";
+import {
+    countNonWhitespaceCharacters,
+    documentNameFromPath,
+    extractMarkdownHeadings,
+    UNNAMED_DOCUMENT_NAME,
+} from "./utils/text";
 
 type MdxSaveRequest = {
     path: string | null;
@@ -70,7 +74,7 @@ const APP_CN_NAME = "墨笺";
 const APP_TAGLINE = "Mora 墨笺，一款所见即所得的 MDX 扩展笔记编辑器";
 
 const currentPath = ref<string | null>(null);
-const title = ref("无标题笔记");
+const title = ref(UNNAMED_DOCUMENT_NAME);
 const content = ref("");
 const meta = ref<MdxMetadata | null>(null);
 const dirty = ref(false);
@@ -185,7 +189,8 @@ const wordCount = computed(() => countNonWhitespaceCharacters(content.value));
 const displayContent = computed(() => resourceSession.displayMarkdown(content.value));
 const findMatchCount = computed(() => countOccurrences(content.value, findQuery.value));
 const windowTitle = computed(
-    () => `${dirty.value ? "* " : ""}${title.value || "无标题笔记"} - ${APP_NAME}`,
+    () =>
+        `${dirty.value ? "* " : ""}${title.value || UNNAMED_DOCUMENT_NAME} - ${APP_NAME}`,
 );
 const displayPath = computed(() => currentPath.value || "尚未保存");
 const modeLabel = computed(() => {
@@ -467,7 +472,7 @@ async function restoreDraft(snapshot: DraftSnapshot) {
     }
     await applyNote(baseNote, false);
     currentPath.value = snapshot.path;
-    title.value = snapshot.title;
+    title.value = documentNameFromPath(snapshot.path);
     meta.value = snapshot.meta ?? baseNote.meta;
 
     for (const resource of snapshot.newResources) {
@@ -622,12 +627,6 @@ onBeforeUnmount(() => {
     resourceSession.clear();
 });
 
-function updateTags(tags: string[]) {
-    if (!meta.value) return;
-    meta.value = { ...meta.value, tags };
-    markDirty();
-}
-
 function markDirty() {
     dirty.value = true;
     if (tauriRuntime) draftRecovery.schedule();
@@ -652,7 +651,7 @@ function handleAiError(message: string) {
 async function applyNote(note: MdxNote, saved: boolean) {
     resourceSession.clear();
     currentPath.value = note.path;
-    title.value = note.title || note.meta?.title || "无标题笔记";
+    title.value = documentNameFromPath(note.path);
     meta.value = note.meta;
 
     const persistedContent = note.content ?? "";
@@ -702,15 +701,17 @@ async function applyNote(note: MdxNote, saved: boolean) {
 }
 function buildRequest(pathOverride?: string | null): MdxSaveRequest {
     const finalContent = resourceSession.persistedMarkdown(content.value);
+    const requestPath = pathOverride ?? currentPath.value;
+    const requestTitle = documentNameFromPath(requestPath);
     const newAssets = resourceSession
         .newResources()
         .filter((resource) => finalContent.includes(resource.name));
 
     return {
-        path: pathOverride ?? currentPath.value,
-        title: title.value,
+        path: requestPath,
+        title: requestTitle,
         content: finalContent,
-        meta: meta.value,
+        meta: meta.value ? { ...meta.value, title: requestTitle } : null,
         newAssets,
     };
 }
@@ -932,7 +933,7 @@ async function openNote(path?: string) {
             await applyNote(note, true);
 
             if (note.path) {
-                await pushRecentFile(note.path, note.title);
+                await pushRecentFile(note.path, title.value);
             }
         } catch (error) {
             if (selectedPath) {
@@ -1010,6 +1011,7 @@ async function exportPdf() {
     if (printing) return;
 
     printing = true;
+    let printTitleApplied = false;
     const previousMode = editorMode.value;
     const previousSourcePreview = sourcePreview.value;
     try {
@@ -1018,11 +1020,14 @@ async function exportPdf() {
         await nextTick();
         await (editorRef.value?.whenReady() ?? Promise.resolve());
         statusMessage.value = "已打开系统打印对话框，可选择另存为 PDF";
+        document.title = title.value;
+        printTitleApplied = true;
         window.print();
     } catch (error) {
         errorMessage.value = stringifyError(error);
         statusMessage.value = "PDF 导出失败";
     } finally {
+        if (printTitleApplied) document.title = windowTitle.value;
         editorMode.value = previousMode;
         sourcePreview.value = previousSourcePreview;
         await nextTick();
@@ -1044,7 +1049,7 @@ async function saveNote() {
         await applyNote(note, true);
         await draftRecovery.remove(previousDraftKey);
         if (note.path) {
-            await pushRecentFile(note.path, note.title);
+            await pushRecentFile(note.path, title.value);
         }
         statusMessage.value = "保存成功";
     });
@@ -1054,7 +1059,7 @@ async function saveNoteAs() {
     const previousDraftKey = currentDraftKey();
     await runAction(async () => {
         const selected = await save({
-            defaultPath: `${sanitizeFileName(title.value || "无标题笔记")}.mdx`,
+            defaultPath: `${sanitizeFileName(title.value || UNNAMED_DOCUMENT_NAME)}.mdx`,
             filters: [{ name: "Mora 墨笺笔记", extensions: ["mdx"] }],
         });
 
@@ -1070,7 +1075,7 @@ async function saveNoteAs() {
         await applyNote(note, true);
         await draftRecovery.remove(previousDraftKey);
         if (note.path) {
-            await pushRecentFile(note.path, note.title);
+            await pushRecentFile(note.path, title.value);
         }
         statusMessage.value = "另存为成功";
     });
@@ -1545,7 +1550,7 @@ function insertMarkdownSnippet(markdown: string) {
 
 function sanitizeFileName(fileName: string) {
     const cleaned = fileName.trim().replace(/[\\/:*?"<>|]/g, "_");
-    return cleaned || "无标题笔记";
+    return cleaned || UNNAMED_DOCUMENT_NAME;
 }
 
 function stringifyError(error: unknown) {
@@ -1700,6 +1705,10 @@ function stringifyError(error: unknown) {
                 </div>
             </details>
 
+            <div class="menu-document-name" :title="title">
+                {{ title }}
+            </div>
+
             <div class="mode-switch compact" aria-label="编辑模式">
                 <button
                     type="button"
@@ -1738,18 +1747,6 @@ function stringifyError(error: unknown) {
             />
 
             <section class="note-panel" :aria-busy="loading">
-                <div class="title-row">
-                    <input
-                        v-model="title"
-                        class="title-input"
-                        type="text"
-                        placeholder="请输入标题"
-                        autocomplete="off"
-                        @input="markDirty"
-                    />
-                </div>
-                <TagEditor :tags="meta?.tags ?? []" @update="updateTags" />
-
                 <div class="editor-card">
                     <FindReplacePanel
                         ref="findPanel"
@@ -1888,8 +1885,7 @@ function stringifyError(error: unknown) {
     .toc-sidebar,
     .toc-show-button,
     .status-bar,
-    .find-panel,
-    .tag-editor {
+    .find-panel {
         display: none !important;
     }
 
@@ -1902,10 +1898,6 @@ function stringifyError(error: unknown) {
         min-height: 0;
         overflow: visible;
         background: white;
-    }
-
-    .title-row {
-        padding: 0 0 16px;
     }
 
     .markdown-editor {

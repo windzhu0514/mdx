@@ -1,3 +1,11 @@
+export const UNNAMED_DOCUMENT_NAME = "未命名文档";
+
+export function documentNameFromPath(path: string | null | undefined): string {
+    const fileName = path?.split(/[\\/]/u).pop()?.trim() ?? "";
+    const documentName = fileName.replace(/\.mdx$/iu, "").trim();
+    return documentName || UNNAMED_DOCUMENT_NAME;
+}
+
 export function countNonWhitespaceCharacters(value: string) {
     let count = 0;
 
@@ -45,10 +53,7 @@ export function extractMarkdownHeadings(markdown: string): MarkdownHeading[] {
             continue;
         }
 
-        if (
-            fenceMatch &&
-            (fenceMatch[1][0] !== "`" || !fenceMatch[2].includes("`"))
-        ) {
+        if (fenceMatch && (fenceMatch[1][0] !== "`" || !fenceMatch[2].includes("`"))) {
             fence = {
                 character: fenceMatch[1][0] as "`" | "~",
                 length: fenceMatch[1].length,

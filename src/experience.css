@@ -71,63 +71,6 @@ summary:focus-visible,
     background: var(--color-bg-elevated);
 }
 
-.title-row {
-    width: 100%;
-    max-width: calc(var(--content-width) + 64px);
-    margin: 0 auto;
-}
-
-.title-input {
-    font-family: var(--editor-font-family);
-    border-bottom: 2px solid transparent;
-}
-
-.title-input:focus {
-    border-bottom-color: var(--color-primary);
-    color: var(--color-text-main);
-    box-shadow: 0 8px 16px -14px var(--color-primary);
-}
-
-.tag-editor {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 6px;
-    width: 100%;
-    max-width: calc(var(--content-width) + 64px);
-    min-height: 34px;
-    margin: 0 auto 8px;
-    padding: 0 32px;
-}
-
-.tag-editor > input {
-    min-width: 110px;
-    flex: 1;
-    padding: 5px 8px;
-    border: 0;
-    border-bottom: 1px solid var(--color-border);
-    background: transparent;
-}
-
-.tag-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    padding: 4px 8px;
-    border: 1px solid color-mix(in srgb, var(--color-primary) 22%, transparent);
-    border-radius: 999px;
-    background: var(--color-primary-light);
-    color: var(--color-primary);
-    font-size: 12px;
-}
-
-.tag-chip button {
-    border: 0;
-    background: transparent;
-    color: inherit;
-    cursor: pointer;
-}
-
 .markdown-editor .ProseMirror {
     max-width: var(--content-width);
     margin-inline: auto;
@@ -137,8 +80,6 @@ summary:focus-visible,
 }
 
 .markdown-editor .cm-content {
-    max-width: var(--content-width);
-    margin-inline: auto;
     font-family: var(--font-mono);
     font-size: var(--editor-font-size);
     line-height: var(--editor-line-height);
@@ -413,11 +354,6 @@ summary:focus-visible,
     .toc-sidebar,
     .toc-show-button {
         display: none;
-    }
-
-    .title-row,
-    .tag-editor {
-        padding-inline: 20px;
     }
 
     .library-search {
