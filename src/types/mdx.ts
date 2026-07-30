@@ -68,11 +68,6 @@ export type ImportedMarkdown = {
     frontMatter: FrontMatterData | null;
 };
 
-export type RecentFileEntry = {
-    path: string;
-    title: string;
-    lastOpenedAt: string;
-};
 
 export type PendingResource = {
     path: string;

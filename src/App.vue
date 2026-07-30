@@ -33,9 +33,9 @@ import type {
     ImportedMarkdown,
     MdxMetadata,
     MdxNote,
-    RecentFileEntry,
     ResourceSaveData,
 } from "./types/mdx";
+import type { RecentFileEntry } from "./types/workspace";
 import { runLeaveDecision, type LeaveDecision } from "./utils/leaveGuard";
 import { base64ToBlob } from "./utils/base64";
 import { createEmptyMetadata } from "./utils/note";

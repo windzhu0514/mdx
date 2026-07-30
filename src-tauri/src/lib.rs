@@ -5,6 +5,8 @@ mod export;
 mod history;
 pub mod markdown_import;
 mod note_index;
+mod path_identity;
+mod recent_files;
 mod resource_import;
 
 use ai::AiRequestState;
@@ -22,6 +24,11 @@ pub use history::{
 };
 pub use note_index::{
     list_index_entries, search_index_entries, upsert_index_entry, NoteIndexEntry, NoteSearchResult,
+};
+pub use path_identity::{normalize_path, path_identity};
+pub use recent_files::{
+    push_recent_entry, read_recent_file, remove_recent_entry, write_recent_file, RecentFileEntry,
+    MAX_RECENT_FILES,
 };
 pub use resource_import::{
     import_resource_file, infer_mime_type, resource_path_for, ImportedResource,
@@ -168,12 +175,12 @@ struct MdxNote {
     meta: MdxMetadata,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct RecentFileEntry {
+struct PathIdentity {
     path: String,
-    title: String,
-    last_opened_at: String,
+    identity: String,
+    available: bool,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -225,6 +232,16 @@ fn open_mdx(app: AppHandle, path: String) -> Result<MdxNote, String> {
     let note = read_mdx(Path::new(&path))?;
     let _ = index_note(&app, &note);
     Ok(note)
+}
+
+#[tauri::command]
+fn resolve_path(path: String) -> Result<PathIdentity, String> {
+    let normalized = normalize_path(Path::new(&path))?;
+    Ok(PathIdentity {
+        identity: path_identity(Path::new(&normalized))?,
+        available: Path::new(&normalized).exists(),
+        path: normalized,
+    })
 }
 
 #[tauri::command]
@@ -424,34 +441,19 @@ fn push_recent_file(
     path: String,
     title: String,
 ) -> Result<Vec<RecentFileEntry>, String> {
-    let normalized_path = ensure_mdx_extension(PathBuf::from(path))
-        .to_string_lossy()
-        .to_string();
-    let mut recent_files = read_recent_files(&app)?;
-
-    recent_files.retain(|item| item.path != normalized_path);
-    recent_files.insert(
-        0,
-        RecentFileEntry {
-            path: normalized_path,
-            title: normalize_title(&title),
-            last_opened_at: current_time_rfc3339(),
-        },
-    );
-    recent_files.truncate(10);
-
+    let recent_files = push_recent_entry(
+        read_recent_files(&app)?,
+        path,
+        normalize_title(&title),
+        current_time_rfc3339(),
+    )?;
     write_recent_files(&app, &recent_files)?;
     Ok(recent_files)
 }
 
 #[tauri::command]
 fn remove_recent_file(app: AppHandle, path: String) -> Result<Vec<RecentFileEntry>, String> {
-    let normalized_path = ensure_mdx_extension(PathBuf::from(path))
-        .to_string_lossy()
-        .to_string();
-    let mut recent_files = read_recent_files(&app)?;
-
-    recent_files.retain(|item| item.path != normalized_path);
+    let recent_files = remove_recent_entry(read_recent_files(&app)?, Path::new(&path))?;
     write_recent_files(&app, &recent_files)?;
 
     Ok(recent_files)
@@ -463,25 +465,11 @@ fn clear_recent_files(app: AppHandle) -> Result<(), String> {
 }
 
 fn read_recent_files(app: &AppHandle) -> Result<Vec<RecentFileEntry>, String> {
-    let recent_files_path = recent_files_path(app)?;
-
-    if !recent_files_path.exists() {
-        return Ok(Vec::new());
-    }
-
-    let text = fs::read_to_string(&recent_files_path).map_err(|err| err.to_string())?;
-    serde_json::from_str(&text).map_err(|err| err.to_string())
+    read_recent_file(&recent_files_path(app)?)
 }
 
 fn write_recent_files(app: &AppHandle, recent_files: &[RecentFileEntry]) -> Result<(), String> {
-    let recent_files_path = recent_files_path(app)?;
-    let parent = recent_files_path
-        .parent()
-        .ok_or_else(|| "最近打开列表路径无效。".to_string())?;
-
-    fs::create_dir_all(parent).map_err(|err| err.to_string())?;
-    let json = serde_json::to_string_pretty(recent_files).map_err(|err| err.to_string())?;
-    fs::write(recent_files_path, json).map_err(|err| err.to_string())
+    write_recent_file(&recent_files_path(app)?, recent_files)
 }
 
 fn recent_files_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -829,6 +817,7 @@ pub fn run() {
             ai::cancel_ai,
             create_mdx,
             open_mdx,
+            resolve_path,
             save_mdx,
             save_mdx_as,
             validate_mdx,
