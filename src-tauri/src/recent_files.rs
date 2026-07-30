@@ -1,5 +1,6 @@
 use crate::{normalize_path, path_identity};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 
@@ -55,6 +56,12 @@ pub fn read_recent_file(path: &Path) -> Result<Vec<RecentFileEntry>, String> {
     let text = fs::read_to_string(path).map_err(|error| error.to_string())?;
     let mut entries: Vec<RecentFileEntry> =
         serde_json::from_str(&text).map_err(|error| error.to_string())?;
+    let mut identities = HashSet::new();
+    entries.retain(|entry| {
+        path_identity(Path::new(&entry.path))
+            .map(|identity| identities.insert(identity))
+            .unwrap_or(true)
+    });
     for entry in &mut entries {
         entry.available = Path::new(&entry.path).is_file();
     }

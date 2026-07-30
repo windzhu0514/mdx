@@ -69,3 +69,35 @@ fn rereading_history_refreshes_file_availability() {
 
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn rereading_history_deduplicates_equivalent_paths_keeping_the_most_recent_entry() {
+    let dir = std::env::temp_dir().join(format!("mora-recent-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let note_path = dir.join("note.md");
+    let history_path = dir.join("recent-files.json");
+    std::fs::write(&note_path, "content").unwrap();
+    let entries = vec![
+        RecentFileEntry {
+            path: dir.join(".").join("note.md").to_string_lossy().to_string(),
+            title: "Latest".into(),
+            last_opened_at: "newer".into(),
+            available: false,
+        },
+        RecentFileEntry {
+            path: note_path.to_string_lossy().to_string(),
+            title: "Older duplicate".into(),
+            last_opened_at: "older".into(),
+            available: false,
+        },
+    ];
+    std::fs::write(&history_path, serde_json::to_string(&entries).unwrap()).unwrap();
+
+    let entries = mdxnote_lib::read_recent_file(&history_path).unwrap();
+
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].title, "Latest");
+    assert!(entries[0].available);
+
+    std::fs::remove_dir_all(dir).unwrap();
+}
