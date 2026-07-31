@@ -112,11 +112,13 @@ function switchDocument(nextId: string, markdownValue: string): void {
     cancelAi();
     crepe.editor.action((ctx) => {
         const view = ctx.get(editorViewCtx);
-        states.set(activeDocumentId, {
-            state: view.state,
-            scrollTop: editorElement.value?.scrollTop ?? 0,
-            markdown: currentMarkdown,
-        });
+        if (pendingReleasedDocumentId !== activeDocumentId) {
+            states.set(activeDocumentId, {
+                state: view.state,
+                scrollTop: editorElement.value?.scrollTop ?? 0,
+                markdown: currentMarkdown,
+            });
+        }
         pendingReleasedDocumentId = null;
         const stored = states.get(nextId);
         const cached = stored?.markdown === markdownValue ? stored : undefined;

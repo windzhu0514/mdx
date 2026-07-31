@@ -538,6 +538,25 @@ describe("MilkdownEditor", () => {
         expect(mocks.parser).toHaveBeenLastCalledWith("# Fresh");
     });
 
+    it("creates a new state after releasing the active document and switching away", async () => {
+        const editor = mountEditor("# A");
+        cleanup = editor.unmount;
+        await nextTick();
+        await editor.handle.value?.whenReady();
+
+        editor.handle.value?.releaseDocument("doc-a");
+        editor.documentId.value = "doc-b";
+        editor.markdown.value = "# B";
+        await nextTick();
+        const creationsBeforeReopen = mocks.stateCreate.mock.calls.length;
+        editor.documentId.value = "doc-a";
+        editor.markdown.value = "# A";
+        await nextTick();
+
+        expect(mocks.stateCreate).toHaveBeenCalledTimes(creationsBeforeReopen + 1);
+        expect(mocks.parser).toHaveBeenLastCalledWith("# A");
+    });
+
     it("recreates the active ProseMirror state when a released document reloads in place", async () => {
         const editor = mountEditor("# A");
         cleanup = editor.unmount;

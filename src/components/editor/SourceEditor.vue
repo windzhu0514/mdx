@@ -82,10 +82,12 @@ function switchDocument(nextId: string, value: string): void {
         return;
     }
 
-    states.set(activeDocumentId, {
-        state: editorView.state,
-        scrollTop: editorView.scrollDOM.scrollTop,
-    });
+    if (pendingReleasedDocumentId !== activeDocumentId) {
+        states.set(activeDocumentId, {
+            state: editorView.state,
+            scrollTop: editorView.scrollDOM.scrollTop,
+        });
+    }
     pendingReleasedDocumentId = null;
     const stored = states.get(nextId);
     const cached = stored?.state.doc.toString() === value ? stored : undefined;
