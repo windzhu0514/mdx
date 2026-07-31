@@ -50,12 +50,61 @@ function baseName(path: string) {
     return parts[parts.length - 1] || path;
 }
 
+function mdxTargetPath(path: string) {
+    return /\.mdx$/iu.test(path) ? path : `${path}.mdx`;
+}
+
 function isInside(identity: string, rootIdentity: string) {
     const root = rootIdentity.replace(/[\\/]+$/, "");
     return (
         identity === root ||
         identity.startsWith(`${root}\\`) ||
         identity.startsWith(`${root}/`)
+    );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isNullableString(value: unknown): value is string | null {
+    return typeof value === "string" || value === null;
+}
+
+function isWorkspaceSessionSnapshot(value: unknown): value is WorkspaceSessionSnapshot {
+    if (!isRecord(value) || value.version !== 1) return false;
+    if (
+        !Array.isArray(value.documents) ||
+        !Array.isArray(value.folderPaths) ||
+        !value.folderPaths.every((path) => typeof path === "string") ||
+        !Array.isArray(value.expandedPaths) ||
+        !value.expandedPaths.every((path) => typeof path === "string") ||
+        !isNullableString(value.activeDocumentId) ||
+        typeof value.sidebarCollapsed !== "boolean" ||
+        typeof value.sidebarWidth !== "number" ||
+        !Number.isFinite(value.sidebarWidth)
+    ) {
+        return false;
+    }
+
+    return value.documents.every(
+        (document) =>
+            isRecord(document) &&
+            typeof document.id === "string" &&
+            isNullableString(document.path) &&
+            (document.sourceKind === "mdx" ||
+                document.sourceKind === "markdown-import" ||
+                document.sourceKind === "untitled") &&
+            isNullableString(document.importSourcePath) &&
+            typeof document.draftKey === "string",
+    );
+}
+
+function isWorkspaceSessionRead(value: unknown): value is WorkspaceSessionRead {
+    return (
+        isRecord(value) &&
+        isNullableString(value.warning) &&
+        (value.session === null || isWorkspaceSessionSnapshot(value.session))
     );
 }
 
@@ -148,13 +197,7 @@ export function useDocumentSession(desktop: boolean) {
     }
 
     function existingByIdentity(identity: string) {
-        return documents.value.find(
-            (item) =>
-                item.pathIdentity === identity ||
-                (item.sourceKind === "markdown-import" &&
-                    item.path === null &&
-                    item.pathIdentity === identity),
-        );
+        return documents.value.find((item) => item.pathIdentity === identity);
     }
 
     async function persist() {
@@ -320,9 +363,12 @@ export function useDocumentSession(desktop: boolean) {
         triggerRef(documents);
     }
 
-    function releaseDocument(runtime: SessionDocument) {
-        runtime.draft.dispose();
-        runtime.resources.clear();
+    async function releaseDocument(runtime: SessionDocument) {
+        try {
+            await runtime.draft.dispose();
+        } finally {
+            runtime.resources.clear();
+        }
     }
 
     async function save(id: string) {
@@ -360,7 +406,7 @@ export function useDocumentSession(desktop: boolean) {
     async function saveAs(id: string, path: string) {
         requireDesktop();
         const runtime = document(id);
-        const resolved = await resolve(path);
+        const resolved = await resolve(mdxTargetPath(path));
         const owner = documents.value.find(
             (item) => item.id !== id && item.pathIdentity === resolved.identity,
         );
@@ -371,10 +417,9 @@ export function useDocumentSession(desktop: boolean) {
             };
         }
 
-        const previousDraftKey = draftKey(
-            runtime.path ?? runtime.importSourcePath,
-            runtime.id,
-        );
+        const previousDraftKey =
+            draftKeys.get(runtime.id) ??
+            draftKey(runtime.path ?? runtime.importSourcePath, runtime.id);
         const title = documentNameFromPath(resolved.path);
         const saved = await invoke<MdxNote>("save_mdx_as", {
             request: {
@@ -387,8 +432,10 @@ export function useDocumentSession(desktop: boolean) {
             path: resolved.path,
         });
 
-        runtime.path = saved.path ?? resolved.path;
-        runtime.pathIdentity = resolved.identity;
+        const savedIdentity = await resolve(saved.path ?? resolved.path);
+
+        runtime.path = savedIdentity.path;
+        runtime.pathIdentity = savedIdentity.identity;
         runtime.sourceKind = "mdx";
         runtime.importSourcePath = null;
         runtime.displayName = saved.title;
@@ -415,7 +462,7 @@ export function useDocumentSession(desktop: boolean) {
             if (decision === "discard") await runtime.draft.remove();
         }
 
-        releaseDocument(runtime);
+        await releaseDocument(runtime);
         documents.value = documents.value.filter((item) => item.id !== id);
         draftKeys.delete(id);
         chooseNextActiveDocument(new Set([id]));
@@ -448,7 +495,7 @@ export function useDocumentSession(desktop: boolean) {
         }
 
         for (const runtime of discarded) await runtime.draft.remove();
-        for (const runtime of targets) releaseDocument(runtime);
+        for (const runtime of targets) await releaseDocument(runtime);
         const removedIds = new Set(targets.map((item) => item.id));
         documents.value = documents.value.filter((item) => !removedIds.has(item.id));
         for (const id of removedIds) draftKeys.delete(id);
@@ -465,11 +512,17 @@ export function useDocumentSession(desktop: boolean) {
 
     async function restore() {
         if (!desktop) return;
+        const readValue = await invoke<unknown>("read_workspace_session");
+        if (!isWorkspaceSessionRead(readValue)) {
+            warnings.value = [...warnings.value, "工作区会话数据无效，已保留当前会话。"];
+            return;
+        }
+
         if (sessionWriteTimer) {
             clearTimeout(sessionWriteTimer);
             sessionWriteTimer = null;
         }
-        for (const runtime of documents.value) releaseDocument(runtime);
+        for (const runtime of documents.value) await releaseDocument(runtime);
         documents.value = [];
         activeDocumentId.value = null;
         folders.value = [];
@@ -477,11 +530,13 @@ export function useDocumentSession(desktop: boolean) {
         draftKeys.clear();
         warnings.value = [];
 
-        const read = await invoke<WorkspaceSessionRead>("read_workspace_session");
+        const read = readValue;
         if (read.warning) warnings.value = [read.warning];
         if (!read.session) return;
 
         const restoredDocuments: SessionDocument[] = [];
+        const restoredDocumentOwners = new Map<string, string>();
+        const restoredIdAliases = new Map<string, string>();
         for (const saved of read.session.documents) {
             let path = saved.path;
             let pathIdentity: string | null = null;
@@ -499,6 +554,12 @@ export function useDocumentSession(desktop: boolean) {
                 if (sourcePath) {
                     const resolved = await resolve(sourcePath);
                     pathIdentity = resolved.identity;
+                    const ownerId = restoredDocumentOwners.get(resolved.identity);
+                    if (ownerId) {
+                        restoredIdAliases.set(saved.id, ownerId);
+                        continue;
+                    }
+                    restoredDocumentOwners.set(resolved.identity, saved.id);
                     unavailable = !resolved.available;
                     if (saved.path) path = resolved.path;
                     if (resolved.available && saved.sourceKind === "mdx") {
@@ -520,6 +581,14 @@ export function useDocumentSession(desktop: boolean) {
                         displayName = baseName(resolved.path);
                         content = imported.content;
                     }
+                } else {
+                    const untitledIdentity = `untitled:${saved.id}`;
+                    const ownerId = restoredDocumentOwners.get(untitledIdentity);
+                    if (ownerId) {
+                        restoredIdAliases.set(saved.id, ownerId);
+                        continue;
+                    }
+                    restoredDocumentOwners.set(untitledIdentity, saved.id);
                 }
             } catch (error) {
                 unavailable = true;
@@ -560,15 +629,19 @@ export function useDocumentSession(desktop: boolean) {
                 warnings.value = [...warnings.value, String(error)];
             }
             restoredDocuments.push(runtime);
+            restoredIdAliases.set(saved.id, saved.id);
             const match = /^document-(\d+)$/.exec(saved.id);
             if (match) nextDocumentId = Math.max(nextDocumentId, Number(match[1]) + 1);
         }
         documents.value = restoredDocuments;
 
+        const restoredFolderIdentities = new Set<string>();
         for (const folderPath of read.session.folderPaths) {
             let resolved: PathIdentity | null = null;
             try {
                 resolved = await resolve(folderPath);
+                if (restoredFolderIdentities.has(resolved.identity)) continue;
+                restoredFolderIdentities.add(resolved.identity);
                 if (!resolved.available) throw new Error("文件夹暂时不可用");
                 const scan = await invoke<FolderScan>("scan_workspace_folder", {
                     path: resolved.path,
@@ -602,10 +675,14 @@ export function useDocumentSession(desktop: boolean) {
         expandedPaths.value = [...read.session.expandedPaths];
         collapsed.value = read.session.sidebarCollapsed;
         width.value = read.session.sidebarWidth;
+        const restoredActiveId = read.session.activeDocumentId
+            ? (restoredIdAliases.get(read.session.activeDocumentId) ??
+              read.session.activeDocumentId)
+            : null;
         activeDocumentId.value = documents.value.some(
-            (runtime) => runtime.id === read.session?.activeDocumentId,
+            (runtime) => runtime.id === restoredActiveId,
         )
-            ? read.session.activeDocumentId
+            ? restoredActiveId
             : (documents.value[0]?.id ?? null);
     }
 
@@ -669,14 +746,29 @@ export function useDocumentSession(desktop: boolean) {
             clearTimeout(sessionWriteTimer);
             sessionWriteTimer = null;
         }
-        for (const runtime of documents.value) await runtime.draft.flush();
-        await persist();
-        for (const runtime of documents.value) releaseDocument(runtime);
+        const noError = Symbol("no-dispose-error");
+        let firstError: unknown | typeof noError = noError;
+        async function attempt(operation: () => Promise<void>) {
+            try {
+                await operation();
+            } catch (error) {
+                if (firstError === noError) firstError = error;
+            }
+        }
+
+        for (const runtime of documents.value) {
+            await attempt(() => runtime.draft.flush());
+        }
+        await attempt(persist);
+        for (const runtime of documents.value) {
+            await attempt(() => releaseDocument(runtime));
+        }
         documents.value = [];
         activeDocumentId.value = null;
         folders.value = [];
         folderIdentities.clear();
         draftKeys.clear();
+        if (firstError !== noError) throw firstError;
     }
 
     return {

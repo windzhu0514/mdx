@@ -17,6 +17,16 @@ const snapshot: DraftSnapshot = {
     updatedAt: "2026-07-20T10:00:00.000Z",
 };
 
+function deferred<T>() {
+    let resolve!: (value: T | PromiseLike<T>) => void;
+    let reject!: (reason?: unknown) => void;
+    const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+        resolve = resolvePromise;
+        reject = rejectPromise;
+    });
+    return { promise, resolve, reject };
+}
+
 describe("draft recovery", () => {
     afterEach(() => vi.useRealTimers());
 
@@ -66,9 +76,101 @@ describe("draft recovery", () => {
             read: vi.fn().mockResolvedValue(snapshot),
             remove: vi.fn().mockResolvedValue(undefined),
         };
-        const recovery = createDraftRecovery(store, () => "draft-key", () => snapshot);
+        const recovery = createDraftRecovery(
+            store,
+            () => "draft-key",
+            () => snapshot,
+        );
 
         await expect(recovery.read("note-a")).resolves.toEqual(snapshot);
         expect(store.read).toHaveBeenCalledWith("note-a");
+    });
+
+    it("flush waits for a draft write already started by the debounce timer", async () => {
+        vi.useFakeTimers();
+        const write = deferred<void>();
+        const store: DraftStore = {
+            write: vi.fn(() => write.promise),
+            read: vi.fn().mockResolvedValue(null),
+            remove: vi.fn().mockResolvedValue(undefined),
+        };
+        const recovery = createDraftRecovery(
+            store,
+            () => "draft-key",
+            () => snapshot,
+            1500,
+        );
+        recovery.schedule();
+        await vi.advanceTimersByTimeAsync(1500);
+        let settled = false;
+
+        const flushing = recovery.flush().then(() => {
+            settled = true;
+        });
+        await Promise.resolve();
+        expect(settled).toBe(false);
+
+        write.resolve();
+        await flushing;
+        expect(settled).toBe(true);
+    });
+
+    it("dispose waits for a draft write already started by the debounce timer", async () => {
+        vi.useFakeTimers();
+        const write = deferred<void>();
+        const store: DraftStore = {
+            write: vi.fn(() => write.promise),
+            read: vi.fn().mockResolvedValue(null),
+            remove: vi.fn().mockResolvedValue(undefined),
+        };
+        const recovery = createDraftRecovery(
+            store,
+            () => "draft-key",
+            () => snapshot,
+            1500,
+        );
+        recovery.schedule();
+        await vi.advanceTimersByTimeAsync(1500);
+        let settled = false;
+
+        const disposing = Promise.resolve(recovery.dispose()).then(() => {
+            settled = true;
+        });
+        await Promise.resolve();
+        expect(settled).toBe(false);
+
+        write.resolve();
+        await disposing;
+        expect(settled).toBe(true);
+    });
+
+    it("starts the pending debounced write after an earlier write settles", async () => {
+        vi.useFakeTimers();
+        const firstWrite = deferred<void>();
+        const store: DraftStore = {
+            write: vi
+                .fn()
+                .mockImplementationOnce(() => firstWrite.promise)
+                .mockResolvedValue(undefined),
+            read: vi.fn().mockResolvedValue(null),
+            remove: vi.fn().mockResolvedValue(undefined),
+        };
+        const recovery = createDraftRecovery(
+            store,
+            () => "draft-key",
+            () => snapshot,
+            1500,
+        );
+
+        recovery.schedule();
+        await vi.advanceTimersByTimeAsync(1500);
+        recovery.schedule();
+        await vi.advanceTimersByTimeAsync(1500);
+        expect(store.write).toHaveBeenCalledTimes(1);
+
+        firstWrite.resolve();
+        for (let index = 0; index < 6; index += 1) await Promise.resolve();
+        expect(store.write).toHaveBeenCalledTimes(2);
+        await recovery.flush();
     });
 });

@@ -45,13 +45,50 @@ export function createDraftRecovery(
 ) {
     let timer: ReturnType<typeof setTimeout> | null = null;
     let pending = false;
+    let inFlight: Promise<void> | null = null;
+    const noWriteError = Symbol("no-write-error");
+    let writeError: unknown | typeof noWriteError = noWriteError;
+
+    function rememberWriteError(error: unknown) {
+        if (writeError === noWriteError) writeError = error;
+    }
+
+    function throwRememberedWriteError() {
+        if (writeError === noWriteError) return;
+        const error = writeError;
+        writeError = noWriteError;
+        throw error;
+    }
+
+    function startWrite() {
+        const key = keyProvider();
+        const snapshot = snapshotProvider();
+        const write = Promise.resolve().then(() => store.write(key, snapshot));
+        const tracked = write
+            .catch((error: unknown) => {
+                rememberWriteError(error);
+                throw error;
+            })
+            .finally(() => {
+                if (inFlight !== tracked) return;
+                inFlight = null;
+                if (pending && timer === null) {
+                    pending = false;
+                    startWrite();
+                }
+            });
+        inFlight = tracked;
+        void tracked.catch(() => undefined);
+    }
 
     function schedule() {
         pending = true;
         if (timer) clearTimeout(timer);
         timer = setTimeout(() => {
             timer = null;
-            void flush();
+            if (!pending || inFlight) return;
+            pending = false;
+            startWrite();
         }, delayMs);
     }
 
@@ -60,9 +97,15 @@ export function createDraftRecovery(
             clearTimeout(timer);
             timer = null;
         }
-        if (!pending) return;
-        pending = false;
-        await store.write(keyProvider(), snapshotProvider());
+        while (pending || inFlight) {
+            if (!inFlight && pending) {
+                pending = false;
+                startWrite();
+            }
+            const currentWrite = inFlight;
+            if (currentWrite) await currentWrite.catch(() => undefined);
+        }
+        throwRememberedWriteError();
     }
 
     async function remove(key = keyProvider()) {
@@ -71,12 +114,23 @@ export function createDraftRecovery(
             clearTimeout(timer);
             timer = null;
         }
-        await store.remove(key);
+        if (inFlight) await inFlight.catch(() => undefined);
+        let removeError: unknown | typeof noWriteError = noWriteError;
+        try {
+            await store.remove(key);
+        } catch (error) {
+            removeError = error;
+        }
+        if (writeError !== noWriteError) throwRememberedWriteError();
+        if (removeError !== noWriteError) throw removeError;
     }
 
-    function dispose() {
+    async function dispose() {
         if (timer) clearTimeout(timer);
         timer = null;
+        pending = false;
+        if (inFlight) await inFlight.catch(() => undefined);
+        throwRememberedWriteError();
     }
 
     return {

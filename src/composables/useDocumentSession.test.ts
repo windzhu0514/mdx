@@ -18,6 +18,8 @@ let workspaceRead: WorkspaceSessionRead;
 const drafts = new Map<string, DraftSnapshot>();
 const diskContents = new Map<string, string>();
 const diskRevisions = new Map<string, number>();
+const draftWriteAttempts: string[] = [];
+let failNextDraftWrite = false;
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 
@@ -92,6 +94,8 @@ describe("document session", () => {
         drafts.clear();
         diskContents.clear();
         diskRevisions.clear();
+        draftWriteAttempts.length = 0;
+        failNextDraftWrite = false;
         Object.defineProperty(URL, "revokeObjectURL", {
             configurable: true,
             value: vi.fn(),
@@ -139,7 +143,12 @@ describe("document session", () => {
                 };
                 const path =
                     command === "save_mdx_as"
-                        ? normalizedPath(String(payload.path))
+                        ? (() => {
+                              const selected = normalizedPath(String(payload.path));
+                              return /\.mdx$/i.test(selected)
+                                  ? selected
+                                  : `${selected}.mdx`;
+                          })()
                         : normalizedPath(String(request.path));
                 return {
                     ...note(path, request.title, request.content),
@@ -175,7 +184,13 @@ describe("document session", () => {
                 return drafts.get(String(payload.key)) ?? null;
             }
             if (command === "write_draft") {
-                drafts.set(String(payload.key), payload.draft as DraftSnapshot);
+                const key = String(payload.key);
+                draftWriteAttempts.push(key);
+                if (failNextDraftWrite) {
+                    failNextDraftWrite = false;
+                    throw new Error("draft write failed");
+                }
+                drafts.set(key, payload.draft as DraftSnapshot);
                 return undefined;
             }
             if (command === "delete_draft") {
@@ -282,6 +297,62 @@ describe("document session", () => {
         );
     });
 
+    it("checks the actual mdx target identity when save-as omits the extension", async () => {
+        const session = useDocumentSession(true);
+        const existing = await session.openMdx("C:\\Notes\\taken.mdx");
+        const untitled = session.newDocument();
+
+        await expect(
+            session.saveAs(untitled.id, "c:\\notes\\TAKEN"),
+        ).rejects.toMatchObject({
+            code: "TARGET_ALREADY_OPEN",
+            documentId: existing.id,
+        });
+        expect(invoke).not.toHaveBeenCalledWith("save_mdx_as", expect.anything());
+    });
+
+    it("deletes the exact restored draft key before switching save-as identity", async () => {
+        workspaceRead = {
+            warning: null,
+            session: {
+                version: 1,
+                documents: [
+                    {
+                        id: "restored-id",
+                        path: "C:\\Notes\\source.mdx",
+                        sourceKind: "mdx",
+                        importSourcePath: null,
+                        draftKey: "exact-restored-key",
+                    },
+                ],
+                folderPaths: [],
+                expandedPaths: [],
+                activeDocumentId: "restored-id",
+                sidebarCollapsed: false,
+                sidebarWidth: 260,
+            },
+        };
+        drafts.set("exact-restored-key", {
+            path: "C:\\Notes\\source.mdx",
+            title: "restored",
+            content: "local",
+            meta: metadata("restored"),
+            newResources: [],
+            updatedAt: "2026-07-31T01:00:00.000Z",
+        });
+        const session = useDocumentSession(true);
+        await session.restore();
+
+        const saved = await session.saveAs("restored-id", "C:\\Notes\\renamed.MDX");
+
+        expect(invoke).toHaveBeenCalledWith("delete_draft", {
+            key: "exact-restored-key",
+        });
+        expect(drafts.has("exact-restored-key")).toBe(false);
+        expect(saved.path).toBe("C:\\Notes\\renamed.MDX");
+        expect(saved.pathIdentity).toBe("c:\\notes\\renamed.mdx");
+    });
+
     it("activates without saving or releasing resources and schedules session persistence", async () => {
         vi.useFakeTimers();
         const session = useDocumentSession(true);
@@ -360,6 +431,84 @@ describe("document session", () => {
         });
     });
 
+    it("rejects an invalid version-one session shape before clearing current state", async () => {
+        const session = useDocumentSession(true);
+        const current = session.newDocument();
+        workspaceRead = {
+            warning: null,
+            session: {
+                version: 1,
+                documents: "not-an-array",
+                folderPaths: [],
+                expandedPaths: [],
+                activeDocumentId: null,
+                sidebarCollapsed: false,
+                sidebarWidth: 260,
+            } as unknown as WorkspaceSessionSnapshot,
+        };
+
+        await expect(session.restore()).resolves.toBeUndefined();
+
+        expect(session.documents.value.map((document) => document.id)).toEqual([
+            current.id,
+        ]);
+        expect(session.activeDocumentId.value).toBe(current.id);
+        expect(session.warnings.value.join(" ")).toContain("工作区会话");
+    });
+
+    it("deduplicates restored document and folder identities while mapping active duplicate", async () => {
+        workspaceRead = {
+            warning: null,
+            session: {
+                version: 1,
+                documents: [
+                    {
+                        id: "first-a",
+                        path: "C:\\Notes\\A.mdx",
+                        sourceKind: "mdx",
+                        importSourcePath: null,
+                        draftKey: "first-a-key",
+                    },
+                    {
+                        id: "duplicate-a",
+                        path: "c:\\notes\\a.mdx",
+                        sourceKind: "mdx",
+                        importSourcePath: null,
+                        draftKey: "duplicate-a-key",
+                    },
+                    {
+                        id: "b",
+                        path: "C:\\Notes\\b.mdx",
+                        sourceKind: "mdx",
+                        importSourcePath: null,
+                        draftKey: "b-key",
+                    },
+                ],
+                folderPaths: ["C:\\Root", "c:\\root", "D:\\Other"],
+                expandedPaths: [],
+                activeDocumentId: "duplicate-a",
+                sidebarCollapsed: false,
+                sidebarWidth: 260,
+            },
+        };
+        const session = useDocumentSession(true);
+
+        await session.restore();
+
+        expect(session.documents.value.map((document) => document.id)).toEqual([
+            "first-a",
+            "b",
+        ]);
+        expect(session.activeDocumentId.value).toBe("first-a");
+        expect(session.folders.value.map((folder) => folder.path)).toEqual([
+            "C:\\Root",
+            "D:\\Other",
+        ]);
+        expect(invoke).not.toHaveBeenCalledWith("read_draft", {
+            key: "duplicate-a-key",
+        });
+    });
+
     it("reloads changed clean documents and marks changed dirty documents conflicted", async () => {
         const session = useDocumentSession(true);
         const clean = await session.openMdx("C:\\Notes\\clean.mdx");
@@ -391,6 +540,31 @@ describe("document session", () => {
             expect.objectContaining({ name: "assets/a.png", base64: "YQ==" }),
         ]);
         expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:a");
+    });
+
+    it("continues disposal after one draft flush fails and rethrows after cleanup", async () => {
+        const session = useDocumentSession(true);
+        const first = session.newDocument();
+        const second = session.newDocument();
+        first.resources.registerNew(pendingImage);
+        second.resources.registerNew({
+            ...pendingImage,
+            path: "assets/b.png",
+            originalName: "b.png",
+            objectUrl: "blob:b",
+        });
+        session.updateContent(first.id, "![a](blob:a)");
+        session.updateContent(second.id, "![b](blob:b)");
+        failNextDraftWrite = true;
+
+        await expect(session.dispose()).rejects.toThrow("draft write failed");
+
+        expect(draftWriteAttempts).toHaveLength(2);
+        expect(invoke).toHaveBeenCalledWith("write_workspace_session", expect.anything());
+        expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:a");
+        expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:b");
+        expect(session.documents.value).toEqual([]);
+        expect(session.activeDocumentId.value).toBeNull();
     });
 
     it("does not invoke Tauri for web-only session lifecycle", async () => {
