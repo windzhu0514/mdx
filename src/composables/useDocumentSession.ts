@@ -87,17 +87,24 @@ function isWorkspaceSessionSnapshot(value: unknown): value is WorkspaceSessionSn
         return false;
     }
 
-    return value.documents.every(
-        (document) =>
-            isRecord(document) &&
-            typeof document.id === "string" &&
-            isNullableString(document.path) &&
-            (document.sourceKind === "mdx" ||
-                document.sourceKind === "markdown-import" ||
-                document.sourceKind === "untitled") &&
-            isNullableString(document.importSourcePath) &&
-            typeof document.draftKey === "string",
-    );
+    const documentIds = new Set<string>();
+    for (const document of value.documents) {
+        if (
+            !isRecord(document) ||
+            typeof document.id !== "string" ||
+            documentIds.has(document.id) ||
+            !isNullableString(document.path) ||
+            (document.sourceKind !== "mdx" &&
+                document.sourceKind !== "markdown-import" &&
+                document.sourceKind !== "untitled") ||
+            !isNullableString(document.importSourcePath) ||
+            typeof document.draftKey !== "string"
+        ) {
+            return false;
+        }
+        documentIds.add(document.id);
+    }
+    return true;
 }
 
 function isWorkspaceSessionRead(value: unknown): value is WorkspaceSessionRead {
@@ -121,6 +128,9 @@ export function useDocumentSession(desktop: boolean) {
     let nextDocumentId = 1;
     let nextUntitledNumber = 1;
     let sessionWriteTimer: ReturnType<typeof setTimeout> | null = null;
+    let sessionWriteTail: Promise<void> = Promise.resolve();
+    const noSessionWriteError = Symbol("no-session-write-error");
+    let sessionWriteError: unknown | typeof noSessionWriteError = noSessionWriteError;
 
     const draftStore: DraftStore = desktop
         ? {
@@ -200,6 +210,25 @@ export function useDocumentSession(desktop: boolean) {
         return documents.value.find((item) => item.pathIdentity === identity);
     }
 
+    function enqueueSessionWrite(session: WorkspaceSessionSnapshot) {
+        const write = sessionWriteTail.then(() =>
+            invoke<void>("write_workspace_session", { session }),
+        );
+        sessionWriteTail = write.catch((error: unknown) => {
+            if (sessionWriteError === noSessionWriteError) {
+                sessionWriteError = error;
+            }
+        });
+        return write;
+    }
+
+    function takeSessionWriteError() {
+        if (sessionWriteError === noSessionWriteError) return noSessionWriteError;
+        const error = sessionWriteError;
+        sessionWriteError = noSessionWriteError;
+        return error;
+    }
+
     async function persist() {
         if (!desktop) return;
         if (sessionWriteTimer) {
@@ -223,7 +252,7 @@ export function useDocumentSession(desktop: boolean) {
             sidebarCollapsed: collapsed.value,
             sidebarWidth: width.value,
         };
-        await invoke("write_workspace_session", { session });
+        await enqueueSessionWrite(session);
     }
 
     function scheduleSessionWrite() {
@@ -768,6 +797,10 @@ export function useDocumentSession(desktop: boolean) {
         folders.value = [];
         folderIdentities.clear();
         draftKeys.clear();
+        const sessionError = takeSessionWriteError();
+        if (firstError === noError && sessionError !== noSessionWriteError) {
+            firstError = sessionError;
+        }
         if (firstError !== noError) throw firstError;
     }
 

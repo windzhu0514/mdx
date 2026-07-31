@@ -20,8 +20,21 @@ const diskContents = new Map<string, string>();
 const diskRevisions = new Map<string, number>();
 const draftWriteAttempts: string[] = [];
 let failNextDraftWrite = false;
+const workspaceWriteSnapshots: WorkspaceSessionSnapshot[] = [];
+let workspaceWriteHandler:
+    ((snapshot: WorkspaceSessionSnapshot) => Promise<void>) | null = null;
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
+
+function deferred<T>() {
+    let resolve!: (value: T | PromiseLike<T>) => void;
+    let reject!: (reason?: unknown) => void;
+    const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+        resolve = resolvePromise;
+        reject = rejectPromise;
+    });
+    return { promise, resolve, reject };
+}
 
 function metadata(title: string, id = title): MdxMetadata {
     return {
@@ -96,6 +109,8 @@ describe("document session", () => {
         diskRevisions.clear();
         draftWriteAttempts.length = 0;
         failNextDraftWrite = false;
+        workspaceWriteSnapshots.length = 0;
+        workspaceWriteHandler = null;
         Object.defineProperty(URL, "revokeObjectURL", {
             configurable: true,
             value: vi.fn(),
@@ -198,6 +213,9 @@ describe("document session", () => {
                 return undefined;
             }
             if (command === "write_workspace_session") {
+                const snapshot = payload.session as WorkspaceSessionSnapshot;
+                workspaceWriteSnapshots.push(snapshot);
+                if (workspaceWriteHandler) await workspaceWriteHandler(snapshot);
                 return undefined;
             }
             throw new Error(`Unexpected command: ${command}`);
@@ -380,6 +398,72 @@ describe("document session", () => {
         );
     });
 
+    it("serializes an in-flight scheduled session write before the final dispose snapshot", async () => {
+        vi.useFakeTimers();
+        const firstWrite = deferred<void>();
+        const finalWrite = deferred<void>();
+        let writeNumber = 0;
+        workspaceWriteHandler = async () => {
+            writeNumber += 1;
+            return writeNumber === 1 ? firstWrite.promise : finalWrite.promise;
+        };
+        const session = useDocumentSession(true);
+        const first = session.newDocument();
+        await vi.advanceTimersByTimeAsync(150);
+        const second = session.newDocument();
+        let disposed = false;
+
+        const disposing = session.dispose().then(() => {
+            disposed = true;
+        });
+        for (let index = 0; index < 8; index += 1) await Promise.resolve();
+        expect(workspaceWriteSnapshots).toHaveLength(1);
+        expect(workspaceWriteSnapshots[0].documents.map((item) => item.id)).toEqual([
+            first.id,
+        ]);
+
+        firstWrite.resolve();
+        for (let index = 0; index < 6; index += 1) await Promise.resolve();
+        expect(workspaceWriteSnapshots).toHaveLength(2);
+        expect(workspaceWriteSnapshots[1].documents.map((item) => item.id)).toEqual([
+            first.id,
+            second.id,
+        ]);
+        expect(disposed).toBe(false);
+
+        finalWrite.resolve();
+        await disposing;
+        await vi.runAllTimersAsync();
+        expect(disposed).toBe(true);
+        expect(workspaceWriteSnapshots).toHaveLength(2);
+    });
+
+    it("cleans up and rethrows a scheduled session write failure after the final write", async () => {
+        vi.useFakeTimers();
+        const firstWrite = deferred<void>();
+        let writeNumber = 0;
+        workspaceWriteHandler = async () => {
+            writeNumber += 1;
+            if (writeNumber === 1) return firstWrite.promise;
+        };
+        const session = useDocumentSession(true);
+        const first = session.newDocument();
+        first.resources.registerNew(pendingImage);
+        await vi.advanceTimersByTimeAsync(150);
+        session.newDocument();
+
+        const disposing = session.dispose();
+        firstWrite.reject(new Error("session write failed"));
+
+        await expect(disposing).rejects.toThrow("session write failed");
+        expect(workspaceWriteSnapshots).toHaveLength(2);
+        expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:a");
+        expect(session.documents.value).toEqual([]);
+        expect(session.activeDocumentId.value).toBeNull();
+        await vi.runAllTimersAsync();
+        expect(workspaceWriteSnapshots).toHaveLength(2);
+    });
+
     it("restores documents independently and reads drafts by their exact session keys", async () => {
         const snapshot: WorkspaceSessionSnapshot = {
             version: 1,
@@ -454,6 +538,47 @@ describe("document session", () => {
         ]);
         expect(session.activeDocumentId.value).toBe(current.id);
         expect(session.warnings.value.join(" ")).toContain("工作区会话");
+    });
+
+    it("rejects duplicate restored document ids before clearing current state", async () => {
+        const session = useDocumentSession(true);
+        const current = session.newDocument();
+        workspaceRead = {
+            warning: null,
+            session: {
+                version: 1,
+                documents: [
+                    {
+                        id: "duplicate-id",
+                        path: "C:\\Notes\\a.mdx",
+                        sourceKind: "mdx",
+                        importSourcePath: null,
+                        draftKey: "a-key",
+                    },
+                    {
+                        id: "duplicate-id",
+                        path: "C:\\Notes\\b.mdx",
+                        sourceKind: "mdx",
+                        importSourcePath: null,
+                        draftKey: "b-key",
+                    },
+                ],
+                folderPaths: [],
+                expandedPaths: [],
+                activeDocumentId: "duplicate-id",
+                sidebarCollapsed: false,
+                sidebarWidth: 260,
+            },
+        };
+
+        await expect(session.restore()).resolves.toBeUndefined();
+
+        expect(session.documents.value.map((document) => document.id)).toEqual([
+            current.id,
+        ]);
+        expect(session.activeDocumentId.value).toBe(current.id);
+        expect(session.warnings.value.join(" ")).toContain("工作区会话");
+        expect(invoke).not.toHaveBeenCalledWith("open_mdx", expect.anything());
     });
 
     it("deduplicates restored document and folder identities while mapping active duplicate", async () => {
