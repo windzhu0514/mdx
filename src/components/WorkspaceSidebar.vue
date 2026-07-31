@@ -186,6 +186,9 @@ const activeRovingKey = computed(
             ? rovingKey.value
             : rows.value[0]?.key ?? null,
 );
+const currentActionRow = computed(
+    () => rows.value.find((row) => row.key === activeRovingKey.value) ?? null,
+);
 
 function rowTabindex(row: TreeRow) {
     return row.key === activeRovingKey.value ? 0 : -1;
@@ -201,6 +204,11 @@ function activateRow(row: TreeRow) {
         return;
     }
     emit("open-path", row.path);
+}
+
+function selectRow(row: TreeRow) {
+    rovingKey.value = row.key;
+    activateRow(row);
 }
 
 function focusRow(index: number) {
@@ -251,9 +259,10 @@ function onTreeKeydown(event: KeyboardEvent) {
         }
     } else if (event.key === "ArrowLeft") {
         event.preventDefault();
-        if (row.depth === 1) return;
         if (row.expanded) {
             emit("toggle-expanded", row.path);
+        } else if (row.depth === 1) {
+            return;
         } else {
             for (let parentIndex = index - 1; parentIndex >= 0; parentIndex -= 1) {
                 if (rows.value[parentIndex].depth < row.depth) {
@@ -375,24 +384,13 @@ function onPointerUp(event: PointerEvent) {
                         :aria-level="row.depth"
                         :aria-current="row.active ? 'page' : undefined"
                         :tabindex="rowTabindex(row)"
-                        @click="activateRow(row)"
+                        @click="selectRow(row)"
                         @focus="rovingKey = row.key"
                     >
                         <span class="workspace-name">{{ row.label }}</span>
                         <span v-for="status in row.statuses" :key="status" class="workspace-status">
                             {{ status }}
                         </span>
-                    </div>
-                    <div class="workspace-row-actions">
-                        <button
-                            type="button"
-                            class="workspace-row-action"
-                            :aria-label="`关闭 ${row.label}`"
-                            title="关闭文件"
-                            @click="row.documentId && emit('close-document', row.documentId)"
-                        >
-                            ×
-                        </button>
                     </div>
                 </div>
             </section>
@@ -417,7 +415,7 @@ function onPointerUp(event: PointerEvent) {
                         :aria-current="row.active ? 'page' : undefined"
                         :tabindex="rowTabindex(row)"
                         :style="{ paddingInlineStart: `${8 + (row.depth - 1) * 14}px` }"
-                        @click="activateRow(row)"
+                        @click="selectRow(row)"
                         @focus="rovingKey = row.key"
                     >
                         <span v-if="row.expanded !== null" class="workspace-disclosure">
@@ -428,40 +426,46 @@ function onPointerUp(event: PointerEvent) {
                             {{ status }}
                         </span>
                     </div>
-                    <div v-if="row.kind === 'folder' || row.documentId" class="workspace-row-actions">
-                        <template v-if="row.kind === 'folder'">
-                        <button
-                            type="button"
-                            class="workspace-row-action"
-                            :aria-label="`刷新 ${row.label}`"
-                            title="刷新文件夹"
-                            @click="row.folderPath && emit('refresh-folder', row.folderPath)"
-                        >
-                            ↻
-                        </button>
-                        <button
-                            type="button"
-                            class="workspace-row-action"
-                            :aria-label="`关闭文件夹 ${row.label}`"
-                            title="关闭文件夹"
-                            @click="row.folderPath && emit('close-folder', row.folderPath)"
-                        >
-                            ×
-                        </button>
-                        </template>
-                        <button
-                        v-if="row.documentId"
-                        type="button"
-                        class="workspace-row-action"
-                        :aria-label="`关闭 ${row.label}`"
-                        title="关闭文件"
-                        @click="emit('close-document', row.documentId)"
-                    >
-                        ×
-                        </button>
-                    </div>
                 </div>
             </section>
+        </div>
+        <div
+            v-if="currentActionRow?.kind === 'folder' || currentActionRow?.documentId"
+            class="workspace-action-toolbar"
+            role="toolbar"
+            :aria-label="`${currentActionRow?.label ?? '当前项'} 操作`"
+        >
+            <span class="workspace-action-label">{{ currentActionRow?.label }}</span>
+            <template v-if="currentActionRow?.kind === 'folder'">
+                <button
+                    type="button"
+                    class="workspace-row-action"
+                    :aria-label="`刷新 ${currentActionRow.label}`"
+                    title="刷新文件夹"
+                    @click="currentActionRow.folderPath && emit('refresh-folder', currentActionRow.folderPath)"
+                >
+                    ↻
+                </button>
+                <button
+                    type="button"
+                    class="workspace-row-action"
+                    :aria-label="`关闭文件夹 ${currentActionRow.label}`"
+                    title="关闭文件夹"
+                    @click="currentActionRow.folderPath && emit('close-folder', currentActionRow.folderPath)"
+                >
+                    ×
+                </button>
+            </template>
+            <button
+                v-else-if="currentActionRow?.documentId"
+                type="button"
+                class="workspace-row-action"
+                :aria-label="`关闭 ${currentActionRow.label}`"
+                title="关闭文件"
+                @click="emit('close-document', currentActionRow.documentId)"
+            >
+                ×
+            </button>
         </div>
         <div
             class="workspace-resize-handle"

@@ -313,7 +313,15 @@ describe("WorkspaceSidebar", () => {
         dispatchKey(rootItem, "ArrowLeft");
         await nextTick();
         expect(document.activeElement).toBe(rootItem);
-        expect(sidebar.emitted("toggle-expanded")).toEqual([[directoryPath]]);
+        expect(sidebar.emitted("toggle-expanded")).toEqual([[directoryPath], [root]]);
+
+        const collapsedRoot = mountSidebar({ folders: [folder(root)] });
+        const collapsedRootItem = treeItem(collapsedRoot, "folder:c:\\root");
+        collapsedRootItem.focus();
+        dispatchKey(collapsedRootItem, "ArrowLeft");
+        await nextTick();
+        expect(document.activeElement).toBe(collapsedRootItem);
+        expect(collapsedRoot.emitted("toggle-expanded")).toBeUndefined();
     });
 
     it("keeps close and refresh actions outside the tree key handler", async () => {
@@ -323,9 +331,13 @@ describe("WorkspaceSidebar", () => {
             documents: [documentItem(documentPath)],
             folders: [folder(root)],
         });
-        const close = sidebar.host.querySelector<HTMLButtonElement>('[aria-label="关闭 outside.mdx"]');
-        const refresh = sidebar.host.querySelector<HTMLButtonElement>('[aria-label="刷新 Root"]');
-        if (!close || !refresh) throw new Error("未找到侧栏操作按钮");
+        const tree = sidebar.host.querySelector<HTMLElement>("[role=tree]");
+        const toolbar = sidebar.host.querySelector<HTMLElement>(".workspace-action-toolbar");
+        expect(tree?.querySelectorAll("button")).toHaveLength(0);
+        expect(toolbar).not.toBeNull();
+        expect(tree?.contains(toolbar)).toBe(false);
+        const close = toolbar?.querySelector<HTMLButtonElement>('[aria-label="关闭 outside.mdx"]');
+        if (!close) throw new Error("未找到文档关闭操作");
 
         close.focus();
         dispatchKey(close, "Enter");
@@ -335,6 +347,10 @@ describe("WorkspaceSidebar", () => {
         close.click();
         expect(sidebar.emitted("close-document")).toEqual([[documentPath]]);
 
+        treeItem(sidebar, "folder:c:\\root").focus();
+        await nextTick();
+        const refresh = toolbar?.querySelector<HTMLButtonElement>('[aria-label="刷新 Root"]');
+        if (!refresh) throw new Error("未找到文件夹刷新操作");
         refresh.focus();
         dispatchKey(refresh, " ");
         await nextTick();
