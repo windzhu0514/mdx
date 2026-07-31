@@ -1,8 +1,12 @@
 import type { PendingResource, ResourceSaveData } from "../types/mdx";
 import { toDisplayMarkdown, toPersistedMarkdown } from "../utils/resourcePaths";
+import { base64ToBlob } from "../utils/base64";
 import { ref } from "vue";
 
 export type ResourceSession = ReturnType<typeof createResourceSession>;
+export type ResourceSessionSnapshot = {
+    newResources: ResourceSaveData[];
+};
 
 export function createResourceSession() {
     const resources = new Map<string, PendingResource>();
@@ -59,6 +63,27 @@ export function createResourceSession() {
         }
     }
 
+    function snapshot(): ResourceSessionSnapshot {
+        return { newResources: newResources() };
+    }
+
+    function restore(state: ResourceSessionSnapshot) {
+        for (const resource of state.newResources) {
+            registerNew({
+                path: resource.name,
+                originalName: resource.originalName,
+                mimeType: resource.mimeType,
+                size: resource.size,
+                base64: resource.base64,
+                objectUrl: URL.createObjectURL(
+                    base64ToBlob(resource.base64, resource.mimeType),
+                ),
+                kind: resource.kind,
+                isNew: true,
+            });
+        }
+    }
+
     function clear() {
         for (const resource of resources.values()) {
             URL.revokeObjectURL(resource.objectUrl);
@@ -75,6 +100,8 @@ export function createResourceSession() {
         persistedMarkdown,
         newResources,
         markSaved,
+        snapshot,
+        restore,
         clear,
     };
 }

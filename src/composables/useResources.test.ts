@@ -23,6 +23,10 @@ describe("resource session", () => {
             configurable: true,
             value: vi.fn(),
         });
+        Object.defineProperty(URL, "createObjectURL", {
+            configurable: true,
+            value: vi.fn(() => "blob:restored"),
+        });
     });
 
     it("clears and revokes every object URL", () => {
@@ -63,14 +67,40 @@ describe("resource session", () => {
 
     it("invalidates a computed display projection when only the URL mapping changes", () => {
         const session = createResourceSession();
-        const display = computed(() =>
-            session.displayMarkdown("![图](assets/a.png)"),
-        );
+        const display = computed(() => session.displayMarkdown("![图](assets/a.png)"));
         session.registerLoaded({ ...newImage, isNew: false });
         expect(display.value).toBe("![图](blob:a)");
 
         session.registerLoaded({ ...newImage, objectUrl: "blob:b", isNew: false });
 
         expect(display.value).toBe("![图](blob:b)");
+    });
+
+    it("snapshots and restores pending resources without clearing blob URLs", () => {
+        const source = createResourceSession();
+        source.registerNew(newImage);
+        const snapshot = source.snapshot();
+        const restored = createResourceSession();
+
+        restored.restore(snapshot);
+
+        expect(snapshot.newResources).toEqual([
+            {
+                name: "assets/a.png",
+                originalName: "a.png",
+                mimeType: "image/png",
+                size: 1,
+                kind: "asset",
+                base64: "YQ==",
+            },
+        ]);
+        expect(restored.objectUrls().get("assets/a.png")).toBe("blob:restored");
+        expect(restored.persistedMarkdown("![图](blob:restored)")).toBe(
+            "![图](assets/a.png)",
+        );
+        expect(URL.revokeObjectURL).not.toHaveBeenCalled();
+
+        restored.clear();
+        expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:restored");
     });
 });
