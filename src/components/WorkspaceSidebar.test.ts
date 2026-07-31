@@ -8,11 +8,16 @@ import type { OpenDocument } from "../composables/useDocumentSession";
 import type { WorkspaceFolder, WorkspaceTreeEntry } from "../types/workspace";
 
 let cleanup: (() => void) | undefined;
+const originalMatchMedia = window.matchMedia;
 
 afterEach(() => {
     cleanup?.();
     cleanup = undefined;
     document.body.innerHTML = "";
+    Object.defineProperty(window, "matchMedia", {
+        configurable: true,
+        value: originalMatchMedia,
+    });
 });
 
 function documentItem(path: string, overrides: Partial<OpenDocument> = {}): OpenDocument {
@@ -51,6 +56,16 @@ function file(path: string): WorkspaceTreeEntry {
         name: segments[segments.length - 1] ?? path,
         kind: path.endsWith(".mdx") ? "mdx" : "md",
         children: [],
+    };
+}
+
+function directory(path: string, children: WorkspaceTreeEntry[] = []): WorkspaceTreeEntry {
+    const segments = path.split(/[\\/]/u);
+    return {
+        path,
+        name: segments[segments.length - 1] ?? path,
+        kind: "directory",
+        children,
     };
 }
 
@@ -130,6 +145,40 @@ function pointerEvent(type: string, pointerId: number, clientX: number) {
     return event;
 }
 
+function treeItem(sidebar: ReturnType<typeof mountSidebar>, key: string) {
+    const item = Array.from(sidebar.host.querySelectorAll<HTMLElement>("[role=treeitem]")).find(
+        (element) => element.dataset.treeKey === key,
+    );
+    if (!item) throw new Error(`未找到树项 ${key}`);
+    return item;
+}
+
+function dispatchKey(element: HTMLElement, key: string) {
+    element.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key }));
+}
+
+function installMatchMedia(initialMatches: boolean) {
+    const listeners = new Set<(event: MediaQueryListEvent) => void>();
+    const query = {
+        matches: initialMatches,
+        addEventListener: (_type: string, listener: (event: MediaQueryListEvent) => void) =>
+            listeners.add(listener),
+        removeEventListener: (_type: string, listener: (event: MediaQueryListEvent) => void) =>
+            listeners.delete(listener),
+    };
+    Object.defineProperty(window, "matchMedia", {
+        configurable: true,
+        value: () => query,
+    });
+    return {
+        setMatches(matches: boolean) {
+            query.matches = matches;
+            const event = { matches } as MediaQueryListEvent;
+            listeners.forEach((listener) => listener(event));
+        },
+    };
+}
+
 describe("WorkspaceSidebar", () => {
     it("shows independent files separately and places folder-owned files only in the tree", () => {
         const sidebar = mountSidebar({
@@ -202,5 +251,125 @@ describe("WorkspaceSidebar", () => {
         await nextTick();
         const collapsedWidths = sidebar.emitted("update:width") ?? [];
         expect(collapsedWidths[collapsedWidths.length - 1]).toEqual([180]);
+    });
+
+    it("opens and closes the sidebar locally at narrow widths without changing desktop collapse", async () => {
+        const viewport = installMatchMedia(true);
+        const sidebar = mountSidebar();
+        await nextTick();
+
+        expect(sidebar.host.querySelector(".workspace-sidebar")).toBeNull();
+        const toggle = sidebar.host.querySelector<HTMLButtonElement>(".workspace-sidebar-toggle");
+        if (!toggle) throw new Error("未找到工作区侧栏切换按钮");
+        toggle.click();
+        await nextTick();
+        expect(sidebar.host.querySelector(".workspace-sidebar")).not.toBeNull();
+
+        sidebar.host
+            .querySelector<HTMLButtonElement>('[aria-label="收起工作区侧栏"]')
+            ?.click();
+        await nextTick();
+        expect(sidebar.host.querySelector(".workspace-sidebar")).toBeNull();
+        expect(sidebar.emitted("update:collapsed")).toBeUndefined();
+
+        viewport.setMatches(false);
+        await nextTick();
+        expect(sidebar.host.querySelector(".workspace-sidebar")).not.toBeNull();
+    });
+
+    it("moves ArrowLeft from leaves and collapsed directories to the parent, but leaves roots unchanged", async () => {
+        const root = "C:\\Root";
+        const directoryPath = "C:\\Root\\Folder";
+        const leafPath = "C:\\Root\\Folder\\note.mdx";
+        const sidebar = mountSidebar({
+            folders: [folder(root, [directory(directoryPath, [file(leafPath)])])],
+            expandedPaths: [root, directoryPath],
+        });
+        const rootItem = treeItem(sidebar, "folder:c:\\root");
+        const directoryItem = treeItem(sidebar, "directory:c:\\root\\folder");
+        const leafItem = treeItem(sidebar, "file:c:\\root\\folder\\note.mdx");
+
+        leafItem.focus();
+        dispatchKey(leafItem, "ArrowLeft");
+        await nextTick();
+        expect(document.activeElement).toBe(directoryItem);
+
+        directoryItem.focus();
+        dispatchKey(directoryItem, "ArrowLeft");
+        await nextTick();
+        expect(sidebar.emitted("toggle-expanded")).toEqual([[directoryPath]]);
+
+        const collapsed = mountSidebar({
+            folders: [folder(root, [directory(directoryPath)])],
+            expandedPaths: [root],
+        });
+        const collapsedDirectory = treeItem(collapsed, "directory:c:\\root\\folder");
+        collapsedDirectory.focus();
+        dispatchKey(collapsedDirectory, "ArrowLeft");
+        await nextTick();
+        expect(document.activeElement).toBe(treeItem(collapsed, "folder:c:\\root"));
+
+        rootItem.focus();
+        dispatchKey(rootItem, "ArrowLeft");
+        await nextTick();
+        expect(document.activeElement).toBe(rootItem);
+        expect(sidebar.emitted("toggle-expanded")).toEqual([[directoryPath]]);
+    });
+
+    it("keeps close and refresh actions outside the tree key handler", async () => {
+        const documentPath = "C:\\Other\\outside.mdx";
+        const root = "C:\\Root";
+        const sidebar = mountSidebar({
+            documents: [documentItem(documentPath)],
+            folders: [folder(root)],
+        });
+        const close = sidebar.host.querySelector<HTMLButtonElement>('[aria-label="关闭 outside.mdx"]');
+        const refresh = sidebar.host.querySelector<HTMLButtonElement>('[aria-label="刷新 Root"]');
+        if (!close || !refresh) throw new Error("未找到侧栏操作按钮");
+
+        close.focus();
+        dispatchKey(close, "Enter");
+        await nextTick();
+        expect(document.activeElement).toBe(close);
+        expect(sidebar.emitted("activate")).toBeUndefined();
+        close.click();
+        expect(sidebar.emitted("close-document")).toEqual([[documentPath]]);
+
+        refresh.focus();
+        dispatchKey(refresh, " ");
+        await nextTick();
+        expect(document.activeElement).toBe(refresh);
+        expect(sidebar.emitted("toggle-expanded")).toBeUndefined();
+        refresh.click();
+        expect(sidebar.emitted("refresh-folder")).toEqual([[root]]);
+    });
+
+    it("normalizes root identity before choosing an owner and rendering folders", () => {
+        const root = "C:\\Root";
+        const specific = "c:/ROOT/Specific/";
+        const parentFile = "C:\\Root\\keep.mdx";
+        const childFile = "C:\\Root\\Specific\\note.mdx";
+        const sidebar = mountSidebar({
+            documents: [documentItem(parentFile), documentItem(childFile)],
+            folders: [
+                folder(root, [file(parentFile), file(childFile)]),
+                folder("c:/root/", [file(parentFile)]),
+                folder(specific, [file(childFile)]),
+                folder("C:\\ROOT\\SPECIFIC", [file(childFile)]),
+            ],
+            expandedPaths: [root, specific],
+        });
+
+        expect(
+            owningRoot(childFile, ["C:/ROOT/", specific, "C:\\ROOT\\SPECIFIC"]),
+        ).toBe(specific);
+        const folderKeys = Array.from(
+            sidebar.host.querySelectorAll<HTMLElement>("[data-tree-key]"),
+            (element) => element.dataset.treeKey,
+        );
+        expect(folderKeys.filter((key) => key === "folder:c:\\root")).toHaveLength(1);
+        expect(folderKeys.filter((key) => key === "folder:c:\\root\\specific")).toHaveLength(1);
+        expect(sidebar.host.textContent?.match(/keep\.mdx/gu)).toHaveLength(1);
+        expect(sidebar.host.textContent?.match(/note\.mdx/gu)).toHaveLength(1);
     });
 });

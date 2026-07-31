@@ -80,6 +80,15 @@ summary {
     overflow: visible;
 }
 
+.workspace-sidebar.is-compact {
+    position: absolute;
+    z-index: 50;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    box-shadow: var(--shadow-lg);
+}
+
 .workspace-sidebar-header {
     min-height: 34px;
     padding: 6px 8px 6px 12px;
@@ -119,6 +128,14 @@ summary {
 
 .workspace-tree-row {
     min-height: 28px;
+    display: flex;
+    align-items: center;
+}
+
+.workspace-tree-item {
+    min-width: 0;
+    min-height: 28px;
+    flex: 1;
     padding: 4px 6px 4px 12px;
     display: flex;
     align-items: center;
@@ -129,12 +146,12 @@ summary {
     outline: none;
 }
 
-.workspace-tree-row:hover,
-.workspace-tree-row:focus-visible {
+.workspace-tree-item:hover,
+.workspace-tree-item:focus-visible {
     background: var(--color-primary-light);
 }
 
-.workspace-tree-row.active {
+.workspace-tree-item.active {
     color: var(--color-primary);
     background: rgba(59, 130, 246, 0.1);
 }
@@ -175,6 +192,13 @@ summary {
     background: transparent;
     color: var(--color-text-muted);
     cursor: pointer;
+}
+
+.workspace-row-actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding-right: 6px;
 }
 
 .workspace-row-action:hover {
@@ -218,18 +242,8 @@ summary {
     box-shadow: var(--shadow-sm);
 }
 
-.workspace-sidebar-toggle.is-collapsed {
+.workspace-sidebar-toggle.is-visible {
     display: flex;
-}
-
-@media (max-width: 980px) {
-    .workspace-sidebar {
-        display: none;
-    }
-
-    .workspace-sidebar-toggle {
-        display: flex;
-    }
 }
 
 /* Sidebar TOC */

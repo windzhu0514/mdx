@@ -3,9 +3,8 @@ function normalizePath(path: string) {
     return path.replace(/\//gu, "\\").replace(/\\+$/u, "").toLowerCase();
 }
 
-function isPathInside(path: string, root: string) {
+function isPathInside(path: string, normalizedRoot: string) {
     const normalizedPath = normalizePath(path);
-    const normalizedRoot = normalizePath(root);
     return (
         normalizedPath === normalizedRoot ||
         normalizedPath.startsWith(`${normalizedRoot}\\`)
@@ -13,16 +12,19 @@ function isPathInside(path: string, root: string) {
 }
 
 export function owningRoot(path: string, roots: string[]) {
-    return (
-        roots
-            .filter((root) => isPathInside(path, root))
-            .sort((left, right) => right.length - left.length)[0] ?? null
-    );
+    const rootsByIdentity = new Map<string, string>();
+    for (const root of roots) {
+        const identity = normalizePath(root);
+        if (!rootsByIdentity.has(identity)) rootsByIdentity.set(identity, root);
+    }
+    return [...rootsByIdentity]
+        .filter(([identity]) => isPathInside(path, identity))
+        .sort(([left], [right]) => right.length - left.length)[0]?.[1] ?? null;
 }
 </script>
 
 <script setup lang="ts">
-import { computed, ref, type ComponentPublicInstance } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, type ComponentPublicInstance } from "vue";
 
 import type { OpenDocument } from "../composables/useDocumentSession";
 import type { WorkspaceFolder, WorkspaceTreeEntry } from "../types/workspace";
@@ -66,6 +68,9 @@ const emit = defineEmits<{
 const rovingKey = ref<string | null>(null);
 const drag = ref<{ pointerId: number; startX: number; startWidth: number } | null>(null);
 const treeItems = new Map<string, HTMLElement>();
+const compact = ref(false);
+const compactOpen = ref(false);
+let compactMedia: MediaQueryList | null = null;
 
 function clampWidth(value: number) {
     return Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, value));
@@ -92,7 +97,16 @@ function isExpanded(path: string) {
     return props.expandedPaths.some((item) => normalizePath(item) === target);
 }
 
-const roots = computed(() => props.folders.map((folder) => folder.path));
+const visibleFolders = computed(() => {
+    const foldersByIdentity = new Map<string, WorkspaceFolder>();
+    for (const folder of props.folders) {
+        const identity = normalizePath(folder.path);
+        if (!foldersByIdentity.has(identity)) foldersByIdentity.set(identity, folder);
+    }
+    return [...foldersByIdentity.values()];
+});
+
+const roots = computed(() => visibleFolders.value.map((folder) => folder.path));
 
 const documentsByPath = computed(() => {
     const result = new Map<string, OpenDocument>();
@@ -146,7 +160,7 @@ function entryRows(entries: WorkspaceTreeEntry[], depth: number, root: string): 
 
 const folderRows = computed<TreeRow[]>(() => {
     const rows: TreeRow[] = [];
-    for (const folder of props.folders) {
+    for (const folder of visibleFolders.value) {
         const expanded = isExpanded(folder.path);
         rows.push({
             key: `folder:${normalizePath(folder.path)}`,
@@ -206,9 +220,14 @@ function setTreeItem(key: string, element: Element | ComponentPublicInstance | n
 
 function rowIndex(event: KeyboardEvent) {
     const source = event.target;
-    if (!(source instanceof Element)) return rows.value.findIndex((row) => row.key === activeRovingKey.value);
-    const key = source.closest<HTMLElement>("[data-tree-key]")?.dataset.treeKey;
-    return rows.value.findIndex((row) => row.key === key || row.key === activeRovingKey.value);
+    const tree = event.currentTarget;
+    if (!(source instanceof Element) || !(tree instanceof HTMLElement)) return -1;
+    if (source === tree) {
+        return rows.value.findIndex((row) => row.key === activeRovingKey.value);
+    }
+    const item = source.closest<HTMLElement>("[role=treeitem]");
+    if (!item || !tree.contains(item)) return -1;
+    return rows.value.findIndex((row) => row.key === item.dataset.treeKey);
 }
 
 function onTreeKeydown(event: KeyboardEvent) {
@@ -230,8 +249,9 @@ function onTreeKeydown(event: KeyboardEvent) {
             const child = rows.value[index + 1];
             if (child?.depth === row.depth + 1) focusRow(index + 1);
         }
-    } else if (event.key === "ArrowLeft" && row.expanded !== null) {
+    } else if (event.key === "ArrowLeft") {
         event.preventDefault();
+        if (row.depth === 1) return;
         if (row.expanded) {
             emit("toggle-expanded", row.path);
         } else {
@@ -252,6 +272,40 @@ function onTreeKeydown(event: KeyboardEvent) {
         event.preventDefault();
         activateRow(row);
     }
+}
+
+function syncCompact(event: MediaQueryListEvent | MediaQueryList) {
+    compact.value = event.matches;
+    if (!event.matches) compactOpen.value = false;
+}
+
+onMounted(() => {
+    if (typeof window.matchMedia !== "function") return;
+    compactMedia = window.matchMedia("(max-width: 980px)");
+    syncCompact(compactMedia);
+    compactMedia.addEventListener("change", syncCompact);
+});
+
+onBeforeUnmount(() => {
+    compactMedia?.removeEventListener("change", syncCompact);
+});
+
+const sidebarVisible = computed(
+    () => !props.collapsed && (!compact.value || compactOpen.value),
+);
+const toggleVisible = computed(() => props.collapsed || compact.value);
+
+function collapseSidebar() {
+    if (compact.value) {
+        compactOpen.value = false;
+    } else {
+        emit("update:collapsed", true);
+    }
+}
+
+function expandSidebar() {
+    if (compact.value) compactOpen.value = true;
+    if (props.collapsed) emit("update:collapsed", false);
 }
 
 function onPointerDown(event: PointerEvent) {
@@ -284,8 +338,9 @@ function onPointerUp(event: PointerEvent) {
 
 <template>
     <aside
-        v-if="!props.collapsed"
+        v-if="sidebarVisible"
         class="workspace-sidebar"
+        :class="{ 'is-compact': compact }"
         :style="{ width: `${clampWidth(props.width)}px` }"
         aria-label="工作区侧栏"
     >
@@ -296,7 +351,7 @@ function onPointerUp(event: PointerEvent) {
                 class="icon-button small"
                 aria-label="收起工作区侧栏"
                 title="收起工作区侧栏"
-                @click="emit('update:collapsed', true)"
+                @click="collapseSidebar"
             >
                 ‹
             </button>
@@ -308,30 +363,37 @@ function onPointerUp(event: PointerEvent) {
                 <div
                     v-for="row in independentRows"
                     :key="row.key"
-                    :ref="(element) => setTreeItem(row.key, element)"
                     class="workspace-tree-row"
-                    :class="{ active: row.active }"
-                    role="treeitem"
-                    :data-tree-key="row.key"
-                    :aria-level="row.depth"
-                    :aria-current="row.active ? 'page' : undefined"
-                    :tabindex="rowTabindex(row)"
-                    @click="activateRow(row)"
-                    @focus="rovingKey = row.key"
+                    role="none"
                 >
-                    <span class="workspace-name">{{ row.label }}</span>
-                    <span v-for="status in row.statuses" :key="status" class="workspace-status">
-                        {{ status }}
-                    </span>
-                    <button
-                        type="button"
-                        class="workspace-row-action"
-                        :aria-label="`关闭 ${row.label}`"
-                        title="关闭文件"
-                        @click.stop="row.documentId && emit('close-document', row.documentId)"
+                    <div
+                        :ref="(element) => setTreeItem(row.key, element)"
+                        class="workspace-tree-item"
+                        :class="{ active: row.active }"
+                        role="treeitem"
+                        :data-tree-key="row.key"
+                        :aria-level="row.depth"
+                        :aria-current="row.active ? 'page' : undefined"
+                        :tabindex="rowTabindex(row)"
+                        @click="activateRow(row)"
+                        @focus="rovingKey = row.key"
                     >
-                        ×
-                    </button>
+                        <span class="workspace-name">{{ row.label }}</span>
+                        <span v-for="status in row.statuses" :key="status" class="workspace-status">
+                            {{ status }}
+                        </span>
+                    </div>
+                    <div class="workspace-row-actions">
+                        <button
+                            type="button"
+                            class="workspace-row-action"
+                            :aria-label="`关闭 ${row.label}`"
+                            title="关闭文件"
+                            @click="row.documentId && emit('close-document', row.documentId)"
+                        >
+                            ×
+                        </button>
+                    </div>
                 </div>
             </section>
 
@@ -341,33 +403,39 @@ function onPointerUp(event: PointerEvent) {
                 <div
                     v-for="row in folderRows"
                     :key="row.key"
-                    :ref="(element) => setTreeItem(row.key, element)"
                     class="workspace-tree-row"
-                    :class="[`workspace-tree-row-${row.kind}`, { active: row.active }]"
-                    role="treeitem"
-                    :data-tree-key="row.key"
-                    :aria-level="row.depth"
-                    :aria-expanded="row.expanded === null ? undefined : row.expanded"
-                    :aria-current="row.active ? 'page' : undefined"
-                    :tabindex="rowTabindex(row)"
-                    :style="{ paddingInlineStart: `${8 + (row.depth - 1) * 14}px` }"
-                    @click="activateRow(row)"
-                    @focus="rovingKey = row.key"
+                    role="none"
                 >
-                    <span v-if="row.expanded !== null" class="workspace-disclosure">
-                        {{ row.expanded ? '⌄' : '›' }}
-                    </span>
-                    <span class="workspace-name">{{ row.label }}</span>
-                    <span v-for="status in row.statuses" :key="status" class="workspace-status">
-                        {{ status }}
-                    </span>
-                    <template v-if="row.kind === 'folder'">
+                    <div
+                        :ref="(element) => setTreeItem(row.key, element)"
+                        class="workspace-tree-item"
+                        :class="{ active: row.active }"
+                        role="treeitem"
+                        :data-tree-key="row.key"
+                        :aria-level="row.depth"
+                        :aria-expanded="row.expanded === null ? undefined : row.expanded"
+                        :aria-current="row.active ? 'page' : undefined"
+                        :tabindex="rowTabindex(row)"
+                        :style="{ paddingInlineStart: `${8 + (row.depth - 1) * 14}px` }"
+                        @click="activateRow(row)"
+                        @focus="rovingKey = row.key"
+                    >
+                        <span v-if="row.expanded !== null" class="workspace-disclosure">
+                            {{ row.expanded ? '⌄' : '›' }}
+                        </span>
+                        <span class="workspace-name">{{ row.label }}</span>
+                        <span v-for="status in row.statuses" :key="status" class="workspace-status">
+                            {{ status }}
+                        </span>
+                    </div>
+                    <div v-if="row.kind === 'folder' || row.documentId" class="workspace-row-actions">
+                        <template v-if="row.kind === 'folder'">
                         <button
                             type="button"
                             class="workspace-row-action"
                             :aria-label="`刷新 ${row.label}`"
                             title="刷新文件夹"
-                            @click.stop="row.folderPath && emit('refresh-folder', row.folderPath)"
+                            @click="row.folderPath && emit('refresh-folder', row.folderPath)"
                         >
                             ↻
                         </button>
@@ -376,21 +444,22 @@ function onPointerUp(event: PointerEvent) {
                             class="workspace-row-action"
                             :aria-label="`关闭文件夹 ${row.label}`"
                             title="关闭文件夹"
-                            @click.stop="row.folderPath && emit('close-folder', row.folderPath)"
+                            @click="row.folderPath && emit('close-folder', row.folderPath)"
                         >
                             ×
                         </button>
-                    </template>
-                    <button
-                        v-else-if="row.documentId"
+                        </template>
+                        <button
+                        v-if="row.documentId"
                         type="button"
                         class="workspace-row-action"
                         :aria-label="`关闭 ${row.label}`"
                         title="关闭文件"
-                        @click.stop="emit('close-document', row.documentId)"
+                        @click="emit('close-document', row.documentId)"
                     >
                         ×
-                    </button>
+                        </button>
+                    </div>
                 </div>
             </section>
         </div>
@@ -409,11 +478,12 @@ function onPointerUp(event: PointerEvent) {
     <button
         type="button"
         class="workspace-sidebar-toggle"
-        :class="{ 'is-collapsed': props.collapsed }"
-        :aria-label="props.collapsed ? '展开工作区侧栏' : '收起工作区侧栏'"
-        :title="props.collapsed ? '展开工作区侧栏' : '收起工作区侧栏'"
-        @click="emit('update:collapsed', !props.collapsed)"
+        :class="{ 'is-visible': toggleVisible }"
+        :aria-label="sidebarVisible ? '收起工作区侧栏' : '展开工作区侧栏'"
+        :aria-expanded="sidebarVisible"
+        :title="sidebarVisible ? '收起工作区侧栏' : '展开工作区侧栏'"
+        @click="sidebarVisible ? collapseSidebar() : expandSidebar()"
     >
-        {{ props.collapsed ? '›' : '‹' }}
+        {{ sidebarVisible ? '‹' : '›' }}
     </button>
 </template>
