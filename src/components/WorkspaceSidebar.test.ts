@@ -335,6 +335,8 @@ describe("WorkspaceSidebar", () => {
         const toolbar = sidebar.host.querySelector<HTMLElement>(".workspace-action-toolbar");
         expect(tree?.querySelectorAll("button")).toHaveLength(0);
         expect(toolbar).not.toBeNull();
+        expect(toolbar?.getAttribute("role")).toBe("group");
+        expect(sidebar.host.querySelector('[role="toolbar"]')).toBeNull();
         expect(tree?.contains(toolbar)).toBe(false);
         const close = toolbar?.querySelector<HTMLButtonElement>('[aria-label="关闭 outside.mdx"]');
         if (!close) throw new Error("未找到文档关闭操作");

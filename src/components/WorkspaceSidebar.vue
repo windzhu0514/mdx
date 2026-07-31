@@ -432,7 +432,7 @@ function onPointerUp(event: PointerEvent) {
         <div
             v-if="currentActionRow?.kind === 'folder' || currentActionRow?.documentId"
             class="workspace-action-toolbar"
-            role="toolbar"
+            role="group"
             :aria-label="`${currentActionRow?.label ?? '当前项'} 操作`"
         >
             <span class="workspace-action-label">{{ currentActionRow?.label }}</span>
