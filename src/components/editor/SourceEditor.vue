@@ -25,7 +25,7 @@ let editorView: EditorView | undefined;
 let applyingExternalValue = false;
 let activeDocumentId = props.documentId;
 const states = new Map<string, { state: EditorState; scrollTop: number }>();
-const releasedDocuments = new Set<string>();
+let pendingReleasedDocumentId: string | null = null;
 
 function createState(markdownValue: string): EditorState {
     return EditorState.create({
@@ -36,6 +36,9 @@ function createState(markdownValue: string): EditorState {
             editableCompartment.of(EditorView.editable.of(!props.readonly)),
             EditorView.updateListener.of((update) => {
                 if (update.docChanged && !applyingExternalValue) {
+                    if (pendingReleasedDocumentId === activeDocumentId) {
+                        pendingReleasedDocumentId = null;
+                    }
                     emit("update:modelValue", update.state.doc.toString());
                 }
             }),
@@ -56,19 +59,39 @@ function applyExternalValue(value: string): void {
     }
 }
 
+function replaceActiveState(value: string): void {
+    if (!editorView) return;
+    editorView.setState(createState(value));
+    editorView.dispatch({
+        effects: editableCompartment.reconfigure(
+            EditorView.editable.of(!props.readonly),
+        ),
+    });
+    editorView.scrollDOM.scrollTop = 0;
+}
+
 function switchDocument(nextId: string, value: string): void {
-    if (!editorView || nextId === activeDocumentId) {
+    if (!editorView) return;
+    if (nextId === activeDocumentId) {
+        if (pendingReleasedDocumentId === nextId) {
+            replaceActiveState(value);
+            pendingReleasedDocumentId = null;
+            return;
+        }
         applyExternalValue(value);
         return;
     }
 
-    if (!releasedDocuments.has(activeDocumentId)) {
-        states.set(activeDocumentId, {
-            state: editorView.state,
-            scrollTop: editorView.scrollDOM.scrollTop,
-        });
+    states.set(activeDocumentId, {
+        state: editorView.state,
+        scrollTop: editorView.scrollDOM.scrollTop,
+    });
+    pendingReleasedDocumentId = null;
+    const stored = states.get(nextId);
+    const cached = stored?.state.doc.toString() === value ? stored : undefined;
+    if (stored && !cached) {
+        states.delete(nextId);
     }
-    const cached = states.get(nextId);
     editorView.setState(cached?.state ?? createState(value));
     editorView.dispatch({
         effects: editableCompartment.reconfigure(
@@ -108,7 +131,7 @@ onBeforeUnmount(() => {
     editorView?.destroy();
     editorView = undefined;
     states.clear();
-    releasedDocuments.clear();
+    pendingReleasedDocumentId = null;
 });
 
 function focus(): void {
@@ -163,7 +186,9 @@ function cancelAi(): void {}
 
 function releaseDocument(documentId: string): void {
     states.delete(documentId);
-    releasedDocuments.add(documentId);
+    if (documentId !== activeDocumentId) return;
+    pendingReleasedDocumentId = documentId;
+    replaceActiveState(props.modelValue);
 }
 
 function execute(command: EditorCommand): void {

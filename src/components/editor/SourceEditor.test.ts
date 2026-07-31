@@ -158,6 +158,54 @@ describe("SourceEditor", () => {
         expect(editor.host.querySelector(".cm-content")?.textContent).toBe("fresh");
     });
 
+    it("recreates the active state when a released document reloads in place", async () => {
+        const editor = mountEditor("alpha");
+        cleanup = editor.unmount;
+        await nextTick();
+
+        editor.handle.value?.replaceSelection("A ");
+        await nextTick();
+        editor.handle.value?.releaseDocument("doc-a");
+        editor.markdown.value = "fresh";
+        await nextTick();
+        editor.handle.value?.execute({ name: "undo" });
+        await nextTick();
+
+        expect(editor.host.querySelector(".cm-content")?.textContent).toBe("fresh");
+    });
+
+    it("caches a new state after reopening a released document id", async () => {
+        const editor = mountEditor("alpha");
+        cleanup = editor.unmount;
+        await nextTick();
+
+        editor.handle.value?.releaseDocument("doc-a");
+        editor.documentId.value = "doc-b";
+        editor.markdown.value = "beta";
+        await nextTick();
+        editor.documentId.value = "doc-a";
+        editor.markdown.value = "fresh";
+        await nextTick();
+
+        editor.handle.value?.replaceSelection("R ");
+        await nextTick();
+        const scroller = editor.host.querySelector<HTMLElement>(".cm-scroller");
+        expect(scroller).not.toBeNull();
+        if (scroller) scroller.scrollTop = 45;
+
+        editor.documentId.value = "doc-b";
+        editor.markdown.value = "beta";
+        await nextTick();
+        editor.documentId.value = "doc-a";
+        editor.markdown.value = "R fresh";
+        await nextTick();
+
+        expect(scroller?.scrollTop).toBe(45);
+        editor.handle.value?.execute({ name: "undo" });
+        await nextTick();
+        expect(editor.host.querySelector(".cm-content")?.textContent).toBe("fresh");
+    });
+
     it("sets CodeMirror to non-editable when readonly", async () => {
         const editor = mountEditor("locked", true);
         cleanup = editor.unmount;

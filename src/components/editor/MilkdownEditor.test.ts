@@ -497,6 +497,22 @@ describe("MilkdownEditor", () => {
         expect(root?.scrollTop).toBe(80);
     });
 
+    it("switches documents without invoking an unregistered AI command", async () => {
+        const editor = mountEditor("# A");
+        cleanup = editor.unmount;
+        await nextTick();
+        await editor.handle.value?.whenReady();
+
+        editor.documentId.value = "doc-b";
+        editor.markdown.value = "# B";
+        await nextTick();
+
+        expect(mocks.commands.call).not.toHaveBeenCalledWith("abort-ai", {
+            keep: false,
+        });
+        expect(mocks.editorView.updateState).toHaveBeenCalledTimes(1);
+    });
+
     it("drops a released ProseMirror state", async () => {
         const editor = mountEditor("# A");
         cleanup = editor.unmount;
@@ -520,6 +536,52 @@ describe("MilkdownEditor", () => {
 
         expect(mocks.stateCreate).toHaveBeenCalledTimes(creationsBeforeReturn + 1);
         expect(mocks.parser).toHaveBeenLastCalledWith("# Fresh");
+    });
+
+    it("recreates the active ProseMirror state when a released document reloads in place", async () => {
+        const editor = mountEditor("# A");
+        cleanup = editor.unmount;
+        await nextTick();
+        await editor.handle.value?.whenReady();
+
+        editor.handle.value?.releaseDocument("doc-a");
+        const creationsBeforeReload = mocks.stateCreate.mock.calls.length;
+        editor.markdown.value = "# Fresh";
+        await nextTick();
+
+        expect(mocks.stateCreate).toHaveBeenCalledTimes(creationsBeforeReload + 1);
+        expect(mocks.parser).toHaveBeenLastCalledWith("# Fresh");
+        expect(mocks.editorView.updateState).toHaveBeenCalled();
+    });
+
+    it("caches a new ProseMirror state after reopening a released document id", async () => {
+        const editor = mountEditor("# A");
+        cleanup = editor.unmount;
+        await nextTick();
+        await editor.handle.value?.whenReady();
+
+        editor.handle.value?.releaseDocument("doc-a");
+        editor.documentId.value = "doc-b";
+        editor.markdown.value = "# B";
+        await nextTick();
+        editor.documentId.value = "doc-a";
+        editor.markdown.value = "# Fresh";
+        await nextTick();
+
+        const reopenedState = mocks.editorView.state;
+        const root = editor.host.querySelector<HTMLElement>(".milkdown-editor");
+        expect(root).not.toBeNull();
+        if (root) root.scrollTop = 55;
+
+        editor.documentId.value = "doc-b";
+        editor.markdown.value = "# B";
+        await nextTick();
+        editor.documentId.value = "doc-a";
+        editor.markdown.value = "# Fresh";
+        await nextTick();
+
+        expect(mocks.editorView.updateState).toHaveBeenLastCalledWith(reopenedState);
+        expect(root?.scrollTop).toBe(55);
     });
 
     it("exposes the pending Crepe creation promise as editor readiness", async () => {

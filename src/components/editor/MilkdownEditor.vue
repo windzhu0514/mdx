@@ -52,15 +52,18 @@ let activeDocumentId = props.documentId;
 let disposed = false;
 let ready = false;
 let readiness: Promise<void> = Promise.resolve();
-const states = new Map<string, { state: EditorState; scrollTop: number }>();
-const releasedDocuments = new Set<string>();
+const states = new Map<
+    string,
+    { state: EditorState; scrollTop: number; markdown: string }
+>();
+let pendingReleasedDocumentId: string | null = null;
 
 function reportLifecycleError(operation: string, error: unknown): void {
     console.error(`Crepe ${operation}失败`, error);
 }
 
 function cancelAi(): void {
-    if (!crepe || !ready || disposed) return;
+    if (!props.aiProvider || !crepe || !ready || disposed) return;
     crepe.editor.action((ctx) => {
         ctx.get(commandsCtx).call(abortAICmd.key, { keep: false });
     });
@@ -80,9 +83,28 @@ function applyExternalMarkdown(markdownValue: string): void {
     currentMarkdown = markdownValue;
 }
 
+function replaceActiveState(markdownValue: string): void {
+    if (!crepe || !ready || disposed) return;
+    cancelAi();
+    crepe.editor.action((ctx) => {
+        const view = ctx.get(editorViewCtx);
+        view.updateState(createState(ctx, markdownValue, view.state));
+        if (editorElement.value) {
+            editorElement.value.scrollTop = 0;
+        }
+    });
+    currentMarkdown = markdownValue;
+    crepe.setReadonly(Boolean(props.readonly));
+}
+
 function switchDocument(nextId: string, markdownValue: string): void {
     if (!crepe || !ready || disposed) return;
     if (nextId === activeDocumentId) {
+        if (pendingReleasedDocumentId === nextId) {
+            replaceActiveState(markdownValue);
+            pendingReleasedDocumentId = null;
+            return;
+        }
         applyExternalMarkdown(markdownValue);
         return;
     }
@@ -90,13 +112,17 @@ function switchDocument(nextId: string, markdownValue: string): void {
     cancelAi();
     crepe.editor.action((ctx) => {
         const view = ctx.get(editorViewCtx);
-        if (!releasedDocuments.has(activeDocumentId)) {
-            states.set(activeDocumentId, {
-                state: view.state,
-                scrollTop: editorElement.value?.scrollTop ?? 0,
-            });
+        states.set(activeDocumentId, {
+            state: view.state,
+            scrollTop: editorElement.value?.scrollTop ?? 0,
+            markdown: currentMarkdown,
+        });
+        pendingReleasedDocumentId = null;
+        const stored = states.get(nextId);
+        const cached = stored?.markdown === markdownValue ? stored : undefined;
+        if (stored && !cached) {
+            states.delete(nextId);
         }
-        const cached = states.get(nextId);
         const nextState = cached?.state ?? createState(ctx, markdownValue, view.state);
         view.updateState(nextState);
         if (editorElement.value) {
@@ -110,7 +136,9 @@ function switchDocument(nextId: string, markdownValue: string): void {
 
 function releaseDocument(documentId: string): void {
     states.delete(documentId);
-    releasedDocuments.add(documentId);
+    if (documentId !== activeDocumentId) return;
+    pendingReleasedDocumentId = documentId;
+    replaceActiveState(props.modelValue);
 }
 
 onMounted(() => {
@@ -149,6 +177,9 @@ onMounted(() => {
     instance.on((listener) => {
         listener.markdownUpdated((_ctx, markdown) => {
             if (disposed || crepe !== instance) return;
+            if (pendingReleasedDocumentId === activeDocumentId) {
+                pendingReleasedDocumentId = null;
+            }
             currentMarkdown = markdown;
             if (markdown !== props.modelValue) emit("update:modelValue", markdown);
         });
@@ -189,7 +220,7 @@ onBeforeUnmount(() => {
     ready = false;
     crepe = undefined;
     states.clear();
-    releasedDocuments.clear();
+    pendingReleasedDocumentId = null;
     void readiness
         .then(
             async () => instance.destroy(),
