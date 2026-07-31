@@ -5,26 +5,31 @@
 <script setup lang="ts">
 import { redo, selectAll, undo } from "@codemirror/commands";
 import { markdown } from "@codemirror/lang-markdown";
-import { Compartment } from "@codemirror/state";
+import { Compartment, EditorState } from "@codemirror/state";
 import { basicSetup, EditorView } from "codemirror";
 import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { EditorCommand, MoraEditorHandle } from "./editorTypes";
 import { transformSourceSelection } from "./sourceTransforms";
 import { extractMarkdownHeadings, normalizeMarkdownHeadingText } from "../../utils/text";
 
-const props = defineProps<{ modelValue: string; readonly?: boolean }>();
+const props = defineProps<{
+    documentId: string;
+    modelValue: string;
+    readonly?: boolean;
+}>();
 const emit = defineEmits<{ "update:modelValue": [markdown: string] }>();
 
 const editorElement = ref<HTMLDivElement>();
 const editableCompartment = new Compartment();
 let editorView: EditorView | undefined;
 let applyingExternalValue = false;
+let activeDocumentId = props.documentId;
+const states = new Map<string, { state: EditorState; scrollTop: number }>();
+const releasedDocuments = new Set<string>();
 
-onMounted(() => {
-    if (!editorElement.value) return;
-
-    editorView = new EditorView({
-        doc: props.modelValue,
+function createState(markdownValue: string): EditorState {
+    return EditorState.create({
+        doc: markdownValue,
         extensions: [
             basicSetup,
             markdown(),
@@ -35,23 +40,58 @@ onMounted(() => {
                 }
             }),
         ],
+    });
+}
+
+function applyExternalValue(value: string): void {
+    if (!editorView || editorView.state.doc.toString() === value) return;
+
+    applyingExternalValue = true;
+    try {
+        editorView.dispatch({
+            changes: { from: 0, to: editorView.state.doc.length, insert: value },
+        });
+    } finally {
+        applyingExternalValue = false;
+    }
+}
+
+function switchDocument(nextId: string, value: string): void {
+    if (!editorView || nextId === activeDocumentId) {
+        applyExternalValue(value);
+        return;
+    }
+
+    if (!releasedDocuments.has(activeDocumentId)) {
+        states.set(activeDocumentId, {
+            state: editorView.state,
+            scrollTop: editorView.scrollDOM.scrollTop,
+        });
+    }
+    const cached = states.get(nextId);
+    editorView.setState(cached?.state ?? createState(value));
+    editorView.dispatch({
+        effects: editableCompartment.reconfigure(
+            EditorView.editable.of(!props.readonly),
+        ),
+    });
+    editorView.scrollDOM.scrollTop = cached?.scrollTop ?? 0;
+    activeDocumentId = nextId;
+}
+
+onMounted(() => {
+    if (!editorElement.value) return;
+
+    editorView = new EditorView({
+        state: createState(props.modelValue),
         parent: editorElement.value,
     });
 });
 
 watch(
-    () => props.modelValue,
-    (value) => {
-        if (!editorView || editorView.state.doc.toString() === value) return;
-
-        applyingExternalValue = true;
-        try {
-            editorView.dispatch({
-                changes: { from: 0, to: editorView.state.doc.length, insert: value },
-            });
-        } finally {
-            applyingExternalValue = false;
-        }
+    () => [props.documentId, props.modelValue] as const,
+    ([documentId, value]) => {
+        switchDocument(documentId, value);
     },
 );
 
@@ -67,6 +107,8 @@ watch(
 onBeforeUnmount(() => {
     editorView?.destroy();
     editorView = undefined;
+    states.clear();
+    releasedDocuments.clear();
 });
 
 function focus(): void {
@@ -117,6 +159,13 @@ function whenReady(): Promise<void> {
     return Promise.resolve();
 }
 
+function cancelAi(): void {}
+
+function releaseDocument(documentId: string): void {
+    states.delete(documentId);
+    releasedDocuments.add(documentId);
+}
+
 function execute(command: EditorCommand): void {
     if (!editorView) return;
 
@@ -157,5 +206,7 @@ defineExpose<MoraEditorHandle>({
     execute,
     scrollToHeading,
     whenReady,
+    cancelAi,
+    releaseDocument,
 });
 </script>

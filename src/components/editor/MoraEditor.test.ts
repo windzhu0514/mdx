@@ -13,21 +13,19 @@ import {
 } from "vue";
 import type { AIProvider } from "@milkdown/crepe/feature/ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type {
-    EditorCommand,
-    EditorMode,
-    MoraEditorHandle,
-} from "./editorTypes";
+import type { EditorCommand, EditorMode, MoraEditorHandle } from "./editorTypes";
 import MoraEditor from "./MoraEditor.vue";
 
 type ChildHandle = MoraEditorHandle & {
     emitUpdate(markdown: string): void;
     calls: {
         execute: EditorCommand[];
+        cancelAi: number;
         focus: number;
         getSelectedText: number;
         moveCursor: Array<"start" | "end">;
         replaceSelection: string[];
+        releaseDocument: string[];
         scrollToHeading: string[];
         whenReady: number;
         unmounted: number;
@@ -45,10 +43,12 @@ function createChildHandle(
 ): ChildHandle {
     const calls: ChildHandle["calls"] = {
         execute: [],
+        cancelAi: 0,
         focus: 0,
         getSelectedText: 0,
         moveCursor: [],
         replaceSelection: [],
+        releaseDocument: [],
         scrollToHeading: [],
         whenReady: 0,
         unmounted: 0,
@@ -56,6 +56,9 @@ function createChildHandle(
 
     return {
         calls,
+        cancelAi: () => {
+            calls.cancelAi += 1;
+        },
         emitUpdate,
         execute: (command) => calls.execute.push(command),
         focus: () => {
@@ -67,6 +70,7 @@ function createChildHandle(
         },
         moveCursor: (position) => calls.moveCursor.push(position),
         replaceSelection: (text) => calls.replaceSelection.push(text),
+        releaseDocument: (documentId) => calls.releaseDocument.push(documentId),
         scrollToHeading: (text) => {
             calls.scrollToHeading.push(text);
             return text === "目标标题";
@@ -83,6 +87,7 @@ vi.mock("./MilkdownEditor.vue", () => ({
         name: "MilkdownEditorStub",
         inheritAttrs: false,
         props: {
+            documentId: { type: String, required: true },
             modelValue: { type: String, required: true },
             readonly: Boolean,
             aiProvider: {
@@ -106,6 +111,7 @@ vi.mock("./MilkdownEditor.vue", () => ({
                     "data-model-value": props.modelValue,
                     "data-readonly": String(props.readonly),
                     "data-has-ai": String(Boolean(props.aiProvider)),
+                    "data-document-id": props.documentId,
                 });
         },
     }),
@@ -115,6 +121,7 @@ vi.mock("./SourceEditor.vue", () => ({
     default: defineComponent({
         name: "SourceEditorStub",
         props: {
+            documentId: { type: String, required: true },
             modelValue: { type: String, required: true },
             readonly: Boolean,
         },
@@ -132,12 +139,14 @@ vi.mock("./SourceEditor.vue", () => ({
                 h("div", {
                     class: "source-editor-stub",
                     "data-model-value": props.modelValue,
+                    "data-document-id": props.documentId,
                 });
         },
     }),
 }));
 
 type MountedEditor = {
+    documentId: Ref<string>;
     handle: Ref<MoraEditorHandle | null>;
     host: HTMLDivElement;
     mode: Ref<EditorMode>;
@@ -151,17 +160,20 @@ function mountEditor(
     sourcePreview: boolean,
     readonly = false,
     aiProvider?: AIProvider,
+    documentId = "doc-a",
 ): MountedEditor {
     const host = document.createElement("div");
     const handle = ref<MoraEditorHandle | null>(null);
     const modeValue = ref<EditorMode>(mode);
     const previewValue = ref(sourcePreview);
+    const documentIdValue = ref(documentId);
     const updates: string[] = [];
     const app = createApp({
         setup() {
             return () =>
                 h(MoraEditor, {
                     ref: handle,
+                    documentId: documentIdValue.value,
                     modelValue: "# 标题",
                     displayValue: "# 显示标题",
                     mode: modeValue.value,
@@ -176,6 +188,7 @@ function mountEditor(
     document.body.append(host);
     app.mount(host);
     return {
+        documentId: documentIdValue,
         handle,
         host,
         mode: modeValue,
@@ -206,7 +219,7 @@ describe("MoraEditor", () => {
         await nextTick();
 
         expect(editor.host.querySelectorAll(".milkdown-editor-stub")).toHaveLength(1);
-        expect(editor.host.querySelectorAll(".source-editor-stub")).toHaveLength(0);
+        expect(editor.host.querySelectorAll(".source-editor-stub")).toHaveLength(1);
         expect(
             editor.host
                 .querySelector(".milkdown-editor-stub")
@@ -248,12 +261,17 @@ describe("MoraEditor", () => {
         await nextTick();
 
         expect(editor.host.querySelectorAll(".source-editor-stub")).toHaveLength(1);
-        expect(editor.host.querySelectorAll(".milkdown-editor-stub")).toHaveLength(0);
+        expect(editor.host.querySelectorAll(".milkdown-editor-stub")).toHaveLength(1);
         expect(
             editor.host
                 .querySelector(".source-editor-stub")
                 ?.getAttribute("data-model-value"),
         ).toBe("# 标题");
+        expect(
+            editor.host
+                .querySelector(".milkdown-editor-stub")
+                ?.getAttribute("data-readonly"),
+        ).toBe("true");
     });
 
     it("renders SourceEditor with one readonly Milkdown preview in split mode", async () => {
@@ -263,22 +281,21 @@ describe("MoraEditor", () => {
         await nextTick();
 
         expect(editor.host.querySelectorAll(".source-editor-stub")).toHaveLength(1);
+        const milkdown = editor.host.querySelectorAll(".milkdown-editor-stub");
+        expect(milkdown).toHaveLength(2);
+        expect(milkdown[0].getAttribute("data-readonly")).toBe("true");
+        expect(milkdown[0].getAttribute("data-model-value")).toBe("# 显示标题");
+        expect(milkdown[0].getAttribute("data-has-ai")).toBe("true");
+        expect(milkdown[1].getAttribute("data-readonly")).toBe("true");
+        expect(milkdown[1].getAttribute("data-has-ai")).toBe("false");
+    });
+
+    it("does not mount the readonly preview outside source split mode", async () => {
+        const editor = mountEditor("wysiwyg", true);
+        cleanup = editor.unmount;
+        await nextTick();
+
         expect(editor.host.querySelectorAll(".milkdown-editor-stub")).toHaveLength(1);
-        expect(
-            editor.host
-                .querySelector(".milkdown-editor-stub")
-                ?.getAttribute("data-readonly"),
-        ).toBe("true");
-        expect(
-            editor.host
-                .querySelector(".milkdown-editor-stub")
-                ?.getAttribute("data-model-value"),
-        ).toBe("# 显示标题");
-        expect(
-            editor.host
-                .querySelector(".milkdown-editor-stub")
-                ?.getAttribute("data-has-ai"),
-        ).toBe("false");
     });
 
     it("forwards editing operations only to the currently editable child", async () => {
@@ -316,9 +333,7 @@ describe("MoraEditor", () => {
 
         expect(editor.handle.value?.scrollToHeading("目标标题")).toBe(true);
         expect(childHandles.source[0].calls.scrollToHeading).toEqual(["目标标题"]);
-        expect(childHandles.milkdown[0].calls.scrollToHeading).toEqual([
-            "目标标题",
-        ]);
+        expect(childHandles.milkdown[1].calls.scrollToHeading).toEqual(["目标标题"]);
     });
 
     it("delegates readiness only to the current editable child", async () => {
@@ -341,7 +356,7 @@ describe("MoraEditor", () => {
         expect(editor.updates).toEqual(["# 编辑后"]);
     });
 
-    it("unmounts obsolete children while switching source preview and mode", async () => {
+    it("keeps editable kernels mounted while switching source preview and mode", async () => {
         const editor = mountEditor("source", false);
         cleanup = editor.unmount;
         await nextTick();
@@ -349,19 +364,50 @@ describe("MoraEditor", () => {
 
         editor.sourcePreview.value = true;
         await nextTick();
-        const preview = childHandles.milkdown[0];
-        expect(editor.host.querySelectorAll(".milkdown-editor-stub")).toHaveLength(1);
+        const preview = childHandles.milkdown[1];
+        expect(editor.host.querySelectorAll(".milkdown-editor-stub")).toHaveLength(2);
         expect(preview.calls.unmounted).toBe(0);
 
         editor.sourcePreview.value = false;
         await nextTick();
-        expect(editor.host.querySelectorAll(".milkdown-editor-stub")).toHaveLength(0);
+        expect(editor.host.querySelectorAll(".milkdown-editor-stub")).toHaveLength(1);
         expect(preview.calls.unmounted).toBe(1);
 
         editor.mode.value = "wysiwyg";
         await nextTick();
-        expect(source.calls.unmounted).toBe(1);
-        expect(editor.host.querySelectorAll(".source-editor-stub")).toHaveLength(0);
+        expect(source.calls.unmounted).toBe(0);
+        expect(editor.host.querySelectorAll(".source-editor-stub")).toHaveLength(1);
         expect(editor.host.querySelectorAll(".milkdown-editor-stub")).toHaveLength(1);
+        expect(childHandles.milkdown).toHaveLength(2);
+    });
+
+    it("cancels AI on mode changes and forwards document release to every kernel", async () => {
+        const editor = mountEditor("source", true);
+        cleanup = editor.unmount;
+        await nextTick();
+
+        editor.handle.value?.releaseDocument("doc-a");
+        expect(childHandles.source[0].calls.releaseDocument).toEqual(["doc-a"]);
+        expect(childHandles.milkdown[0].calls.releaseDocument).toEqual(["doc-a"]);
+        expect(childHandles.milkdown[1].calls.releaseDocument).toEqual(["doc-a:preview"]);
+
+        editor.mode.value = "wysiwyg";
+        await nextTick();
+        expect(childHandles.milkdown[0].calls.cancelAi).toBe(1);
+    });
+
+    it("passes stable document ids to editable and preview kernels", async () => {
+        const editor = mountEditor("source", true, false, undefined, "doc-a");
+        cleanup = editor.unmount;
+        await nextTick();
+
+        expect(
+            editor.host
+                .querySelector(".source-editor-stub")
+                ?.getAttribute("data-document-id"),
+        ).toBe("doc-a");
+        const milkdown = editor.host.querySelectorAll(".milkdown-editor-stub");
+        expect(milkdown[0].getAttribute("data-document-id")).toBe("doc-a");
+        expect(milkdown[1].getAttribute("data-document-id")).toBe("doc-a:preview");
     });
 });

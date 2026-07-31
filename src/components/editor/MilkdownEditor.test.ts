@@ -39,8 +39,28 @@ const mocks = vi.hoisted(() => {
             },
         },
         dispatch: vi.fn(),
+        scrollDOM: { scrollTop: 0 },
+        updateState: vi.fn<(state: unknown) => void>(),
     };
+    editorView.updateState.mockImplementation((state) => {
+        editorView.state = state as typeof editorView.state;
+    });
     const commands = { call: vi.fn() };
+    const parser = vi.fn((markdown: string) => ({
+        content: { size: markdown.length },
+        descendants: vi.fn(),
+        parsedMarkdown: markdown,
+        textBetween: vi.fn(() => ""),
+    }));
+    const stateCreate = vi.fn(
+        (options: { schema: unknown; doc: unknown; plugins: unknown[] }) => ({
+            doc: options.doc,
+            plugins: options.plugins,
+            schema: options.schema,
+            selection: { from: 0, to: 0 },
+            tr: editorView.state.tr,
+        }),
+    );
     const createEditor: () => Promise<void> = async () => undefined;
     const destroyEditor: () => Promise<void> = async () => undefined;
     const instances: Array<{
@@ -58,8 +78,10 @@ const mocks = vi.hoisted(() => {
         destroyEditor,
         editorView,
         instances,
+        parser,
         selection,
         selectedMarkdown: "item one\nitem two",
+        stateCreate,
         textSelectionCreate,
     };
 });
@@ -75,7 +97,11 @@ vi.mock("@milkdown/crepe", () => {
                 typeof action === "function"
                     ? action({
                           get: (key: string) =>
-                              key === "editor-view" ? mocks.editorView : mocks.commands,
+                              key === "editor-view"
+                                  ? mocks.editorView
+                                  : key === "parser"
+                                    ? mocks.parser
+                                    : mocks.commands,
                       })
                     : action,
             ),
@@ -115,6 +141,11 @@ vi.mock("@milkdown/crepe", () => {
 vi.mock("@milkdown/kit/core", () => ({
     commandsCtx: "commands",
     editorViewCtx: "editor-view",
+    parserCtx: "parser",
+}));
+
+vi.mock("@milkdown/crepe/feature/ai", () => ({
+    abortAICmd: { key: "abort-ai" },
 }));
 
 vi.mock("@milkdown/kit/utils", () => ({
@@ -128,6 +159,9 @@ vi.mock("@milkdown/kit/utils", () => ({
 }));
 
 vi.mock("@milkdown/kit/prose/state", () => ({
+    EditorState: {
+        create: mocks.stateCreate,
+    },
     Selection: mocks.selection,
     TextSelection: {
         create: mocks.textSelectionCreate,
@@ -158,7 +192,9 @@ vi.mock("@milkdown/kit/prose/history", () => ({ redo: "redo", undo: "undo" }));
 vi.mock("@milkdown/kit/prose/commands", () => ({ selectAll: "select-all" }));
 
 type MountedEditor = {
+    documentId: Ref<string>;
     handle: Ref<MoraEditorHandle | null>;
+    host: HTMLDivElement;
     markdown: Ref<string>;
     readonly: Ref<boolean>;
     errors: string[];
@@ -196,6 +232,7 @@ function mountEditor(
     markdown = "# 初始",
     readonly = false,
     aiProvider?: MoraAIProvider,
+    documentId = "doc-a",
 ): MountedEditor {
     const host = document.createElement("div");
     const errors: string[] = [];
@@ -203,11 +240,13 @@ function mountEditor(
     const handle = ref<MoraEditorHandle | null>(null);
     const value = ref(markdown);
     const readonlyValue = ref(readonly);
+    const documentIdValue = ref(documentId);
     const app = createApp({
         setup() {
             return () =>
                 h(MilkdownEditor, {
                     ref: handle,
+                    documentId: documentIdValue.value,
                     modelValue: value.value,
                     readonly: readonlyValue.value,
                     aiProvider,
@@ -224,7 +263,9 @@ function mountEditor(
     app.mount(host);
 
     return {
+        documentId: documentIdValue,
         handle,
+        host,
         markdown: value,
         readonly: readonlyValue,
         errors,
@@ -245,12 +286,16 @@ afterEach(() => {
     mocks.commands.call.mockClear();
     mocks.editorView.focus.mockClear();
     mocks.editorView.dispatch.mockClear();
+    mocks.editorView.updateState.mockClear();
+    mocks.editorView.scrollDOM.scrollTop = 0;
     mocks.editorView.state.doc.textBetween.mockClear();
     mocks.editorView.state.tr.insertText.mockClear();
     mocks.editorView.state.tr.setSelection.mockClear();
     mocks.selection.atStart.mockClear();
     mocks.selection.atEnd.mockClear();
     mocks.textSelectionCreate.mockClear();
+    mocks.parser.mockClear();
+    mocks.stateCreate.mockClear();
     mocks.editorView.state.selection = { from: 2, to: 5 };
     mocks.createEditor = async () => undefined;
     mocks.destroyEditor = async () => undefined;
@@ -413,6 +458,68 @@ describe("MilkdownEditor", () => {
             kind: "replace-all",
             markdown: "# 最新值",
         });
+    });
+
+    it("switches ProseMirror states and aborts AI before changing documents", async () => {
+        const provider: MoraAIProvider = async function* () {
+            yield "结果";
+        };
+        const editor = mountEditor("# A", false, provider);
+        cleanup = editor.unmount;
+        await nextTick();
+        await editor.handle.value?.whenReady();
+
+        const stateA = mocks.editorView.state;
+        const root = editor.host.querySelector<HTMLElement>(".milkdown-editor");
+        expect(root).not.toBeNull();
+        if (root) root.scrollTop = 80;
+        editor.documentId.value = "doc-b";
+        editor.markdown.value = "# B";
+        await nextTick();
+
+        expect(mocks.commands.call).toHaveBeenCalledWith("abort-ai", { keep: false });
+        expect(mocks.parser).toHaveBeenCalledWith("# B");
+        expect(mocks.editorView.updateState).toHaveBeenCalledTimes(1);
+        expect(mocks.commands.call.mock.invocationCallOrder[0]).toBeLessThan(
+            mocks.editorView.updateState.mock.invocationCallOrder[0],
+        );
+        expect(mocks.instances[0].editor.action).not.toHaveBeenCalledWith({
+            kind: "replace-all",
+            markdown: "# B",
+        });
+
+        if (root) root.scrollTop = 20;
+        editor.documentId.value = "doc-a";
+        editor.markdown.value = "# A";
+        await nextTick();
+
+        expect(mocks.editorView.updateState).toHaveBeenLastCalledWith(stateA);
+        expect(root?.scrollTop).toBe(80);
+    });
+
+    it("drops a released ProseMirror state", async () => {
+        const editor = mountEditor("# A");
+        cleanup = editor.unmount;
+        await nextTick();
+        await editor.handle.value?.whenReady();
+
+        editor.documentId.value = "doc-b";
+        editor.markdown.value = "# B";
+        await nextTick();
+        editor.documentId.value = "doc-a";
+        editor.markdown.value = "# A";
+        await nextTick();
+        editor.handle.value?.releaseDocument("doc-a");
+        editor.documentId.value = "doc-b";
+        editor.markdown.value = "# B";
+        await nextTick();
+        const creationsBeforeReturn = mocks.stateCreate.mock.calls.length;
+        editor.documentId.value = "doc-a";
+        editor.markdown.value = "# Fresh";
+        await nextTick();
+
+        expect(mocks.stateCreate).toHaveBeenCalledTimes(creationsBeforeReturn + 1);
+        expect(mocks.parser).toHaveBeenLastCalledWith("# Fresh");
     });
 
     it("exposes the pending Crepe creation promise as editor readiness", async () => {

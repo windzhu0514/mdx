@@ -4,10 +4,11 @@
 
 <script setup lang="ts">
 import { Crepe } from "@milkdown/crepe";
-import type { AIProvider } from "@milkdown/crepe/feature/ai";
+import { abortAICmd, type AIProvider } from "@milkdown/crepe/feature/ai";
 import "@milkdown/crepe/theme/common/style.css";
 import "@milkdown/crepe/theme/frame.css";
-import { commandsCtx, editorViewCtx } from "@milkdown/kit/core";
+import { commandsCtx, editorViewCtx, parserCtx } from "@milkdown/kit/core";
+import type { Ctx } from "@milkdown/kit/ctx";
 import {
     createCodeBlockCommand,
     insertHrCommand,
@@ -25,13 +26,14 @@ import {
 import { toggleStrikethroughCommand } from "@milkdown/kit/preset/gfm";
 import { redo, undo } from "@milkdown/kit/prose/history";
 import { selectAll } from "@milkdown/kit/prose/commands";
-import { Selection, TextSelection } from "@milkdown/kit/prose/state";
+import { EditorState, Selection, TextSelection } from "@milkdown/kit/prose/state";
 import { getMarkdown, replaceAll, replaceRange } from "@milkdown/kit/utils";
 import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { EditorCommand, ImageUploadHandler, MoraEditorHandle } from "./editorTypes";
 import { normalizeMarkdownHeadingText } from "../../utils/text";
 
 const props = defineProps<{
+    documentId: string;
     modelValue: string;
     readonly?: boolean;
     uploadImage?: ImageUploadHandler;
@@ -46,12 +48,69 @@ const emit = defineEmits<{
 const editorElement = ref<HTMLDivElement>();
 let crepe: Crepe | undefined;
 let currentMarkdown = props.modelValue;
+let activeDocumentId = props.documentId;
 let disposed = false;
 let ready = false;
 let readiness: Promise<void> = Promise.resolve();
+const states = new Map<string, { state: EditorState; scrollTop: number }>();
+const releasedDocuments = new Set<string>();
 
 function reportLifecycleError(operation: string, error: unknown): void {
     console.error(`Crepe ${operation}失败`, error);
+}
+
+function cancelAi(): void {
+    if (!crepe || !ready || disposed) return;
+    crepe.editor.action((ctx) => {
+        ctx.get(commandsCtx).call(abortAICmd.key, { keep: false });
+    });
+}
+
+function createState(ctx: Ctx, markdownValue: string, current: EditorState): EditorState {
+    return EditorState.create({
+        schema: current.schema,
+        doc: ctx.get(parserCtx)(markdownValue),
+        plugins: current.plugins,
+    });
+}
+
+function applyExternalMarkdown(markdownValue: string): void {
+    if (!crepe || !ready || disposed || markdownValue === currentMarkdown) return;
+    crepe.editor.action(replaceAll(markdownValue));
+    currentMarkdown = markdownValue;
+}
+
+function switchDocument(nextId: string, markdownValue: string): void {
+    if (!crepe || !ready || disposed) return;
+    if (nextId === activeDocumentId) {
+        applyExternalMarkdown(markdownValue);
+        return;
+    }
+
+    cancelAi();
+    crepe.editor.action((ctx) => {
+        const view = ctx.get(editorViewCtx);
+        if (!releasedDocuments.has(activeDocumentId)) {
+            states.set(activeDocumentId, {
+                state: view.state,
+                scrollTop: editorElement.value?.scrollTop ?? 0,
+            });
+        }
+        const cached = states.get(nextId);
+        const nextState = cached?.state ?? createState(ctx, markdownValue, view.state);
+        view.updateState(nextState);
+        if (editorElement.value) {
+            editorElement.value.scrollTop = cached?.scrollTop ?? 0;
+        }
+    });
+    activeDocumentId = nextId;
+    currentMarkdown = markdownValue;
+    crepe.setReadonly(Boolean(props.readonly));
+}
+
+function releaseDocument(documentId: string): void {
+    states.delete(documentId);
+    releasedDocuments.add(documentId);
 }
 
 onMounted(() => {
@@ -100,9 +159,7 @@ onMounted(() => {
 
         ready = true;
         instance.setReadonly(Boolean(props.readonly));
-        if (props.modelValue === currentMarkdown) return;
-        instance.editor.action(replaceAll(props.modelValue));
-        currentMarkdown = props.modelValue;
+        switchDocument(props.documentId, props.modelValue);
     });
     void readiness.catch((error: unknown) => {
         reportLifecycleError("初始化", error);
@@ -110,11 +167,9 @@ onMounted(() => {
 });
 
 watch(
-    () => props.modelValue,
-    (markdown) => {
-        if (!crepe || !ready || disposed || markdown === currentMarkdown) return;
-        crepe.editor.action(replaceAll(markdown));
-        currentMarkdown = markdown;
+    () => [props.documentId, props.modelValue] as const,
+    ([documentId, markdownValue]) => {
+        switchDocument(documentId, markdownValue);
     },
 );
 
@@ -133,6 +188,8 @@ onBeforeUnmount(() => {
     disposed = true;
     ready = false;
     crepe = undefined;
+    states.clear();
+    releasedDocuments.clear();
     void readiness
         .then(
             async () => instance.destroy(),
@@ -306,5 +363,7 @@ defineExpose<MoraEditorHandle>({
     execute,
     scrollToHeading,
     whenReady,
+    cancelAi,
+    releaseDocument,
 });
 </script>

@@ -117,11 +117,13 @@ vi.mock("./components/editor/MilkdownEditor.vue", () => ({
             };
             mocks.editors.push(controls);
             expose({
+                cancelAi: vi.fn(),
                 execute: vi.fn(),
                 focus: vi.fn(),
                 getSelectedText: vi.fn(() => ""),
                 moveCursor: vi.fn(),
                 replaceSelection: vi.fn(),
+                releaseDocument: vi.fn(),
                 scrollToHeading: vi.fn(() => false),
                 whenReady: vi.fn(async () => undefined),
             });
@@ -145,11 +147,13 @@ vi.mock("./components/editor/SourceEditor.vue", () => ({
         emits: ["update:modelValue"],
         setup(_props, { expose }) {
             expose({
+                cancelAi: vi.fn(),
                 execute: vi.fn(),
                 focus: vi.fn(),
                 getSelectedText: vi.fn(() => ""),
                 moveCursor: vi.fn(),
                 replaceSelection: vi.fn(),
+                releaseDocument: vi.fn(),
                 scrollToHeading: vi.fn(() => false),
                 whenReady: vi.fn(async () => undefined),
             });
@@ -285,11 +289,15 @@ describe("App WYSIWYG AI 接线", () => {
         await nextTick();
         const preview = mocks.editors[mocks.editors.length - 1];
         expect(preview?.aiProvider).toBeUndefined();
+        const milkdownEditors = host.querySelectorAll(".milkdown-editor-stub");
         expect(
-            host.querySelector(".milkdown-editor-stub")?.getAttribute("data-readonly"),
+            milkdownEditors[0]?.getAttribute("data-readonly"),
         ).toBe("true");
         expect(
-            host.querySelector(".milkdown-editor-stub")?.getAttribute("data-has-ai"),
+            milkdownEditors[0]?.getAttribute("data-has-ai"),
+        ).toBe("true");
+        expect(
+            milkdownEditors[1]?.getAttribute("data-has-ai"),
         ).toBe("false");
     });
 

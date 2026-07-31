@@ -6,6 +6,7 @@ import SourceEditor from "./SourceEditor.vue";
 import type { MoraEditorHandle } from "./editorTypes";
 
 type MountedEditor = {
+    documentId: Ref<string>;
     handle: Ref<MoraEditorHandle | null>;
     host: HTMLDivElement;
     markdown: Ref<string>;
@@ -14,17 +15,23 @@ type MountedEditor = {
     unmount: () => void;
 };
 
-function mountEditor(markdown = "", readonly = false): MountedEditor {
+function mountEditor(
+    markdown = "",
+    readonly = false,
+    documentId = "doc-a",
+): MountedEditor {
     const host = document.createElement("div");
     const updates: string[] = [];
     const handle = ref<MoraEditorHandle | null>(null);
     const value = ref(markdown);
     const readonlyValue = ref(readonly);
+    const documentIdValue = ref(documentId);
     const app = createApp({
         setup() {
             return () =>
                 h(SourceEditor, {
                     ref: handle,
+                    documentId: documentIdValue.value,
                     modelValue: value.value,
                     readonly: readonlyValue.value,
                     "onUpdate:modelValue": (updated: string) => {
@@ -39,6 +46,7 @@ function mountEditor(markdown = "", readonly = false): MountedEditor {
     app.mount(host);
 
     return {
+        documentId: documentIdValue,
         handle,
         host,
         markdown: value,
@@ -91,6 +99,63 @@ describe("SourceEditor", () => {
         await nextTick();
 
         expect(editor.updates).toEqual(["new note"]);
+    });
+
+    it("restores text, selection, scroll, and undo history per document", async () => {
+        const editor = mountEditor("alpha");
+        cleanup = editor.unmount;
+        await nextTick();
+
+        editor.handle.value?.replaceSelection("A ");
+        await nextTick();
+        const scroller = editor.host.querySelector<HTMLElement>(".cm-scroller");
+        expect(scroller).not.toBeNull();
+        if (scroller) scroller.scrollTop = 120;
+
+        editor.documentId.value = "doc-b";
+        editor.markdown.value = "beta";
+        await nextTick();
+        editor.handle.value?.replaceSelection("B ");
+        await nextTick();
+
+        editor.documentId.value = "doc-a";
+        editor.markdown.value = "A alpha";
+        await nextTick();
+
+        expect(editor.host.querySelector(".cm-content")?.textContent).toBe("A alpha");
+        expect(scroller?.scrollTop).toBe(120);
+        editor.handle.value?.replaceSelection("X");
+        await nextTick();
+        expect(editor.updates[editor.updates.length - 1]).toBe("A Xalpha");
+        editor.handle.value?.execute({ name: "undo" });
+        await nextTick();
+        editor.handle.value?.execute({ name: "undo" });
+        await nextTick();
+        expect(editor.updates[editor.updates.length - 1]).toBe("alpha");
+    });
+
+    it("drops a released document state", async () => {
+        const editor = mountEditor("alpha");
+        cleanup = editor.unmount;
+        await nextTick();
+
+        editor.handle.value?.replaceSelection("A ");
+        await nextTick();
+        (
+            editor.handle.value as MoraEditorHandle & {
+                releaseDocument(documentId: string): void;
+            }
+        ).releaseDocument("doc-a");
+        editor.documentId.value = "doc-b";
+        editor.markdown.value = "beta";
+        await nextTick();
+        editor.documentId.value = "doc-a";
+        editor.markdown.value = "fresh";
+        await nextTick();
+        editor.handle.value?.execute({ name: "undo" });
+        await nextTick();
+
+        expect(editor.host.querySelector(".cm-content")?.textContent).toBe("fresh");
     });
 
     it("sets CodeMirror to non-editable when readonly", async () => {

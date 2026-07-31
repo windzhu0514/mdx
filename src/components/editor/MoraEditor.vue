@@ -1,25 +1,32 @@
 <template>
     <div class="mora-editor">
         <MilkdownEditor
-            v-if="mode === 'wysiwyg'"
+            v-show="mode === 'wysiwyg'"
             ref="milkdownEditor"
+            :document-id="documentId"
             :model-value="displayValue ?? modelValue"
-            :readonly="readonly"
+            :readonly="readonly || mode !== 'wysiwyg'"
             :upload-image="uploadImage"
             :ai-provider="readonly ? undefined : aiProvider"
             @update:model-value="emit('update:modelValue', $event)"
             @ai-error="emit('ai-error', $event)"
         />
-        <div v-else class="source-layout" :class="{ split: sourcePreview }">
+        <div
+            v-show="mode === 'source'"
+            class="source-layout"
+            :class="{ split: sourcePreview }"
+        >
             <SourceEditor
                 ref="sourceEditor"
+                :document-id="documentId"
                 :model-value="modelValue"
                 :readonly="readonly"
                 @update:model-value="emit('update:modelValue', $event)"
             />
             <MilkdownEditor
-                v-if="sourcePreview"
+                v-if="mode === 'source' && sourcePreview"
                 ref="previewEditor"
+                :document-id="`${documentId}:preview`"
                 :model-value="displayValue ?? modelValue"
                 readonly
             />
@@ -29,7 +36,7 @@
 
 <script setup lang="ts">
 import type { AIProvider } from "@milkdown/crepe/feature/ai";
-import { ref } from "vue";
+import { ref, watch } from "vue";
 import type {
     EditorCommand,
     EditorMode,
@@ -40,6 +47,7 @@ import MilkdownEditor from "./MilkdownEditor.vue";
 import SourceEditor from "./SourceEditor.vue";
 
 const props = defineProps<{
+    documentId: string;
     modelValue: string;
     displayValue?: string;
     mode: EditorMode;
@@ -98,6 +106,21 @@ function whenReady(): Promise<void> {
     return editableEditor()?.whenReady() ?? Promise.resolve();
 }
 
+function cancelAi(): void {
+    milkdownEditor.value?.cancelAi();
+}
+
+function releaseDocument(documentId: string): void {
+    sourceEditor.value?.releaseDocument(documentId);
+    milkdownEditor.value?.releaseDocument(documentId);
+    previewEditor.value?.releaseDocument(`${documentId}:preview`);
+}
+
+watch(
+    () => props.mode,
+    () => cancelAi(),
+);
+
 defineExpose<MoraEditorHandle>({
     focus,
     getSelectedText,
@@ -106,6 +129,8 @@ defineExpose<MoraEditorHandle>({
     execute,
     scrollToHeading,
     whenReady,
+    cancelAi,
+    releaseDocument,
 });
 </script>
 

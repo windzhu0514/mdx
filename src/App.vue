@@ -87,6 +87,7 @@ const findPanel = ref<InstanceType<typeof FindReplacePanel> | null>(null);
 
 const editorMode = ref<EditorMode>("wysiwyg");
 const sourcePreview = ref(true);
+const editorDocumentId = computed(() => meta.value?.id ?? "untitled-current");
 let printing = false;
 const showToc = ref(true);
 const recentFiles = ref<RecentFileEntry[]>([]);
@@ -1767,6 +1768,7 @@ function stringifyError(error: unknown) {
                     <div class="markdown-editor">
                         <MoraEditor
                             ref="editorRef"
+                            :document-id="editorDocumentId"
                             :model-value="content"
                             :display-value="displayContent"
                             :mode="editorMode"

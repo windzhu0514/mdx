@@ -8,6 +8,7 @@ import { countNonWhitespaceCharacters } from "./utils/text";
 type LowestEditorControls = {
     emitUpdate: (markdown: string) => void;
     focus: ReturnType<typeof vi.fn>;
+    readiness: Promise<void>;
     uploadImage?: (file: File) => Promise<string>;
     whenReadyCalls: number;
 };
@@ -122,6 +123,7 @@ function lowestEditorStub(kind: "milkdown" | "source") {
             const controls: LowestEditorControls = {
                 emitUpdate: (markdown) => emit("update:modelValue", markdown),
                 focus: vi.fn(),
+                readiness,
                 uploadImage: props.uploadImage as
                     ((file: File) => Promise<string>) | undefined,
                 whenReadyCalls: 0,
@@ -134,15 +136,17 @@ function lowestEditorStub(kind: "milkdown" | "source") {
             );
 
             expose({
+                cancelAi: vi.fn(),
                 execute: vi.fn(),
                 focus: controls.focus,
                 getSelectedText: vi.fn(() => ""),
                 moveCursor: vi.fn(),
                 replaceSelection: vi.fn(),
+                releaseDocument: vi.fn(),
                 scrollToHeading: vi.fn(() => false),
                 whenReady: () => {
                     controls.whenReadyCalls += 1;
-                    return readiness;
+                    return controls.readiness;
                 },
             });
 
@@ -209,9 +213,21 @@ beforeEach(() => {
         if (command === "read_asset") return "aW1hZ2U=";
         if (command === "get_recent_files" || command === "push_recent_file") return [];
         if (command === "save_mdx_as" || command === "save_mdx") {
-            const request = (args as { request: { content: string; path?: string } })
-                .request;
-            return createNote(request.content, request.path ?? "C:\\notes\\saved.mdx");
+            const request = (
+                args as {
+                    request: {
+                        content: string;
+                        meta: MdxMetadata;
+                        path?: string;
+                    };
+                }
+            ).request;
+            const note = createNote(
+                request.content,
+                request.path ?? "C:\\notes\\saved.mdx",
+            );
+            note.meta = request.meta;
+            return note;
         }
         return undefined;
     });
@@ -318,6 +334,25 @@ describe("App 编辑器状态集成", () => {
         });
     });
 
+    it("另存为后保持同一编辑器文档标识", async () => {
+        const host = await mountApp();
+        const before = host
+            .querySelector(".milkdown-editor-stub")
+            ?.getAttribute("document-id");
+
+        findButton(host, "另存为...").click();
+        await vi.waitFor(() =>
+            expect(mocks.invoke.mock.calls.some(([name]) => name === "save_mdx_as")).toBe(
+                true,
+            ),
+        );
+        await nextTick();
+
+        expect(
+            host.querySelector(".milkdown-editor-stub")?.getAttribute("document-id"),
+        ).toBe(before);
+    });
+
     it("shows an ATX heading with three leading spaces in the App TOC", async () => {
         mocks.openedNote = createNote("   ## 缩进标题\n    ### 非标题");
         const host = await mountApp();
@@ -417,7 +452,7 @@ describe("App 编辑器状态集成", () => {
 
         findButton(host, "垂直双栏").click();
         await nextTick();
-        expect(mocks.source?.focus).toHaveBeenCalledTimes(1);
+        expect(mocks.source?.focus).toHaveBeenCalledTimes(2);
     });
 });
 
@@ -446,14 +481,15 @@ describe("App PDF 打印视图", () => {
         const host = await mountApp();
         findButton(host, "打开...").click();
         await vi.waitFor(() => expect(editorValue(host, "milkdown")).toBe("# 原文"));
+        const editableMilkdown = mocks.milkdown;
         findButton(host, "垂直双栏").click();
         await nextTick();
 
         const deferred = createDeferred<void>();
-        mocks.nextMilkdownReadiness = deferred.promise;
+        if (editableMilkdown) editableMilkdown.readiness = deferred.promise;
         findButton(host, "导出 PDF / 打印...").click();
         findButton(host, "导出 PDF / 打印...").click();
-        await vi.waitFor(() => expect(mocks.milkdown?.whenReadyCalls).toBe(1));
+        await vi.waitFor(() => expect(editableMilkdown?.whenReadyCalls).toBe(1));
 
         deferred.reject(new Error("Crepe 初始化失败"));
         await vi.waitFor(() => expect(host.textContent).toContain("Crepe 初始化失败"));
@@ -465,6 +501,7 @@ describe("App PDF 打印视图", () => {
         ).toBe("true");
         expect(host.textContent).not.toContain("未保存");
 
+        if (editableMilkdown) editableMilkdown.readiness = Promise.resolve();
         findButton(host, "导出 PDF / 打印...").click();
         await vi.waitFor(() => expect(window.print).toHaveBeenCalledTimes(1));
     });
@@ -478,7 +515,7 @@ describe("App PDF 打印视图", () => {
         await nextTick();
 
         const deferred = createDeferred<void>();
-        mocks.nextMilkdownReadiness = deferred.promise;
+        if (mocks.milkdown) mocks.milkdown.readiness = deferred.promise;
         findButton(host, "导出 PDF / 打印...").click();
         await vi.waitFor(() => expect(mocks.milkdown?.whenReadyCalls).toBe(1));
 
@@ -507,13 +544,16 @@ describe("App PDF 打印视图", () => {
 
         const printed = mocks.printSnapshots[0];
         expect((printed.match(/milkdown-editor-stub/g) ?? []).length).toBe(1);
-        expect(printed).not.toContain("source-editor-stub");
+        expect(printed).toContain("source-editor-stub");
+        expect(printed).toMatch(
+            /class="source-layout(?: split)?" style="display: none;"/,
+        );
         expect(printed).toContain('data-readonly="false"');
 
         await nextTick();
         expect(host.querySelectorAll(".source-editor-stub")).toHaveLength(1);
         expect(host.querySelectorAll(".milkdown-editor-stub")).toHaveLength(
-            split ? 1 : 0,
+            split ? 2 : 1,
         );
         if (split) {
             expect(
