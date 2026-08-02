@@ -107,6 +107,7 @@ const libraryLoading = ref(false);
 const showHistory = ref(false);
 const historyItems = ref<HistoryListItem[]>([]);
 const historyLoading = ref(false);
+let historyRequestId = 0;
 const showSettings = ref(false);
 const aiKeyConfigured = ref(false);
 const aiKeySaving = ref(false);
@@ -125,6 +126,7 @@ const aiProvider = createOpenAICompatibleProvider(
     (markdown) => activeDocument.value?.resources.persistedMarkdown(markdown) ?? markdown,
 );
 const showLeavePrompt = ref(false);
+const leavePromptDocumentName = ref("");
 let leavePromptResolver: ((decision: LeaveDecision) => void) | null = null;
 let unlistenClose: (() => void) | null = null;
 let unlistenDragDrop: (() => void) | null = null;
@@ -488,7 +490,8 @@ const aboutMenu = computed<MarkdownCommand[]>(() => [
     { label: `关于 ${APP_NAME} ${APP_CN_NAME}`, action: showAbout },
 ]);
 
-function requestLeaveDecision() {
+function requestLeaveDecision(documentName: string) {
+    leavePromptDocumentName.value = documentName;
     showLeavePrompt.value = true;
     return new Promise<LeaveDecision>((resolve) => {
         leavePromptResolver = resolve;
@@ -496,9 +499,11 @@ function requestLeaveDecision() {
 }
 
 function resolveLeaveDecision(decision: LeaveDecision) {
-    showLeavePrompt.value = false;
-    leavePromptResolver?.(decision);
+    const resolve = leavePromptResolver;
     leavePromptResolver = null;
+    showLeavePrompt.value = false;
+    leavePromptDocumentName.value = "";
+    resolve?.(decision);
 }
 
 async function confirmLeave() {
@@ -510,7 +515,7 @@ async function confirmLeave() {
         errorMessage.value = `草稿保存失败：${stringifyError(error)}`;
     }
 
-    const decision = await requestLeaveDecision();
+    const decision = await requestLeaveDecision(active.displayName);
     if (decision === "discard") {
         await active.draft.remove();
     }
@@ -526,6 +531,14 @@ watch(
     },
     { immediate: true },
 );
+
+watch(activeDocumentId, (current, previous) => {
+    if (current === previous) return;
+    historyRequestId += 1;
+    showHistory.value = false;
+    historyItems.value = [];
+    historyLoading.value = false;
+});
 
 watch(
     windowTitle,
@@ -914,8 +927,19 @@ async function openFiles() {
     }
 
     await runAction(async () => {
+        const failures: string[] = [];
+        let openedCount = 0;
         for (const path of Array.isArray(selected) ? selected : [selected]) {
-            await openPath(path, true);
+            try {
+                await openPath(path, true);
+                openedCount += 1;
+            } catch (error) {
+                failures.push(`${path}：${stringifyError(error)}`);
+            }
+        }
+        if (failures.length > 0) {
+            errorMessage.value = failures.join("\n");
+            statusMessage.value = openedCount > 0 ? "部分文件打开失败" : "打开文件失败";
         }
     });
 }
@@ -942,23 +966,31 @@ function activateDocument(id: string) {
     session.activate(id);
 }
 
-async function ensureSavedForExport() {
-    if (!currentPath.value || dirty.value) {
-        await saveNote();
+async function ensureSavedForExport(id: string): Promise<SessionDocument | null> {
+    let target = documents.value.find((document) => document.id === id) ?? null;
+    if (!target) return null;
+    if (!target.path || target.dirty) {
+        if (!(await saveDocument(id))) return null;
+        target = documents.value.find((document) => document.id === id) ?? null;
     }
-    return Boolean(currentPath.value && !dirty.value);
+    return target?.path && !target.dirty ? target : null;
 }
 
 async function exportMarkdown() {
-    if (!(await ensureSavedForExport()) || !currentPath.value) return;
+    const targetId = activeDocumentId.value;
+    if (!targetId) return;
+    const target = await ensureSavedForExport(targetId);
+    if (!target?.path) return;
+    const sourcePath = target.path;
+    const exportTitle = documentNameFromPath(sourcePath);
     const destination = await save({
-        defaultPath: `${sanitizeFileName(title.value)}.md`,
+        defaultPath: `${sanitizeFileName(exportTitle)}.md`,
         filters: [{ name: "Markdown", extensions: ["md"] }],
     });
     if (!destination) return;
     await runAction(async () => {
         await invoke("export_markdown", {
-            sourcePath: currentPath.value,
+            sourcePath,
             destinationPath: destination,
         });
         statusMessage.value = "Markdown 导出成功";
@@ -967,18 +999,32 @@ async function exportMarkdown() {
 
 async function exportPdf() {
     if (printing) return;
+    const targetId = activeDocumentId.value;
+    if (!targetId) return;
 
     printing = true;
     let printTitleApplied = false;
     const previousMode = editorMode.value;
     const previousSourcePreview = sourcePreview.value;
     try {
-        if (!(await ensureSavedForExport())) return;
+        const target = await ensureSavedForExport(targetId);
+        if (!target) return;
+        if (activeDocumentId.value !== targetId) {
+            statusMessage.value = "PDF 导出已取消：活动文档已切换";
+            return;
+        }
+        const printTitle = target.path
+            ? documentNameFromPath(target.path)
+            : target.displayName;
         editorMode.value = "wysiwyg";
         await nextTick();
         await (editorRef.value?.whenReady() ?? Promise.resolve());
+        if (activeDocumentId.value !== targetId) {
+            statusMessage.value = "PDF 导出已取消：活动文档已切换";
+            return;
+        }
         statusMessage.value = "已打开系统打印对话框，可选择另存为 PDF";
-        document.title = title.value;
+        document.title = printTitle;
         printTitleApplied = true;
         window.print();
     } catch (error) {
@@ -1038,7 +1084,7 @@ async function saveDocumentAs(id: string) {
 }
 
 const closeActions = {
-    decide: async (_document: OpenDocument) => requestLeaveDecision(),
+    decide: async (document: OpenDocument) => requestLeaveDecision(document.displayName),
     save: saveDocument,
 };
 
@@ -1411,17 +1457,28 @@ async function openLibraryNote(path: string) {
 }
 
 async function refreshHistory() {
-    if (!currentPath.value) {
+    const active = activeDocument.value;
+    if (!active?.path) {
         historyItems.value = [];
         return;
     }
+    const targetId = active.id;
+    const targetPath = active.path;
+    const requestId = ++historyRequestId;
     historyLoading.value = true;
     try {
-        historyItems.value = await invoke<HistoryListItem[]>("list_history", {
-            path: currentPath.value,
+        const items = await invoke<HistoryListItem[]>("list_history", {
+            path: targetPath,
         });
+        if (
+            requestId === historyRequestId &&
+            activeDocumentId.value === targetId &&
+            session.document(targetId).path === targetPath
+        ) {
+            historyItems.value = items;
+        }
     } finally {
-        historyLoading.value = false;
+        if (requestId === historyRequestId) historyLoading.value = false;
     }
 }
 
@@ -1437,14 +1494,24 @@ async function openHistoryPanel() {
 async function restoreHistory(name: string) {
     const active = activeDocument.value;
     if (!active?.path) return;
+    const targetId = active.id;
+    const targetPath = active.path;
+    const requestId = ++historyRequestId;
     await runAction(async () => {
         const snapshot = await invoke<HistorySnapshot>("read_history", {
-            path: active.path,
+            path: targetPath,
             name,
         });
-        active.meta = snapshot.meta;
-        session.updateContent(active.id, snapshot.content);
-        await hydrateDocumentResources(active);
+        if (
+            requestId !== historyRequestId ||
+            activeDocumentId.value !== targetId ||
+            session.document(targetId).path !== targetPath
+        ) {
+            return;
+        }
+        session.updateMetadata(targetId, snapshot.meta);
+        session.updateContent(targetId, snapshot.content);
+        await hydrateDocumentResources(session.document(targetId));
         showHistory.value = false;
         statusMessage.value = "已恢复历史版本，保存后生效";
     });
@@ -1456,12 +1523,11 @@ function showAbout() {
     );
 }
 
-async function importedResourceToSession(resource: ResourceSaveData) {
-    const active = activeDocument.value;
-    if (!active) return;
+function importedResourceToSession(documentId: string, resource: ResourceSaveData) {
+    const target = session.document(documentId);
     const blob = base64ToBlob(resource.base64, resource.mimeType);
     const objectUrl = URL.createObjectURL(blob);
-    active.resources.registerNew({
+    target.resources.registerNew({
         path: resource.name,
         originalName: resource.originalName,
         mimeType: resource.mimeType,
@@ -1479,15 +1545,22 @@ async function importedResourceToSession(resource: ResourceSaveData) {
 }
 
 async function importResourcePaths(paths: string[]) {
-    if (!paths.length || !activeDocument.value) return;
+    const targetId = activeDocumentId.value;
+    if (!paths.length || !targetId) return;
     await runAction(async () => {
+        let importedCount = 0;
         for (const path of paths) {
             const resource = await invoke<ResourceSaveData>("import_resource", {
                 path,
             });
-            await importedResourceToSession(resource);
+            if (activeDocumentId.value !== targetId) {
+                statusMessage.value = "资源导入已取消：活动文档已切换";
+                return;
+            }
+            importedResourceToSession(targetId, resource);
+            importedCount += 1;
         }
-        statusMessage.value = `已导入 ${paths.length} 个资源`;
+        statusMessage.value = `已导入 ${importedCount} 个资源`;
     });
 }
 
@@ -1827,7 +1900,11 @@ function stringifyError(error: unknown) {
             @search="runLibrarySearch"
             @open-note="openLibraryNote"
         />
-        <LeaveConfirmDialog :open="showLeavePrompt" @decide="resolveLeaveDecision" />
+        <LeaveConfirmDialog
+            :open="showLeavePrompt"
+            :document-name="leavePromptDocumentName"
+            @decide="resolveLeaveDecision"
+        />
         <StatusBar
             :error-message="errorMessage"
             :status-message="statusMessage"

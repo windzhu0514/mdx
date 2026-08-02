@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
     cancelAi: vi.fn(),
     releaseDocument: vi.fn(),
     openDialog: vi.fn(),
+    openMdxFailures: new Set<string>(),
     getCurrentWindow: vi.fn(() => ({
         onDragDropEvent: vi.fn(async () => () => undefined),
         onCloseRequested: vi.fn(
@@ -49,6 +50,7 @@ const mocks = vi.hoisted(() => ({
         }
         if (command === "open_mdx") {
             const path = (args as { path: string }).path;
+            if (mocks.openMdxFailures.has(path)) throw new Error(`无法打开 ${path}`);
             const name =
                 path
                     .split(/[\\/]/)
@@ -61,6 +63,32 @@ const mocks = vi.hoisted(() => ({
                 meta: {
                     id: name,
                     title: name,
+                    createdAt: "",
+                    updatedAt: "",
+                    wordCount: 0,
+                    assets: [],
+                    attachments: [],
+                },
+            };
+        }
+        if (command === "save_mdx") {
+            const request = (
+                args as {
+                    request: {
+                        path: string;
+                        title: string;
+                        content: string;
+                        meta: Record<string, unknown> | null;
+                    };
+                }
+            ).request;
+            return {
+                path: request.path,
+                title: request.title,
+                content: request.content,
+                meta: request.meta ?? {
+                    id: request.title,
+                    title: request.title,
                     createdAt: "",
                     updatedAt: "",
                     wordCount: 0,
@@ -161,6 +189,19 @@ beforeEach(() => {
     mocks.aiKeyConfigured = false;
     mocks.aiKeyStatusResponses = [];
     mocks.openDialog.mockReset();
+    mocks.openMdxFailures.clear();
+    Object.defineProperty(HTMLDialogElement.prototype, "showModal", {
+        configurable: true,
+        value() {
+            this.setAttribute("open", "");
+        },
+    });
+    Object.defineProperty(HTMLDialogElement.prototype, "close", {
+        configurable: true,
+        value() {
+            this.removeAttribute("open");
+        },
+    });
     window.matchMedia = vi.fn(() => ({
         matches: false,
         media: "(prefers-color-scheme: dark)",
@@ -347,6 +388,88 @@ describe("App 多文档工作区", () => {
         ).toBeNull();
         expect(host.textContent).not.toContain("保存并继续");
         expect(mocks.cancelAi).toHaveBeenCalledTimes(4);
+    });
+
+    it("关闭非活动脏文档时显示目标名称并保存目标文档", async () => {
+        mocks.isTauri.mockReturnValue(true);
+        mocks.openDialog.mockResolvedValue(["C:\\notes\\a.mdx", "C:\\notes\\b.mdx"]);
+        const host = document.createElement("div");
+        document.body.append(host);
+        const app = createApp(App);
+        app.mount(host);
+        cleanup = () => app.unmount();
+
+        Array.from(host.querySelectorAll("button"))
+            .find(
+                (button) =>
+                    button.querySelector("span")?.textContent?.trim() === "打开文件...",
+            )
+            ?.click();
+        await vi.waitFor(() =>
+            expect(host.querySelectorAll('[role="treeitem"]')).toHaveLength(2),
+        );
+        const rows = Array.from(host.querySelectorAll<HTMLElement>('[role="treeitem"]'));
+        const aRow = rows.find((row) => row.textContent?.includes("a"));
+        const bRow = rows.find((row) => row.textContent?.includes("b"));
+        aRow?.click();
+        await nextTick();
+        mocks.editorUpdate?.("dirty a");
+        await nextTick();
+        bRow?.click();
+        await nextTick();
+        aRow?.dispatchEvent(new FocusEvent("focus"));
+        await nextTick();
+
+        host.querySelector<HTMLButtonElement>('[aria-label="关闭 a"]')?.click();
+        await vi.waitFor(() => expect(host.textContent).toContain("保存“a”？"));
+        Array.from(host.querySelectorAll("button"))
+            .find((button) => button.textContent?.trim() === "保存并继续")
+            ?.click();
+
+        await vi.waitFor(() =>
+            expect(mocks.invoke).toHaveBeenCalledWith(
+                "save_mdx",
+                expect.objectContaining({
+                    request: expect.objectContaining({
+                        path: "C:\\notes\\a.mdx",
+                        content: "dirty a",
+                    }),
+                }),
+            ),
+        );
+        expect(host.querySelector(".menu-document-name")?.textContent?.trim()).toBe("b");
+    });
+
+    it("批量打开时隔离单文件失败并继续处理后续路径", async () => {
+        mocks.isTauri.mockReturnValue(true);
+        const badPath = "C:\\notes\\bad.mdx";
+        mocks.openMdxFailures.add(badPath);
+        mocks.openDialog.mockResolvedValue([
+            "C:\\notes\\good-a.mdx",
+            badPath,
+            "C:\\notes\\good-b.mdx",
+        ]);
+        const host = document.createElement("div");
+        document.body.append(host);
+        const app = createApp(App);
+        app.mount(host);
+        cleanup = () => app.unmount();
+
+        Array.from(host.querySelectorAll("button"))
+            .find(
+                (button) =>
+                    button.querySelector("span")?.textContent?.trim() === "打开文件...",
+            )
+            ?.click();
+
+        await vi.waitFor(() => {
+            const names = Array.from(host.querySelectorAll('[role="treeitem"]')).map(
+                (item) => item.textContent?.trim(),
+            );
+            expect(names).toContain("good-a");
+            expect(names).toContain("good-b");
+            expect(host.textContent).toContain("bad.mdx");
+        });
     });
 });
 

@@ -1,7 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
 import { computed, ref, shallowRef, triggerRef } from "vue";
 
-import type { ImportedMarkdown, MdxMetadata, MdxNote } from "../types/mdx";
+import type {
+    ImportedMarkdown,
+    MdxMetadata,
+    MdxNote,
+    ResourceSaveData,
+} from "../types/mdx";
 import type {
     DiskRevision,
     DiskRevisionResult,
@@ -52,6 +57,24 @@ function baseName(path: string) {
 
 function mdxTargetPath(path: string) {
     return /\.mdx$/iu.test(path) ? path : `${path}.mdx`;
+}
+
+function sameResources(left: ResourceSaveData[], right: ResourceSaveData[]) {
+    return (
+        left.length === right.length &&
+        left.every((resource, index) => {
+            const other = right[index];
+            return (
+                other !== undefined &&
+                resource.name === other.name &&
+                resource.originalName === other.originalName &&
+                resource.mimeType === other.mimeType &&
+                resource.size === other.size &&
+                resource.kind === other.kind &&
+                resource.base64 === other.base64
+            );
+        })
+    );
 }
 
 function isInside(identity: string, rootIdentity: string) {
@@ -392,6 +415,14 @@ export function useDocumentSession(desktop: boolean) {
         triggerRef(documents);
     }
 
+    function updateMetadata(id: string, meta: MdxMetadata) {
+        const runtime = document(id);
+        runtime.meta = meta;
+        runtime.dirty = true;
+        runtime.draft.schedule();
+        triggerRef(documents);
+    }
+
     async function releaseDocument(runtime: SessionDocument) {
         try {
             await runtime.draft.dispose();
@@ -407,27 +438,40 @@ export function useDocumentSession(desktop: boolean) {
         const storageKey =
             draftKeys.get(runtime.id) ?? draftKey(runtime.path, runtime.id);
         const title = documentNameFromPath(runtime.path);
+        const requestedContent = runtime.resources.persistedMarkdown(runtime.content);
+        const requestedResources = runtime.resources.newResources();
+        const requestedMetadata = JSON.stringify(runtime.meta);
         const saved = await invoke<MdxNote>("save_mdx", {
             request: {
                 path: runtime.path,
                 title,
-                content: runtime.resources.persistedMarkdown(runtime.content),
+                content: requestedContent,
                 meta: runtime.meta ? { ...runtime.meta, title } : null,
-                newAssets: runtime.resources.newResources(),
+                newAssets: requestedResources,
             },
         });
 
         runtime.path = saved.path ?? runtime.path;
         runtime.displayName = saved.title;
-        runtime.content = runtime.resources.persistedMarkdown(saved.content);
-        runtime.meta = saved.meta;
-        runtime.dirty = false;
         runtime.diskRevision = await readRevision(runtime.path);
         runtime.conflict = false;
         runtime.unavailable = false;
-        runtime.resources.markSaved();
-        await runtime.draft.remove(storageKey);
         draftKeys.set(runtime.id, draftKey(runtime.path, runtime.id));
+        const metadataChanged = JSON.stringify(runtime.meta) !== requestedMetadata;
+        const changedWhileSaving =
+            runtime.resources.persistedMarkdown(runtime.content) !== requestedContent ||
+            !sameResources(runtime.resources.newResources(), requestedResources) ||
+            metadataChanged;
+        if (!metadataChanged) runtime.meta = saved.meta;
+        if (changedWhileSaving) {
+            runtime.dirty = true;
+            runtime.draft.schedule();
+        } else {
+            runtime.content = runtime.resources.persistedMarkdown(saved.content);
+            runtime.dirty = false;
+            runtime.resources.markSaved();
+            await runtime.draft.remove(storageKey);
+        }
         triggerRef(documents);
         return runtime;
     }
@@ -450,13 +494,16 @@ export function useDocumentSession(desktop: boolean) {
             draftKeys.get(runtime.id) ??
             draftKey(runtime.path ?? runtime.importSourcePath, runtime.id);
         const title = documentNameFromPath(resolved.path);
+        const requestedContent = runtime.resources.persistedMarkdown(runtime.content);
+        const requestedResources = runtime.resources.newResources();
+        const requestedMetadata = JSON.stringify(runtime.meta);
         const saved = await invoke<MdxNote>("save_mdx_as", {
             request: {
                 path: resolved.path,
                 title,
-                content: runtime.content,
+                content: requestedContent,
                 meta: runtime.meta ? { ...runtime.meta, title } : null,
-                newAssets: runtime.resources.newResources(),
+                newAssets: requestedResources,
             },
             path: resolved.path,
         });
@@ -468,15 +515,25 @@ export function useDocumentSession(desktop: boolean) {
         runtime.sourceKind = "mdx";
         runtime.importSourcePath = null;
         runtime.displayName = saved.title;
-        runtime.content = runtime.resources.persistedMarkdown(saved.content);
-        runtime.meta = saved.meta;
-        runtime.dirty = false;
         runtime.diskRevision = await readRevision(runtime.path);
         runtime.conflict = false;
         runtime.unavailable = false;
-        runtime.resources.markSaved();
-        await runtime.draft.remove(previousDraftKey);
         draftKeys.set(runtime.id, draftKey(runtime.path, runtime.id));
+        const metadataChanged = JSON.stringify(runtime.meta) !== requestedMetadata;
+        const changedWhileSaving =
+            runtime.resources.persistedMarkdown(runtime.content) !== requestedContent ||
+            !sameResources(runtime.resources.newResources(), requestedResources) ||
+            metadataChanged;
+        if (!metadataChanged) runtime.meta = saved.meta;
+        if (changedWhileSaving) {
+            runtime.dirty = true;
+            runtime.draft.schedule();
+        } else {
+            runtime.content = runtime.resources.persistedMarkdown(saved.content);
+            runtime.dirty = false;
+            runtime.resources.markSaved();
+            await runtime.draft.remove(previousDraftKey);
+        }
         triggerRef(documents);
         scheduleSessionWrite();
         return runtime;
@@ -820,6 +877,7 @@ export function useDocumentSession(desktop: boolean) {
         openFolder,
         activate,
         updateContent,
+        updateMetadata,
         save,
         saveAs,
         closeDocument,

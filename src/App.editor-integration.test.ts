@@ -2,7 +2,8 @@
 
 import { createApp, defineComponent, h, nextTick, watch } from "vue";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { MdxMetadata, MdxNote } from "./types/mdx";
+import type { MdxMetadata, MdxNote, ResourceSaveData } from "./types/mdx";
+import type { HistoryListItem, HistorySnapshot } from "./types/history";
 import { countNonWhitespaceCharacters } from "./utils/text";
 
 type LowestEditorControls = {
@@ -10,6 +11,7 @@ type LowestEditorControls = {
     focus: ReturnType<typeof vi.fn>;
     readiness: Promise<void>;
     uploadImage?: (file: File) => Promise<string>;
+    replaceSelection: ReturnType<typeof vi.fn>;
     whenReadyCalls: number;
 };
 
@@ -24,6 +26,14 @@ const mocks = vi.hoisted(() => ({
     source: undefined as LowestEditorControls | undefined,
     objectUrl: "blob:mora-image",
     openedNote: undefined as MdxNote | undefined,
+    openedNotes: new Map<string, MdxNote>(),
+    nextSave: undefined as Promise<MdxNote> | undefined,
+    nextImportedResource: undefined as Promise<ResourceSaveData> | undefined,
+    historyItems: [] as HistoryListItem[],
+    nextHistoryItems: undefined as Promise<HistoryListItem[]> | undefined,
+    historySnapshot: undefined as HistorySnapshot | undefined,
+    nextHistorySnapshot: undefined as Promise<HistorySnapshot> | undefined,
+    replaceSelection: vi.fn(),
     printSnapshots: [] as string[],
     printTitles: [] as string[],
     nextMilkdownReadiness: undefined as Promise<void> | undefined,
@@ -130,6 +140,7 @@ function lowestEditorStub(kind: "milkdown" | "source") {
                 readiness,
                 uploadImage: props.uploadImage as
                     ((file: File) => Promise<string>) | undefined,
+                replaceSelection: mocks.replaceSelection,
                 whenReadyCalls: 0,
             };
             mocks[kind] = controls;
@@ -145,7 +156,7 @@ function lowestEditorStub(kind: "milkdown" | "source") {
                 focus: controls.focus,
                 getSelectedText: vi.fn(() => ""),
                 moveCursor: vi.fn(),
-                replaceSelection: vi.fn(),
+                replaceSelection: controls.replaceSelection,
                 releaseDocument: vi.fn(),
                 scrollToHeading: vi.fn(() => false),
                 whenReady: () => {
@@ -208,6 +219,14 @@ beforeEach(() => {
     mocks.milkdown = undefined;
     mocks.source = undefined;
     mocks.openedNote = undefined;
+    mocks.openedNotes.clear();
+    mocks.nextSave = undefined;
+    mocks.nextImportedResource = undefined;
+    mocks.historyItems = [];
+    mocks.nextHistoryItems = undefined;
+    mocks.historySnapshot = undefined;
+    mocks.nextHistorySnapshot = undefined;
+    mocks.replaceSelection.mockReset();
     mocks.printSnapshots = [];
     mocks.printTitles = [];
     mocks.nextMilkdownReadiness = undefined;
@@ -223,9 +242,27 @@ beforeEach(() => {
         if (command === "get_disk_revisions") {
             return [{ available: true, revision: { modifiedAtMs: 1, size: 1 } }];
         }
-        if (command === "open_mdx") return mocks.openedNote;
+        if (command === "open_mdx") {
+            const path = (args as { path: string }).path;
+            return (
+                mocks.openedNotes.get(path) ??
+                mocks.openedNote ??
+                createNote(
+                    `# ${path
+                        .split(/[\\/]/)
+                        .pop()
+                        ?.replace(/\.mdx$/iu, "")}`,
+                    path,
+                )
+            );
+        }
         if (command === "read_asset") return "aW1hZ2U=";
         if (command === "save_mdx_as" || command === "save_mdx") {
+            if (mocks.nextSave) {
+                const pending = mocks.nextSave;
+                mocks.nextSave = undefined;
+                return pending;
+            }
             const request = (
                 args as {
                     request: {
@@ -241,6 +278,31 @@ beforeEach(() => {
             );
             note.meta = request.meta ?? createMeta({ title: note.title });
             return note;
+        }
+        if (command === "import_resource") {
+            if (mocks.nextImportedResource) {
+                const pending = mocks.nextImportedResource;
+                mocks.nextImportedResource = undefined;
+                return pending;
+            }
+            throw new Error("缺少资源导入测试数据");
+        }
+        if (command === "export_markdown") return undefined;
+        if (command === "list_history") {
+            if (mocks.nextHistoryItems) {
+                const pending = mocks.nextHistoryItems;
+                mocks.nextHistoryItems = undefined;
+                return pending;
+            }
+            return mocks.historyItems;
+        }
+        if (command === "read_history") {
+            if (mocks.nextHistorySnapshot) {
+                const pending = mocks.nextHistorySnapshot;
+                mocks.nextHistorySnapshot = undefined;
+                return pending;
+            }
+            return mocks.historySnapshot;
         }
         return undefined;
     });
@@ -467,9 +529,140 @@ describe("App 编辑器状态集成", () => {
         await nextTick();
         expect(mocks.source?.focus).toHaveBeenCalledTimes(2);
     });
+
+    it("资源导入等待期间切换文档会取消导入且不污染任一文档", async () => {
+        const imported = createDeferred<ResourceSaveData>();
+        mocks.nextImportedResource = imported.promise;
+        mocks.openDialog.mockResolvedValueOnce("C:\\files\\late.png");
+        const host = await mountApp();
+
+        findButton(host, "导入图片或附件...").click();
+        await vi.waitFor(() =>
+            expect(mocks.invoke).toHaveBeenCalledWith("import_resource", {
+                path: "C:\\files\\late.png",
+            }),
+        );
+        findButton(host, "新建").click();
+        await vi.waitFor(() =>
+            expect(host.querySelector(".menu-document-name")?.textContent).toContain(
+                "未命名文档 2",
+            ),
+        );
+
+        imported.resolve({
+            name: "assets/late.png",
+            originalName: "late.png",
+            mimeType: "image/png",
+            size: 4,
+            kind: "asset",
+            base64: "bGF0ZQ==",
+        });
+
+        await vi.waitFor(() => expect(host.textContent).toContain("资源导入已取消"));
+        expect(mocks.replaceSelection).not.toHaveBeenCalled();
+        expect(editorValue(host, "milkdown")).toBe("");
+
+        mocks.saveDialog
+            .mockResolvedValueOnce("C:\\notes\\second.mdx")
+            .mockResolvedValueOnce("C:\\notes\\first.mdx");
+        findButton(host, "另存为...").click();
+        await vi.waitFor(() =>
+            expect(
+                mocks.invoke.mock.calls.filter(([command]) => command === "save_mdx_as"),
+            ).toHaveLength(1),
+        );
+        const firstRow = Array.from(
+            host.querySelectorAll<HTMLElement>('[role="treeitem"]'),
+        ).find((row) => row.textContent?.includes("未命名文档 1"));
+        firstRow?.click();
+        await nextTick();
+        expect(editorValue(host, "milkdown")).toBe("");
+        findButton(host, "另存为...").click();
+        await vi.waitFor(() =>
+            expect(
+                mocks.invoke.mock.calls.filter(([command]) => command === "save_mdx_as"),
+            ).toHaveLength(2),
+        );
+        const requests = mocks.invoke.mock.calls
+            .filter(([command]) => command === "save_mdx_as")
+            .map(
+                ([, args]) =>
+                    (args as { request: { newAssets: ResourceSaveData[] } }).request,
+            );
+        expect(requests.map((request) => request.newAssets)).toEqual([[], []]);
+    });
 });
 
 describe("App PDF 打印视图", () => {
+    it("Markdown 导出等待目标保存时切换文档仍导出原目标路径", async () => {
+        const pathA = "C:\\notes\\a.mdx";
+        const pathB = "C:\\notes\\b.mdx";
+        mocks.openedNotes.set(pathA, createNote("# A", pathA));
+        mocks.openedNotes.set(pathB, createNote("# B", pathB));
+        mocks.openDialog.mockResolvedValueOnce([pathA, pathB]);
+        const host = await mountApp();
+        findButton(host, "打开文件...").click();
+        await vi.waitFor(() =>
+            expect(host.querySelector(".menu-document-name")?.textContent).toContain("b"),
+        );
+        const rows = Array.from(host.querySelectorAll<HTMLElement>('[role="treeitem"]'));
+        rows.find((row) => row.textContent?.trim() === "a")?.click();
+        await nextTick();
+        mocks.milkdown?.emitUpdate("# A changed");
+        await nextTick();
+
+        const pendingSave = createDeferred<MdxNote>();
+        mocks.nextSave = pendingSave.promise;
+        findButton(host, "导出 Markdown...").click();
+        await vi.waitFor(() =>
+            expect(mocks.invoke.mock.calls.some(([name]) => name === "save_mdx")).toBe(
+                true,
+            ),
+        );
+        rows.find((row) => row.textContent?.trim() === "b")?.click();
+        await nextTick();
+        pendingSave.resolve(createNote("# A changed", pathA));
+
+        await vi.waitFor(() =>
+            expect(mocks.invoke).toHaveBeenCalledWith("export_markdown", {
+                sourcePath: pathA,
+                destinationPath: "C:\\notes\\saved.mdx",
+            }),
+        );
+    });
+
+    it("PDF 等待目标编辑器就绪时切换文档会取消而不打印新活动文档", async () => {
+        const pathA = "C:\\notes\\pdf-a.mdx";
+        const pathB = "C:\\notes\\pdf-b.mdx";
+        mocks.openedNotes.set(pathA, createNote("# PDF A", pathA));
+        mocks.openedNotes.set(pathB, createNote("# PDF B", pathB));
+        mocks.openDialog.mockResolvedValueOnce([pathA, pathB]);
+        const host = await mountApp();
+        findButton(host, "打开文件...").click();
+        await vi.waitFor(() =>
+            expect(host.querySelector(".menu-document-name")?.textContent).toContain(
+                "pdf-b",
+            ),
+        );
+        const rows = Array.from(host.querySelectorAll<HTMLElement>('[role="treeitem"]'));
+        rows.find((row) => row.textContent?.trim() === "pdf-a")?.click();
+        await nextTick();
+        const targetEditor = mocks.milkdown;
+        const readiness = createDeferred<void>();
+        if (targetEditor) targetEditor.readiness = readiness.promise;
+
+        findButton(host, "导出 PDF / 打印...").click();
+        await vi.waitFor(() => expect(targetEditor?.whenReadyCalls).toBe(1));
+        rows.find((row) => row.textContent?.trim() === "pdf-b")?.click();
+        await nextTick();
+        readiness.resolve();
+        await new Promise((resolve) => window.setTimeout(resolve, 0));
+        await nextTick();
+
+        expect(window.print).not.toHaveBeenCalled();
+        expect(host.textContent).toContain("PDF 导出已取消");
+    });
+
     it("打印期间用文档文件名作为标题且不注入额外正文标题", async () => {
         mocks.openedNote = createNote("## Markdown 中的标题", "C:\\notes\\项目计划.mdx");
         const host = await mountApp();
@@ -576,5 +769,164 @@ describe("App PDF 打印视图", () => {
             ).toBe("true");
         }
         expect(host.textContent).not.toContain("未保存");
+    });
+});
+
+describe("App 历史版本文档作用域", () => {
+    it("切换文档后关闭历史面板并丢弃原文档的延迟列表响应", async () => {
+        const pathA = "C:\\notes\\history-a.mdx";
+        const pathB = "C:\\notes\\history-b.mdx";
+        mocks.openedNotes.set(pathA, createNote("# History A", pathA));
+        mocks.openedNotes.set(pathB, createNote("# History B", pathB));
+        mocks.openDialog.mockResolvedValueOnce([pathA, pathB]);
+        const pendingItems = createDeferred<HistoryListItem[]>();
+        mocks.nextHistoryItems = pendingItems.promise;
+        const host = await mountApp();
+        findButton(host, "打开文件...").click();
+        await vi.waitFor(() =>
+            expect(host.querySelector(".menu-document-name")?.textContent).toContain(
+                "history-b",
+            ),
+        );
+        const rows = Array.from(host.querySelectorAll<HTMLElement>('[role="treeitem"]'));
+        rows.find((row) => row.textContent?.trim() === "history-a")?.click();
+        await nextTick();
+        findButton(host, "历史版本...").click();
+        await vi.waitFor(() =>
+            expect(mocks.invoke).toHaveBeenCalledWith("list_history", { path: pathA }),
+        );
+
+        rows.find((row) => row.textContent?.trim() === "history-b")?.click();
+        await nextTick();
+        pendingItems.resolve([
+            {
+                name: "late.json",
+                title: "A 的延迟历史",
+                createdAt: "2026-08-02T00:00:00Z",
+            },
+        ]);
+        await new Promise((resolve) => window.setTimeout(resolve, 0));
+        await nextTick();
+
+        expect(host.querySelector('[aria-labelledby="history-title"]')).toBeNull();
+        expect(host.textContent).not.toContain("A 的延迟历史");
+    });
+
+    it("切换文档后丢弃原文档的延迟历史恢复响应", async () => {
+        const pathA = "C:\\notes\\restore-a.mdx";
+        const pathB = "C:\\notes\\restore-b.mdx";
+        mocks.openedNotes.set(pathA, createNote("# Restore A", pathA));
+        mocks.openedNotes.set(pathB, createNote("# Restore B", pathB));
+        mocks.openDialog.mockResolvedValueOnce([pathA, pathB]);
+        mocks.historyItems = [
+            {
+                name: "restore.json",
+                title: "A 的历史",
+                createdAt: "2026-08-02T00:00:00Z",
+            },
+        ];
+        const pendingSnapshot = createDeferred<HistorySnapshot>();
+        mocks.nextHistorySnapshot = pendingSnapshot.promise;
+        const host = await mountApp();
+        findButton(host, "打开文件...").click();
+        await vi.waitFor(() =>
+            expect(host.querySelector(".menu-document-name")?.textContent).toContain(
+                "restore-b",
+            ),
+        );
+        const documentRow = (name: string) =>
+            Array.from(host.querySelectorAll<HTMLElement>('[role="treeitem"]')).find(
+                (row) =>
+                    row.querySelector(".workspace-name")?.textContent?.trim() === name,
+            );
+        const rowA = documentRow("restore-a");
+        expect(rowA).toBeDefined();
+        rowA?.click();
+        await nextTick();
+        findButton(host, "历史版本...").click();
+        await vi.waitFor(() => expect(host.textContent).toContain("A 的历史"));
+        findButton(host, "恢复此版本").click();
+        await vi.waitFor(() =>
+            expect(mocks.invoke).toHaveBeenCalledWith("read_history", {
+                path: pathA,
+                name: "restore.json",
+            }),
+        );
+
+        const rowB = documentRow("restore-b");
+        expect(rowB).toBeDefined();
+        rowB?.click();
+        await vi.waitFor(() =>
+            expect(host.querySelector(".menu-document-name")?.textContent).toContain(
+                "restore-b",
+            ),
+        );
+        const restoredMeta = createMeta({ tags: ["不应应用"] });
+        pendingSnapshot.resolve({
+            title: "A 的历史",
+            content: "# Late restored A",
+            meta: restoredMeta,
+            createdAt: "2026-08-02T00:00:00Z",
+        });
+        await new Promise((resolve) => window.setTimeout(resolve, 0));
+        documentRow("restore-a")?.click();
+        await vi.waitFor(() =>
+            expect(host.querySelector(".menu-document-name")?.textContent).toContain(
+                "restore-a",
+            ),
+        );
+
+        expect(editorValue(host, "milkdown")).toBe("# Restore A");
+        findButton(host, "保存").click();
+        await vi.waitFor(() => {
+            const saveCalls = mocks.invoke.mock.calls.filter(
+                ([command]) => command === "save_mdx",
+            );
+            const saveCall = saveCalls[saveCalls.length - 1];
+            expect(
+                (saveCall?.[1] as { request: { meta: MdxMetadata } }).request.meta.tags,
+            ).toEqual([]);
+        });
+    });
+
+    it("恢复相同正文但不同元数据时标脏并保存历史元数据", async () => {
+        const pathA = "C:\\notes\\metadata-history.mdx";
+        mocks.openedNotes.set(pathA, createNote("# Same content", pathA));
+        mocks.openDialog.mockResolvedValueOnce(pathA);
+        mocks.historyItems = [
+            {
+                name: "metadata.json",
+                title: "元数据历史",
+                createdAt: "2026-08-02T00:00:00Z",
+            },
+        ];
+        mocks.historySnapshot = {
+            title: "元数据历史",
+            content: "# Same content",
+            meta: createMeta({ id: "history-meta", tags: ["历史标签"] }),
+            createdAt: "2026-08-02T00:00:00Z",
+        };
+        const host = await mountApp();
+        findButton(host, "打开文件...").click();
+        await vi.waitFor(() =>
+            expect(host.querySelector(".menu-document-name")?.textContent).toContain(
+                "metadata-history",
+            ),
+        );
+        findButton(host, "历史版本...").click();
+        await vi.waitFor(() => expect(host.textContent).toContain("元数据历史"));
+        findButton(host, "恢复此版本").click();
+
+        await vi.waitFor(() => expect(host.textContent).toContain("未保存"));
+        findButton(host, "保存").click();
+        await vi.waitFor(() => {
+            const saveCalls = mocks.invoke.mock.calls.filter(
+                ([command]) => command === "save_mdx",
+            );
+            const saveCall = saveCalls[saveCalls.length - 1];
+            expect(
+                (saveCall?.[1] as { request: { meta: MdxMetadata } }).request.meta,
+            ).toMatchObject({ id: "history-meta", tags: ["历史标签"] });
+        });
     });
 });

@@ -10,7 +10,7 @@ import type {
     WorkspaceSessionRead,
     WorkspaceSessionSnapshot,
 } from "../types/workspace";
-import type { DraftSnapshot } from "./useDraftRecovery";
+import { draftKey, type DraftSnapshot } from "./useDraftRecovery";
 import { useDocumentSession } from "./useDocumentSession";
 
 const invoke = vi.hoisted(() => vi.fn());
@@ -23,6 +23,18 @@ let failNextDraftWrite = false;
 const workspaceWriteSnapshots: WorkspaceSessionSnapshot[] = [];
 let workspaceWriteHandler:
     ((snapshot: WorkspaceSessionSnapshot) => Promise<void>) | null = null;
+let saveHandler:
+    | ((
+          command: "save_mdx" | "save_mdx_as",
+          request: {
+              path: string | null;
+              title: string;
+              content: string;
+              meta: MdxMetadata | null;
+              newAssets: Array<{ name: string }>;
+          },
+      ) => Promise<MdxNote>)
+    | null = null;
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 
@@ -103,6 +115,7 @@ const pendingImage: PendingResource = {
 
 describe("document session", () => {
     beforeEach(() => {
+        vi.useFakeTimers();
         workspaceRead = { session: null, warning: null };
         drafts.clear();
         diskContents.clear();
@@ -111,6 +124,7 @@ describe("document session", () => {
         failNextDraftWrite = false;
         workspaceWriteSnapshots.length = 0;
         workspaceWriteHandler = null;
+        saveHandler = null;
         Object.defineProperty(URL, "revokeObjectURL", {
             configurable: true,
             value: vi.fn(),
@@ -155,7 +169,9 @@ describe("document session", () => {
                     title: string;
                     content: string;
                     meta: MdxMetadata | null;
+                    newAssets: Array<{ name: string }>;
                 };
+                if (saveHandler) return saveHandler(command, request);
                 const path =
                     command === "save_mdx_as"
                         ? (() => {
@@ -310,6 +326,208 @@ describe("document session", () => {
             expect.objectContaining({
                 request: expect.objectContaining({
                     content: "![图](assets/a.png)",
+                }),
+            }),
+        );
+    });
+
+    it("keeps edits and new resources dirty when save resolves with an older snapshot", async () => {
+        const pendingSave = deferred<MdxNote>();
+        saveHandler = async () => pendingSave.promise;
+        const session = useDocumentSession(true);
+        const runtime = await session.openMdx("C:\\Notes\\race.mdx");
+        session.updateContent(runtime.id, "sent content");
+        runtime.resources.registerNew(pendingImage);
+
+        const saving = session.save(runtime.id);
+        await vi.waitFor(() =>
+            expect(invoke).toHaveBeenCalledWith(
+                "save_mdx",
+                expect.objectContaining({
+                    request: expect.objectContaining({ content: "sent content" }),
+                }),
+            ),
+        );
+        session.updateContent(runtime.id, "newer content");
+        runtime.resources.registerNew({
+            ...pendingImage,
+            path: "assets/b.png",
+            originalName: "b.png",
+            objectUrl: "blob:b",
+        });
+        pendingSave.resolve(note(runtime.path, runtime.displayName, "sent content"));
+
+        await saving;
+
+        expect(runtime.content).toBe("newer content");
+        expect(runtime.dirty).toBe(true);
+        expect(runtime.resources.newResources().map((resource) => resource.name)).toEqual(
+            ["assets/a.png", "assets/b.png"],
+        );
+        expect(invoke).not.toHaveBeenCalledWith("delete_draft", expect.anything());
+        await runtime.draft.flush();
+        const savedDrafts = Array.from(drafts.values());
+        expect(savedDrafts[savedDrafts.length - 1]).toMatchObject({
+            content: "newer content",
+            newResources: [
+                expect.objectContaining({ name: "assets/a.png" }),
+                expect.objectContaining({ name: "assets/b.png" }),
+            ],
+        });
+
+        saveHandler = null;
+        invoke.mockClear();
+        await session.save(runtime.id);
+        expect(invoke).toHaveBeenCalledWith(
+            "save_mdx",
+            expect.objectContaining({
+                request: expect.objectContaining({ content: "newer content" }),
+            }),
+        );
+    });
+
+    it("keeps edits dirty under the new identity when save-as resolves with an older snapshot", async () => {
+        const pendingSave = deferred<MdxNote>();
+        saveHandler = async () => pendingSave.promise;
+        const session = useDocumentSession(true);
+        const runtime = session.newDocument();
+        session.updateContent(runtime.id, "sent content");
+
+        const saving = session.saveAs(runtime.id, "C:\\Notes\\renamed.mdx");
+        await vi.waitFor(() =>
+            expect(invoke).toHaveBeenCalledWith(
+                "save_mdx_as",
+                expect.objectContaining({
+                    request: expect.objectContaining({ content: "sent content" }),
+                }),
+            ),
+        );
+        session.updateContent(runtime.id, "newer content");
+        pendingSave.resolve(note("C:\\Notes\\renamed.mdx", "renamed", "sent content"));
+
+        await saving;
+
+        expect(runtime.path).toBe("C:\\Notes\\renamed.mdx");
+        expect(runtime.pathIdentity).toBe("c:\\notes\\renamed.mdx");
+        expect(runtime.content).toBe("newer content");
+        expect(runtime.dirty).toBe(true);
+        expect(invoke).not.toHaveBeenCalledWith("delete_draft", expect.anything());
+        await runtime.draft.flush();
+        expect(drafts.get(draftKey("C:\\Notes\\renamed.mdx", runtime.id))).toMatchObject({
+            path: "C:\\Notes\\renamed.mdx",
+            content: "newer content",
+        });
+
+        saveHandler = null;
+        invoke.mockClear();
+        await session.save(runtime.id);
+        expect(invoke).toHaveBeenCalledWith(
+            "save_mdx",
+            expect.objectContaining({
+                request: expect.objectContaining({ content: "newer content" }),
+            }),
+        );
+    });
+
+    it("keeps metadata edits dirty when save resolves with older metadata", async () => {
+        const pendingSave = deferred<MdxNote>();
+        saveHandler = async () => pendingSave.promise;
+        const session = useDocumentSession(true);
+        const runtime = await session.openMdx("C:\\Notes\\meta-race.mdx");
+        const newerMeta = metadata("meta-race", "newer-meta-id");
+        newerMeta.tags = ["保存期间更新"];
+
+        const saving = session.save(runtime.id);
+        await vi.waitFor(() =>
+            expect(invoke).toHaveBeenCalledWith("save_mdx", expect.anything()),
+        );
+        session.updateMetadata(runtime.id, newerMeta);
+        pendingSave.resolve(note(runtime.path, runtime.displayName, runtime.content));
+
+        await saving;
+
+        expect(runtime.meta).toEqual(newerMeta);
+        expect(runtime.dirty).toBe(true);
+        saveHandler = null;
+        invoke.mockClear();
+        await session.save(runtime.id);
+        expect(invoke).toHaveBeenCalledWith(
+            "save_mdx",
+            expect.objectContaining({
+                request: expect.objectContaining({
+                    meta: expect.objectContaining({
+                        id: "newer-meta-id",
+                        tags: ["保存期间更新"],
+                    }),
+                }),
+            }),
+        );
+    });
+
+    it("keeps metadata edits dirty when save-as resolves with older metadata", async () => {
+        const pendingSave = deferred<MdxNote>();
+        saveHandler = async () => pendingSave.promise;
+        const session = useDocumentSession(true);
+        const runtime = session.newDocument();
+        const initialMeta = metadata("renamed", "initial-meta-id");
+        session.updateMetadata(runtime.id, initialMeta);
+        const newerMeta = metadata("renamed", "newer-save-as-meta-id");
+        newerMeta.tags = ["另存期间更新"];
+
+        const saving = session.saveAs(runtime.id, "C:\\Notes\\meta-save-as.mdx");
+        await vi.waitFor(() =>
+            expect(invoke).toHaveBeenCalledWith("save_mdx_as", expect.anything()),
+        );
+        session.updateMetadata(runtime.id, newerMeta);
+        pendingSave.resolve(
+            note("C:\\Notes\\meta-save-as.mdx", "meta-save-as", runtime.content),
+        );
+
+        await saving;
+
+        expect(runtime.meta).toEqual(newerMeta);
+        expect(runtime.dirty).toBe(true);
+        saveHandler = null;
+        invoke.mockClear();
+        await session.save(runtime.id);
+        expect(invoke).toHaveBeenCalledWith(
+            "save_mdx",
+            expect.objectContaining({
+                request: expect.objectContaining({
+                    meta: expect.objectContaining({
+                        id: "newer-save-as-meta-id",
+                        tags: ["另存期间更新"],
+                    }),
+                }),
+            }),
+        );
+    });
+
+    it("marks metadata-only history restoration dirty and saves the new metadata", async () => {
+        const session = useDocumentSession(true);
+        const runtime = await session.openMdx("C:\\Notes\\meta.mdx");
+        const restoredMeta = metadata("meta", "restored-meta-id");
+        restoredMeta.tags = ["历史标签"];
+
+        session.updateMetadata(runtime.id, restoredMeta);
+
+        expect(runtime.content).toBe("meta");
+        expect(runtime.dirty).toBe(true);
+        await runtime.draft.flush();
+        const savedDrafts = Array.from(drafts.values());
+        expect(savedDrafts[savedDrafts.length - 1]?.meta).toEqual(restoredMeta);
+
+        invoke.mockClear();
+        await session.save(runtime.id);
+        expect(invoke).toHaveBeenCalledWith(
+            "save_mdx",
+            expect.objectContaining({
+                request: expect.objectContaining({
+                    content: "meta",
+                    meta: expect.objectContaining({
+                        id: "restored-meta-id",
+                        tags: ["历史标签"],
+                    }),
                 }),
             }),
         );
