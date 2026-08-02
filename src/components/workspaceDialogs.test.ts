@@ -1,7 +1,7 @@
 /** @vitest-environment jsdom */
 
-import { createApp, h, type App, type Component } from "vue";
-import { afterEach, describe, expect, it } from "vitest";
+import { createApp, h, nextTick, ref, type App, type Component } from "vue";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import ExternalConflictDialog from "./ExternalConflictDialog.vue";
 import LeaveConfirmDialog from "./LeaveConfirmDialog.vue";
@@ -9,6 +9,15 @@ import MarkdownResourcesDialog from "./MarkdownResourcesDialog.vue";
 import type { MarkdownResourcePlan } from "../types/workspace";
 
 let cleanup: (() => void) | undefined;
+
+beforeEach(() => {
+    HTMLDialogElement.prototype.showModal = vi.fn(function (this: HTMLDialogElement) {
+        this.setAttribute("open", "");
+    });
+    HTMLDialogElement.prototype.close = vi.fn(function (this: HTMLDialogElement) {
+        this.removeAttribute("open");
+    });
+});
 
 afterEach(() => {
     cleanup?.();
@@ -18,19 +27,28 @@ afterEach(() => {
 
 function mount(component: Component, props: Record<string, unknown>) {
     const emitted = new Map<string, unknown[][]>();
+    const isOpen = ref(Boolean(props.open));
     const host = document.createElement("div");
     document.body.append(host);
     const app: App = createApp({
         render: () =>
             h(component, {
                 ...props,
+                open: isOpen.value,
                 onDecide: (decision: string) =>
                     emitted.set("decide", [...(emitted.get("decide") ?? []), [decision]]),
             }),
     });
     app.mount(host);
     cleanup = () => app.unmount();
-    return { host, emitted: (event: string) => emitted.get(event) };
+    return {
+        host,
+        emitted: (event: string) => emitted.get(event),
+        setOpen: async (open: boolean) => {
+            isOpen.value = open;
+            await nextTick();
+        },
+    };
 }
 
 function planWith(
@@ -58,7 +76,7 @@ function expectAccessibleDialog(host: HTMLElement) {
 }
 
 describe("workspace decision dialogs", () => {
-    it("offers all conflict outcomes and reports the exact decision", () => {
+    it("offers all conflict outcomes and explains both destructive risks", () => {
         const dialog = mount(ExternalConflictDialog, {
             open: true,
             documentName: "note.mdx",
@@ -67,6 +85,8 @@ describe("workspace decision dialogs", () => {
         expect(dialog.host.querySelector("button[autofocus]")?.textContent).toContain(
             "取消",
         );
+        expect(dialog.host.textContent).toContain("重新加载会放弃当前未保存的编辑");
+        expect(dialog.host.textContent).toContain("覆盖会永久替换磁盘上的新版本");
 
         for (const [label, decision] of [
             ["覆盖磁盘版本", "overwrite"],
@@ -100,16 +120,89 @@ describe("workspace decision dialogs", () => {
         expect(dialog.emitted("decide")).toEqual([["continue"]]);
     });
 
-    it("renders the document name in the leave confirmation without changing decisions", () => {
+    it("maps resource cancel action to the existing cancel decision", () => {
+        const dialog = mount(MarkdownResourcesDialog, {
+            open: true,
+            documentName: "导入笔记.md",
+            plan: planWith("missing"),
+        });
+        Array.from(dialog.host.querySelectorAll<HTMLButtonElement>("button"))
+            .find((button) => button.textContent?.includes("取消"))
+            ?.click();
+        expect(dialog.emitted("decide")).toEqual([["cancel"]]);
+    });
+
+    it("renders the document name and keeps save and cancel decisions", () => {
         const dialog = mount(LeaveConfirmDialog, {
             open: true,
             documentName: "草稿.mdx",
         });
         expectAccessibleDialog(dialog.host);
         expect(dialog.host.querySelector("h2")?.textContent).toBe("保存“草稿.mdx”？");
-        Array.from(dialog.host.querySelectorAll<HTMLButtonElement>("button"))
-            .find((button) => button.textContent?.includes("放弃修改"))
-            ?.click();
-        expect(dialog.emitted("decide")).toEqual([["discard"]]);
+        const buttons = Array.from(
+            dialog.host.querySelectorAll<HTMLButtonElement>("button"),
+        );
+        buttons.find((button) => button.textContent?.includes("保存并继续"))?.click();
+        buttons.find((button) => button.textContent?.includes("取消"))?.click();
+        expect(dialog.emitted("decide")).toEqual([["save"], ["cancel"]]);
+    });
+
+    it("opens each decision surface as a native modal and maps native cancel", async () => {
+        const cases: Array<[Component, Record<string, unknown>, string]> = [
+            [ExternalConflictDialog, { open: true, documentName: "note.mdx" }, "cancel"],
+            [
+                MarkdownResourcesDialog,
+                {
+                    open: true,
+                    documentName: "note.md",
+                    plan: planWith("ready"),
+                },
+                "cancel",
+            ],
+            [LeaveConfirmDialog, { open: true, documentName: "note.mdx" }, "cancel"],
+        ];
+
+        for (const [component, props, decision] of cases) {
+            cleanup?.();
+            cleanup = undefined;
+            document.body.innerHTML = "";
+            vi.mocked(HTMLDialogElement.prototype.showModal).mockClear();
+            const mounted = mount(component, props);
+            await nextTick();
+            const element = mounted.host.querySelector("dialog");
+
+            expect(element).not.toBeNull();
+            expect(HTMLDialogElement.prototype.showModal).toHaveBeenCalledOnce();
+            element?.dispatchEvent(new Event("cancel", { cancelable: true }));
+            expect(mounted.emitted("decide")).toEqual([[decision]]);
+        }
+    });
+
+    it("closes each mounted native dialog when the open prop becomes false", async () => {
+        const cases: Array<[Component, Record<string, unknown>]> = [
+            [ExternalConflictDialog, { open: true, documentName: "note.mdx" }],
+            [
+                MarkdownResourcesDialog,
+                {
+                    open: true,
+                    documentName: "note.md",
+                    plan: planWith("ready"),
+                },
+            ],
+            [LeaveConfirmDialog, { open: true, documentName: "note.mdx" }],
+        ];
+
+        for (const [component, props] of cases) {
+            cleanup?.();
+            cleanup = undefined;
+            document.body.innerHTML = "";
+            vi.mocked(HTMLDialogElement.prototype.close).mockClear();
+            const mounted = mount(component, props);
+            await nextTick();
+            await mounted.setOpen(false);
+
+            expect(HTMLDialogElement.prototype.close).toHaveBeenCalledOnce();
+            expect(mounted.host.querySelector("dialog")).not.toBeNull();
+        }
     });
 });

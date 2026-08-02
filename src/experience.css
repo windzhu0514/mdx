@@ -270,13 +270,9 @@ summary:focus-visible,
     text-align: center;
 }
 
-.workspace-dialog-backdrop {
-    position: fixed;
-    inset: 0;
-    z-index: 1000;
-    display: grid;
-    place-items: center;
-    padding: 24px;
+.recent-files-dialog::backdrop,
+.workspace-decision-dialog::backdrop,
+.leave-dialog::backdrop {
     background: rgba(9, 15, 19, 0.46);
     backdrop-filter: blur(8px);
 }
@@ -285,11 +281,13 @@ summary:focus-visible,
 .workspace-decision-dialog {
     width: min(680px, 100%);
     max-height: min(720px, calc(100vh - 48px));
+    margin: auto;
     padding: 22px;
     overflow: auto;
     border: 1px solid var(--color-border);
     border-radius: 16px;
     background: var(--color-bg-elevated);
+    color: var(--color-text-main);
     box-shadow: var(--shadow-lg);
 }
 
@@ -341,6 +339,9 @@ summary:focus-visible,
 .recent-files-list {
     display: grid;
     gap: 7px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
 }
 
 .recent-file-row {
@@ -379,13 +380,24 @@ summary:focus-visible,
     gap: 8px;
 }
 
-.recent-file-path,
+.recent-file-path {
+    color: var(--color-text-muted);
+    font-size: 12px;
+    overflow-wrap: anywhere;
+    white-space: normal;
+}
+
 .recent-file-open time {
     overflow: hidden;
     color: var(--color-text-muted);
     font-size: 12px;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+.leave-dialog {
+    margin: auto;
+    color: var(--color-text-main);
 }
 
 .recent-file-remove {
@@ -594,8 +606,7 @@ summary:focus-visible,
         gap: 6px;
     }
 
-    .panel-backdrop,
-    .workspace-dialog-backdrop {
+    .panel-backdrop {
         padding: 12px;
     }
 
