@@ -1,7 +1,13 @@
 <script setup lang="ts">
 import type { LeaveDecision } from "../utils/leaveGuard";
 
-defineProps<{ open: boolean }>();
+withDefaults(
+    defineProps<{
+        open: boolean;
+        documentName?: string;
+    }>(),
+    { documentName: "当前笔记" },
+);
 const emit = defineEmits<{ decide: [decision: LeaveDecision] }>();
 </script>
 
@@ -13,7 +19,7 @@ const emit = defineEmits<{ decide: [decision: LeaveDecision] }>();
             aria-modal="true"
             aria-labelledby="leave-dialog-title"
         >
-            <h2 id="leave-dialog-title">保存当前笔记？</h2>
+            <h2 id="leave-dialog-title">保存“{{ documentName }}”？</h2>
             <p>当前内容尚未保存。你可以保存后继续、放弃修改，或取消当前操作。</p>
             <div class="leave-dialog-actions">
                 <button type="button" @click="emit('decide', 'cancel')">取消</button>

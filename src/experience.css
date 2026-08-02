@@ -270,6 +270,221 @@ summary:focus-visible,
     text-align: center;
 }
 
+.workspace-dialog-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+    background: rgba(9, 15, 19, 0.46);
+    backdrop-filter: blur(8px);
+}
+
+.recent-files-dialog,
+.workspace-decision-dialog {
+    width: min(680px, 100%);
+    max-height: min(720px, calc(100vh - 48px));
+    padding: 22px;
+    overflow: auto;
+    border: 1px solid var(--color-border);
+    border-radius: 16px;
+    background: var(--color-bg-elevated);
+    box-shadow: var(--shadow-lg);
+}
+
+.workspace-decision-dialog {
+    width: min(540px, 100%);
+}
+
+.workspace-dialog-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 16px;
+}
+
+.workspace-dialog-header h2,
+.workspace-decision-dialog h2 {
+    margin: 0;
+    font-size: 20px;
+}
+
+.workspace-decision-dialog > p:not(.panel-eyebrow) {
+    margin: 10px 0 0;
+    color: var(--color-text-muted);
+    line-height: 1.55;
+}
+
+.workspace-decision-dialog > p strong {
+    display: block;
+    margin-top: 8px;
+    color: var(--color-danger);
+}
+
+.recent-files-search {
+    display: grid;
+    gap: 6px;
+    margin-bottom: 14px;
+    color: var(--color-text-muted);
+    font-size: 12px;
+}
+
+.recent-files-search input {
+    padding: 9px 11px;
+    border: 1px solid var(--color-border);
+    border-radius: 7px;
+    background: var(--color-bg-surface);
+}
+
+.recent-files-list {
+    display: grid;
+    gap: 7px;
+}
+
+.recent-file-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+    border: 1px solid var(--color-border);
+    border-radius: 9px;
+    background: var(--color-bg-surface);
+}
+
+.recent-file-row:hover {
+    border-color: color-mix(in srgb, var(--color-primary) 38%, transparent);
+}
+
+.recent-file-row.unavailable {
+    border-color: color-mix(in srgb, var(--color-danger) 34%, var(--color-border));
+}
+
+.recent-file-open {
+    display: grid;
+    min-width: 0;
+    gap: 3px;
+    padding: 10px 12px;
+    border: 0;
+    background: transparent;
+    color: var(--color-text-main);
+    text-align: left;
+    cursor: pointer;
+}
+
+.recent-file-heading {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.recent-file-path,
+.recent-file-open time {
+    overflow: hidden;
+    color: var(--color-text-muted);
+    font-size: 12px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.recent-file-remove {
+    margin-right: 10px;
+    padding: 6px 9px;
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--color-text-muted);
+    cursor: pointer;
+}
+
+.workspace-dialog-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 20px;
+}
+
+.workspace-dialog-actions > span {
+    margin-right: auto;
+    color: var(--color-text-muted);
+    font-size: 12px;
+}
+
+.workspace-dialog-actions button {
+    padding: 8px 12px;
+    border: 1px solid var(--color-border);
+    border-radius: 7px;
+    background: var(--color-bg-surface);
+    cursor: pointer;
+}
+
+.workspace-dialog-actions button:disabled {
+    cursor: default;
+    opacity: 0.5;
+}
+
+.workspace-dialog-actions .danger {
+    color: var(--color-danger);
+}
+
+.workspace-dialog-actions .danger-filled {
+    border-color: var(--color-danger);
+    background: var(--color-danger);
+    color: white;
+}
+
+.markdown-resource-list {
+    display: grid;
+    gap: 7px;
+    max-height: 320px;
+    margin: 16px 0 0;
+    padding: 0;
+    overflow: auto;
+    list-style: none;
+}
+
+.markdown-resource-list li {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    gap: 5px 9px;
+    padding: 9px 10px;
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    background: var(--color-bg-surface);
+}
+
+.resource-status {
+    display: inline-flex;
+    padding: 2px 6px;
+    border-radius: 999px;
+    background: var(--color-primary-light);
+    color: var(--color-primary);
+    font-size: 11px;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+.resource-status.is-ready {
+    color: var(--color-success);
+}
+
+.resource-status.is-danger {
+    color: var(--color-danger);
+}
+
+.resource-reference {
+    overflow-wrap: anywhere;
+}
+
+.markdown-resource-list small {
+    grid-column: 2;
+    color: var(--color-text-muted);
+}
+
 .settings-panel {
     display: grid;
     gap: 14px;
@@ -377,6 +592,21 @@ summary:focus-visible,
     .setting-field {
         grid-template-columns: 1fr;
         gap: 6px;
+    }
+
+    .panel-backdrop,
+    .workspace-dialog-backdrop {
+        padding: 12px;
+    }
+
+    .recent-files-dialog,
+    .workspace-decision-dialog {
+        max-height: calc(100vh - 24px);
+        padding: 16px;
+    }
+
+    .conflict-actions button {
+        flex: 1 1 45%;
     }
 }
 
