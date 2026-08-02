@@ -9,6 +9,8 @@ import ExternalConflictDialog from "./components/ExternalConflictDialog.vue";
 import HistoryPanel from "./components/HistoryPanel.vue";
 import LeaveConfirmDialog from "./components/LeaveConfirmDialog.vue";
 import LibraryPanel from "./components/LibraryPanel.vue";
+import MarkdownResourcesDialog from "./components/MarkdownResourcesDialog.vue";
+import RecentFilesDialog from "./components/RecentFilesDialog.vue";
 import SettingsPanel from "./components/SettingsPanel.vue";
 import StatusBar from "./components/StatusBar.vue";
 import TableOfContents from "./components/TableOfContents.vue";
@@ -29,7 +31,7 @@ import { usePreferences } from "./composables/usePreferences";
 import type { HistoryListItem, HistorySnapshot } from "./types/history";
 import type { NoteListItem, NoteSearchResult } from "./types/library";
 import type { ResourceSaveData } from "./types/mdx";
-import type { RecentFileEntry } from "./types/workspace";
+import type { MarkdownResourcePlan, RecentFileEntry } from "./types/workspace";
 import type { LeaveDecision } from "./utils/leaveGuard";
 import { base64ToBlob } from "./utils/base64";
 import { isTextInputTarget } from "./utils/shortcuts";
@@ -96,6 +98,8 @@ const sourcePreview = ref(true);
 let printing = false;
 const showToc = ref(true);
 const recentFiles = ref<RecentFileEntry[]>([]);
+const recentMenuItems = computed(() => recentFiles.value.slice(0, 10));
+const showRecentFiles = ref(false);
 const showFindPanel = ref(false);
 const showReplacePanel = ref(false);
 const findQuery = ref("");
@@ -133,6 +137,17 @@ type ConflictDecision = "overwrite" | "reload" | "save-as" | "cancel";
 const showConflictPrompt = ref(false);
 const conflictPromptDocumentName = ref("");
 let conflictPromptResolver: ((decision: ConflictDecision) => void) | null = null;
+type MarkdownResourceDecision = "continue" | "cancel";
+const showMarkdownResourcesPrompt = ref(false);
+const markdownResourcesDocumentName = ref("");
+const markdownResourcesPlan = ref<MarkdownResourcePlan>({
+    rewrittenContent: "",
+    resources: [],
+    items: [],
+});
+let markdownResourcesResolver: ((decision: MarkdownResourceDecision) => void) | null =
+    null;
+const savingDocumentIds = new Set<string>();
 let unlistenClose: (() => void) | null = null;
 let unlistenDragDrop: (() => void) | null = null;
 let unlistenFocus: (() => void) | null = null;
@@ -530,6 +545,26 @@ function resolveConflictDecision(decision: ConflictDecision) {
     resolve?.(decision);
 }
 
+function requestMarkdownResourceDecision(
+    documentName: string,
+    plan: MarkdownResourcePlan,
+) {
+    markdownResourcesDocumentName.value = documentName;
+    markdownResourcesPlan.value = plan;
+    showMarkdownResourcesPrompt.value = true;
+    return new Promise<MarkdownResourceDecision>((resolve) => {
+        markdownResourcesResolver = resolve;
+    });
+}
+
+function resolveMarkdownResourceDecision(decision: MarkdownResourceDecision) {
+    const resolve = markdownResourcesResolver;
+    markdownResourcesResolver = null;
+    showMarkdownResourcesPrompt.value = false;
+    markdownResourcesDocumentName.value = "";
+    resolve?.(decision);
+}
+
 watch(
     () => preferences.value.showToc,
     (visible) => {
@@ -646,6 +681,11 @@ onMounted(async () => {
         await importResourcePaths(event.payload.paths);
     });
     unlistenClose = await appWindow.onCloseRequested(async (event) => {
+        if (savingDocumentIds.size > 0) {
+            event.preventDefault();
+            statusMessage.value = "请先完成当前保存操作";
+            return;
+        }
         if (allowWindowClose || !documents.value.some((document) => document.dirty)) {
             return;
         }
@@ -799,8 +839,11 @@ async function openRecentFile(path: string) {
     await runAction(async () => {
         try {
             await openPath(path, true);
+            showRecentFiles.value = false;
         } catch (error) {
-            await removeRecentFile(path);
+            recentFiles.value = recentFiles.value.map((entry) =>
+                entry.path === path ? { ...entry, available: false } : entry,
+            );
             throw error;
         }
     });
@@ -944,8 +987,9 @@ async function openPath(path: string, recordRecent: boolean) {
         : await session.openMarkdown(path);
     if (runtime.path) runtime.displayName = documentNameFromPath(runtime.path);
     await hydrateDocumentResources(runtime);
-    if (recordRecent && runtime.path) {
-        await pushRecentFile(runtime.path, runtime.displayName);
+    const recentPath = runtime.path ?? runtime.importSourcePath;
+    if (recordRecent && recentPath) {
+        await pushRecentFile(recentPath, runtime.displayName);
     }
     errorMessage.value = "";
     statusMessage.value = "已打开文档";
@@ -1118,7 +1162,9 @@ async function resolveDocumentConflict(id: string): Promise<boolean> {
 
 async function saveDocument(id: string, overwrite = false): Promise<boolean> {
     const runtime = session.document(id);
-    if (!runtime.path) return saveDocumentAs(id);
+    if (runtime.sourceKind === "markdown-import" || !runtime.path) {
+        return saveDocumentAs(id);
+    }
     if (runtime.conflict && !overwrite) return resolveDocumentConflict(id);
     let saved = false;
     await runAction(async () => {
@@ -1134,24 +1180,86 @@ async function saveDocument(id: string, overwrite = false): Promise<boolean> {
 }
 
 async function saveDocumentAs(id: string) {
+    if (savingDocumentIds.has(id)) return false;
+    savingDocumentIds.add(id);
+    try {
+        const runtime = session.document(id);
+        const defaultPath = runtime.importSourcePath
+            ? runtime.importSourcePath.replace(/\.(?:md|markdown)$/iu, ".mdx")
+            : `${sanitizeFileName(runtime.displayName || UNNAMED_DOCUMENT_NAME)}.mdx`;
+        const selected = await save({
+            defaultPath,
+            filters: [{ name: "Mora 墨笺笔记", extensions: ["mdx"] }],
+        });
+        if (!selected) {
+            statusMessage.value = "已取消保存";
+            return false;
+        }
+
+        let saved = false;
+        await runAction(async () => {
+            const note =
+                runtime.sourceKind === "markdown-import" && runtime.importSourcePath
+                    ? await saveMarkdownImportAs(id, selected, runtime.importSourcePath)
+                    : await session.saveAs(id, selected);
+            if (!note) {
+                return;
+            }
+            if (note.path) await pushRecentFile(note.path, note.displayName);
+            saved = !note.dirty;
+            statusMessage.value = saved ? "另存为成功" : "另存为期间文档已再次修改";
+        });
+        return saved;
+    } finally {
+        savingDocumentIds.delete(id);
+    }
+}
+
+async function saveMarkdownImportAs(id: string, selected: string, sourcePath: string) {
     const runtime = session.document(id);
-    const selected = await save({
-        defaultPath: `${sanitizeFileName(runtime.displayName || UNNAMED_DOCUMENT_NAME)}.mdx`,
-        filters: [{ name: "Mora 墨笺笔记", extensions: ["mdx"] }],
+    const sourceContent = runtime.content;
+    const plan = await invoke<MarkdownResourcePlan>("prepare_markdown_resources", {
+        sourcePath,
+        markdown: sourceContent,
     });
-    if (!selected) {
-        statusMessage.value = "已取消保存";
-        return false;
+    if (!documents.value.includes(runtime)) {
+        statusMessage.value = "源文档已关闭，已取消保存";
+        return null;
+    }
+    if (runtime.content !== sourceContent) {
+        statusMessage.value = "源文档已更改，请重新保存";
+        return null;
+    }
+    if (plan.items.length > 0) {
+        const decision = await requestMarkdownResourceDecision(runtime.displayName, plan);
+        if (decision === "cancel") {
+            statusMessage.value = "已取消 Markdown 资源导入";
+            return null;
+        }
+        if (!documents.value.includes(runtime)) {
+            statusMessage.value = "源文档已关闭，已取消保存";
+            return null;
+        }
+        if (runtime.content !== sourceContent) {
+            statusMessage.value = "源文档已更改，请重新保存";
+            return null;
+        }
     }
 
-    let saved = false;
-    await runAction(async () => {
-        const note = await session.saveAs(id, selected);
-        if (note.path) await pushRecentFile(note.path, note.displayName);
-        saved = !note.dirty;
-        statusMessage.value = saved ? "另存为成功" : "另存为期间文档已再次修改";
-    });
-    return saved;
+    const originalContent = runtime.content;
+    const originalResources = runtime.resources.snapshot();
+    try {
+        runtime.content = plan.rewrittenContent;
+        for (const resource of plan.resources) {
+            registerResourceInSession(id, resource);
+        }
+        return await session.saveAs(id, selected);
+    } catch (error) {
+        runtime.content = originalContent;
+        runtime.resources.clear();
+        runtime.resources.restore(originalResources);
+        throw error;
+    }
 }
 
 const closeActions = {
@@ -1160,6 +1268,10 @@ const closeActions = {
 };
 
 async function closeDocument(id: string) {
+    if (savingDocumentIds.has(id)) {
+        statusMessage.value = "请先完成当前保存操作";
+        return;
+    }
     editorRef.value?.cancelAi();
     const closed = await session.closeDocument(id, closeActions);
     if (closed) editorRef.value?.releaseDocument(id);
@@ -1594,7 +1706,7 @@ function showAbout() {
     );
 }
 
-function importedResourceToSession(documentId: string, resource: ResourceSaveData) {
+function registerResourceInSession(documentId: string, resource: ResourceSaveData) {
     const target = session.document(documentId);
     const blob = base64ToBlob(resource.base64, resource.mimeType);
     const objectUrl = URL.createObjectURL(blob);
@@ -1608,6 +1720,11 @@ function importedResourceToSession(documentId: string, resource: ResourceSaveDat
         kind: resource.kind,
         isNew: true,
     });
+    return objectUrl;
+}
+
+function importedResourceToSession(documentId: string, resource: ResourceSaveData) {
+    const objectUrl = registerResourceInSession(documentId, resource);
     insertMarkdownSnippet(
         resource.kind === "asset"
             ? `![${resource.originalName}](${objectUrl})`
@@ -1724,15 +1841,26 @@ function stringifyError(error: unknown) {
                             class="menu-popup menu-popup-submenu"
                         >
                             <button
-                                v-for="item in recentFiles"
+                                v-for="item in recentMenuItems"
                                 :key="item.path"
                                 type="button"
+                                :data-recent-menu-path="item.path"
                                 @click="runMenuAction(() => openRecentFile(item.path))"
                             >
                                 <span>{{ formatRecentFileLabel(item) }}</span>
                                 <span class="shortcut">{{ item.path }}</span>
                             </button>
                             <div class="menu-divider" />
+                            <button
+                                type="button"
+                                @click="
+                                    runMenuAction(() => {
+                                        showRecentFiles = true;
+                                    })
+                                "
+                            >
+                                <span>查看全部……</span>
+                            </button>
                             <button
                                 type="button"
                                 @click="runMenuAction(clearRecentFiles)"
@@ -1970,6 +2098,20 @@ function stringifyError(error: unknown) {
             @refresh="refreshLibrary"
             @search="runLibrarySearch"
             @open-note="openLibraryNote"
+        />
+        <RecentFilesDialog
+            :open="showRecentFiles"
+            :entries="recentFiles"
+            @open-file="openRecentFile"
+            @remove-file="removeRecentFile"
+            @clear="clearRecentFiles"
+            @close="showRecentFiles = false"
+        />
+        <MarkdownResourcesDialog
+            :open="showMarkdownResourcesPrompt"
+            :document-name="markdownResourcesDocumentName"
+            :plan="markdownResourcesPlan"
+            @decide="resolveMarkdownResourceDecision"
         />
         <LeaveConfirmDialog
             :open="showLeavePrompt"

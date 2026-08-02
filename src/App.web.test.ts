@@ -6,7 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
     closeHandler: undefined as
         ((event: { preventDefault: () => void }) => Promise<void>) | undefined,
-    focusHandler: undefined as ((event: { payload: boolean }) => Promise<void>) | undefined,
+    focusHandler: undefined as
+        ((event: { payload: boolean }) => Promise<void>) | undefined,
     editorUpdate: undefined as ((markdown: string) => void) | undefined,
     aiKeyConfigured: false,
     aiKeyStatusResponses: [] as Array<boolean | Promise<boolean>>,
@@ -17,6 +18,61 @@ const mocks = vi.hoisted(() => ({
     releaseDocument: vi.fn(),
     openDialog: vi.fn(),
     saveDialog: vi.fn(),
+    markdownImports: new Map<
+        string,
+        {
+            title: string;
+            content: string;
+            frontMatter: null;
+        }
+    >(),
+    markdownResourcePlans: new Map<
+        string,
+        | {
+              rewrittenContent: string;
+              resources: Array<{
+                  name: string;
+                  originalName: string;
+                  mimeType: string;
+                  size: number;
+                  kind: "asset" | "attachment";
+                  base64: string;
+              }>;
+              items: Array<{
+                  originalReference: string;
+                  resolvedPath: string | null;
+                  status: "ready" | "missing" | "unreadable" | "oversized";
+                  targetPath: string | null;
+                  message: string | null;
+              }>;
+          }
+        | Promise<{
+              rewrittenContent: string;
+              resources: Array<{
+                  name: string;
+                  originalName: string;
+                  mimeType: string;
+                  size: number;
+                  kind: "asset" | "attachment";
+                  base64: string;
+              }>;
+              items: Array<{
+                  originalReference: string;
+                  resolvedPath: string | null;
+                  status: "ready" | "missing" | "unreadable" | "oversized";
+                  targetPath: string | null;
+                  message: string | null;
+              }>;
+          }>
+    >(),
+    markdownResourceFailures: new Set<string>(),
+    saveAsFailures: new Set<string>(),
+    recentFiles: [] as Array<{
+        path: string;
+        title: string;
+        lastOpenedAt: string;
+        available: boolean;
+    }>,
     openMdxFailures: new Set<string>(),
     saveFailures: new Set<string>(),
     drafts: new Map<
@@ -76,7 +132,34 @@ const mocks = vi.hoisted(() => ({
             mocks.aiKeyConfigured = false;
             return undefined;
         }
-        if (command === "get_recent_files" || command === "push_recent_file") return [];
+        if (command === "get_recent_files") return [...mocks.recentFiles];
+        if (command === "push_recent_file") {
+            const { path, title } = args as { path: string; title: string };
+            mocks.recentFiles = [
+                {
+                    path,
+                    title,
+                    lastOpenedAt: "2026-08-02T08:00:00Z",
+                    available: true,
+                },
+                ...mocks.recentFiles.filter(
+                    (entry) =>
+                        entry.path.toLocaleLowerCase() !== path.toLocaleLowerCase(),
+                ),
+            ].slice(0, 50);
+            return [...mocks.recentFiles];
+        }
+        if (command === "remove_recent_file") {
+            const { path } = args as { path: string };
+            mocks.recentFiles = mocks.recentFiles.filter(
+                (entry) => entry.path.toLocaleLowerCase() !== path.toLocaleLowerCase(),
+            );
+            return [...mocks.recentFiles];
+        }
+        if (command === "clear_recent_files") {
+            mocks.recentFiles = [];
+            return undefined;
+        }
         if (command === "read_workspace_session") {
             return { session: mocks.workspaceSession, warning: null };
         }
@@ -105,6 +188,33 @@ const mocks = vi.hoisted(() => ({
                 },
                 error: null,
             }));
+        }
+        if (command === "import_markdown") {
+            const path = (args as { path: string }).path;
+            return (
+                mocks.markdownImports.get(path) ?? {
+                    title:
+                        path
+                            .split(/[\\/]/)
+                            .pop()
+                            ?.replace(/\.(?:md|markdown)$/iu, "") ?? "笔记",
+                    content: "",
+                    frontMatter: null,
+                }
+            );
+        }
+        if (command === "prepare_markdown_resources") {
+            const path = (args as { sourcePath: string }).sourcePath;
+            if (mocks.markdownResourceFailures.has(path)) {
+                throw new Error(`无法准备 ${path}`);
+            }
+            return (
+                mocks.markdownResourcePlans.get(path) ?? {
+                    rewrittenContent: (args as { markdown: string }).markdown,
+                    resources: [],
+                    items: [],
+                }
+            );
         }
         if (command === "open_mdx") {
             const path = (args as { path: string }).path;
@@ -178,6 +288,9 @@ const mocks = vi.hoisted(() => ({
                     meta: Record<string, unknown> | null;
                 };
             };
+            if (mocks.saveAsFailures.has(payload.path.toLowerCase())) {
+                throw new Error(`无法另存为 ${payload.path}`);
+            }
             return {
                 path: payload.path,
                 title: payload.request.title,
@@ -252,7 +365,8 @@ vi.mock("./components/editor/MoraEditor.vue", async () => {
                 mocks.moraEditorMounted();
                 mocks.editorUpdate = (markdown) => emit("update:modelValue", markdown);
                 mocks.getMoraEditorAiProvider = () => props.aiProvider;
-                mocks.getMoraEditorMarkdown = () => props.displayValue ?? props.modelValue;
+                mocks.getMoraEditorMarkdown = () =>
+                    props.displayValue ?? props.modelValue;
                 expose({
                     cancelAi: mocks.cancelAi,
                     execute: vi.fn(),
@@ -293,6 +407,76 @@ function findButton(host: HTMLElement, label: string) {
             button.textContent?.trim() === label ||
             button.querySelector("span")?.textContent?.trim() === label,
     );
+}
+
+function recentEntries(count: number) {
+    return Array.from({ length: count }, (_, index) => ({
+        path: `C:\\notes\\recent-${index + 1}.mdx`,
+        title: `最近笔记 ${index + 1}`,
+        lastOpenedAt: `2026-07-${String((index % 28) + 1).padStart(2, "0")}T08:00:00Z`,
+        available: index !== 2,
+    }));
+}
+
+function recentRow(host: HTMLElement, path: string) {
+    return Array.from(host.querySelectorAll<HTMLElement>("[data-recent-path]")).find(
+        (row) => row.dataset.recentPath === path,
+    );
+}
+
+function markdownPlan(rewrittenContent: string) {
+    return {
+        rewrittenContent,
+        resources: [
+            {
+                name: "assets/photo.png",
+                originalName: "photo.png",
+                mimeType: "image/png",
+                size: 1,
+                kind: "asset" as const,
+                base64: "YQ==",
+            },
+        ],
+        items: [
+            {
+                originalReference: "./images/photo.png",
+                resolvedPath: "C:\\notes\\images\\photo.png",
+                status: "ready" as const,
+                targetPath: "assets/photo.png",
+                message: null,
+            },
+            {
+                originalReference: "missing.png",
+                resolvedPath: "C:\\notes\\missing.png",
+                status: "missing" as const,
+                targetPath: null,
+                message: "引用的本地资源不存在。",
+            },
+        ],
+    };
+}
+
+async function mountMarkdownImport(path: string, content: string) {
+    mocks.isTauri.mockReturnValue(true);
+    mocks.markdownImports.set(path, {
+        title:
+            path
+                .split(/[\\/]/)
+                .pop()
+                ?.replace(/\.(?:md|markdown)$/iu, "") ?? "笔记",
+        content,
+        frontMatter: null,
+    });
+    mocks.openDialog.mockResolvedValue([path]);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const app = createApp(App);
+    app.mount(host);
+    cleanup = () => app.unmount();
+    await vi.waitFor(() => expect(mocks.closeHandler).toBeTypeOf("function"));
+    findButton(host, "打开文件...")?.click();
+    await vi.waitFor(() => expect(mocks.getMoraEditorMarkdown?.()).toBe(content));
+    return host;
 }
 
 async function mountWithInactiveConflict() {
@@ -341,6 +525,11 @@ beforeEach(() => {
     mocks.aiKeyStatusResponses = [];
     mocks.openDialog.mockReset();
     mocks.saveDialog.mockReset();
+    mocks.markdownImports.clear();
+    mocks.markdownResourcePlans.clear();
+    mocks.markdownResourceFailures.clear();
+    mocks.saveAsFailures.clear();
+    mocks.recentFiles = [];
     mocks.openMdxFailures.clear();
     mocks.saveFailures.clear();
     mocks.drafts.clear();
@@ -579,9 +768,7 @@ describe("App 多文档工作区", () => {
         app.mount(host);
         cleanup = () => app.unmount();
         await vi.waitFor(() =>
-            expect(host.querySelector(".menu-document-name")?.textContent).toContain(
-                "a",
-            ),
+            expect(host.querySelector(".menu-document-name")?.textContent).toContain("a"),
         );
 
         documentRow(host, "b")?.click();
@@ -805,9 +992,7 @@ describe("App 多文档工作区", () => {
                 }),
             ),
         );
-        expect(host.querySelector(".menu-document-name")?.textContent?.trim()).toBe(
-            "b",
-        );
+        expect(host.querySelector(".menu-document-name")?.textContent?.trim()).toBe("b");
     });
 
     it("冲突重新加载只丢弃目标草稿并释放目标编辑器状态", async () => {
@@ -824,9 +1009,7 @@ describe("App 多文档工作区", () => {
             expect(mocks.releaseDocument).toHaveBeenCalledWith("document-1");
         });
         documentRow(host, "a")?.click();
-        await vi.waitFor(() =>
-            expect(mocks.getMoraEditorMarkdown?.()).toBe("disk a"),
-        );
+        await vi.waitFor(() => expect(mocks.getMoraEditorMarkdown?.()).toBe("disk a"));
         expect(documentRow(host, "a")?.textContent).not.toContain("外部更改");
     });
 
@@ -853,9 +1036,7 @@ describe("App 多文档工作区", () => {
                 request: expect.objectContaining({ path: "C:\\notes\\a.mdx" }),
             }),
         );
-        expect(host.querySelector(".menu-document-name")?.textContent?.trim()).toBe(
-            "b",
-        );
+        expect(host.querySelector(".menu-document-name")?.textContent?.trim()).toBe("b");
     });
 
     it("取消冲突处理保留本地内容、草稿和冲突标记", async () => {
@@ -873,10 +1054,342 @@ describe("App 多文档工作区", () => {
         expect(mocks.getMoraEditorMarkdown?.()).toBe("local a");
         expect(documentRow(host, "a")?.textContent).toContain("外部更改");
         expect(mocks.invoke).not.toHaveBeenCalledWith("save_mdx", expect.anything());
-        expect(mocks.invoke).not.toHaveBeenCalledWith(
-            "delete_draft",
-            expect.anything(),
+        expect(mocks.invoke).not.toHaveBeenCalledWith("delete_draft", expect.anything());
+    });
+
+    it("最近打开菜单只显示十条并通过查看全部打开完整历史", async () => {
+        mocks.isTauri.mockReturnValue(true);
+        mocks.recentFiles = recentEntries(12);
+        const host = document.createElement("div");
+        document.body.append(host);
+        const app = createApp(App);
+        app.mount(host);
+        cleanup = () => app.unmount();
+
+        await vi.waitFor(() => expect(host.textContent).toContain("最近笔记 10"));
+        const submenu = host.querySelector(".menu-popup-submenu");
+        expect(submenu?.querySelectorAll("[data-recent-menu-path]")).toHaveLength(10);
+        expect(submenu?.textContent).not.toContain("最近笔记 12");
+        findButton(host, "查看全部……")?.click();
+
+        await vi.waitFor(() =>
+            expect(host.querySelectorAll("[data-recent-path]")).toHaveLength(12),
         );
+    });
+
+    it("最近文件打开失败时保留不可用记录并允许重试或移除", async () => {
+        mocks.isTauri.mockReturnValue(true);
+        mocks.recentFiles = recentEntries(3);
+        const unavailablePath = mocks.recentFiles[0].path;
+        mocks.openMdxFailures.add(unavailablePath);
+        const host = document.createElement("div");
+        document.body.append(host);
+        const app = createApp(App);
+        app.mount(host);
+        cleanup = () => app.unmount();
+
+        await vi.waitFor(() => expect(host.textContent).toContain("最近笔记 3"));
+        findButton(host, "查看全部……")?.click();
+        await vi.waitFor(() =>
+            expect(recentRow(host, unavailablePath)).not.toBeUndefined(),
+        );
+        const row = recentRow(host, unavailablePath);
+        expect(row?.textContent).not.toContain("不可用");
+        row?.querySelector<HTMLButtonElement>(".recent-file-open")?.click();
+        await vi.waitFor(() =>
+            expect(host.textContent).toContain(`无法打开 ${unavailablePath}`),
+        );
+        expect(mocks.invoke).not.toHaveBeenCalledWith("remove_recent_file", {
+            path: unavailablePath,
+        });
+        expect(recentRow(host, unavailablePath)?.textContent).toContain("不可用");
+
+        row?.querySelector<HTMLButtonElement>(".recent-file-remove")?.click();
+        await vi.waitFor(() =>
+            expect(mocks.invoke).toHaveBeenCalledWith("remove_recent_file", {
+                path: unavailablePath,
+            }),
+        );
+    });
+
+    it("完整最近历史支持清空全部", async () => {
+        mocks.isTauri.mockReturnValue(true);
+        mocks.recentFiles = recentEntries(2);
+        const host = document.createElement("div");
+        document.body.append(host);
+        const app = createApp(App);
+        app.mount(host);
+        cleanup = () => app.unmount();
+
+        await vi.waitFor(() => expect(host.textContent).toContain("最近笔记 2"));
+        findButton(host, "查看全部……")?.click();
+        await vi.waitFor(() =>
+            expect(host.querySelectorAll("[data-recent-path]")).toHaveLength(2),
+        );
+        host.querySelector<HTMLButtonElement>(".recent-files-clear")?.click();
+
+        await vi.waitFor(() => {
+            expect(mocks.invoke).toHaveBeenCalledWith("clear_recent_files");
+            expect(host.querySelectorAll("[data-recent-path]")).toHaveLength(0);
+        });
+    });
+
+    it("Markdown 导入记录源文件并在确认资源后另存为同目录 mdx", async () => {
+        const sourcePath = "C:\\notes\\source.md";
+        const sourceContent = "![照片](./images/photo.png)\n![缺失](missing.png)";
+        const rewrittenContent = "![照片](assets/photo.png)\n![缺失](missing.png)";
+        mocks.markdownResourcePlans.set(sourcePath, markdownPlan(rewrittenContent));
+        mocks.saveDialog.mockResolvedValue("C:\\notes\\source.mdx");
+        const host = await mountMarkdownImport(sourcePath, sourceContent);
+
+        expect(mocks.invoke).toHaveBeenCalledWith("push_recent_file", {
+            path: sourcePath,
+            title: "source.md",
+        });
+        findButton(host, "保存")?.click();
+
+        await vi.waitFor(() =>
+            expect(
+                host.querySelector(
+                    '[aria-labelledby="markdown-resources-dialog-title"][open]',
+                ),
+            ).not.toBeNull(),
+        );
+        expect(mocks.saveDialog).toHaveBeenCalledWith({
+            defaultPath: "C:\\notes\\source.mdx",
+            filters: [{ name: "Mora 墨笺笔记", extensions: ["mdx"] }],
+        });
+        expect(mocks.invoke).toHaveBeenCalledWith("prepare_markdown_resources", {
+            sourcePath,
+            markdown: sourceContent,
+        });
+        expect(mocks.invoke).not.toHaveBeenCalledWith("save_mdx_as", expect.anything());
+
+        findButton(host, "继续导入（保留未解决链接）")?.click();
+        await vi.waitFor(() =>
+            expect(mocks.invoke).toHaveBeenCalledWith(
+                "save_mdx_as",
+                expect.objectContaining({
+                    path: "C:\\notes\\source.mdx",
+                    request: expect.objectContaining({
+                        content: rewrittenContent,
+                        newAssets: [
+                            expect.objectContaining({
+                                name: "assets/photo.png",
+                                base64: "YQ==",
+                            }),
+                        ],
+                    }),
+                }),
+            ),
+        );
+        const saveCall = mocks.invoke.mock.calls.find(
+            ([command]) => command === "save_mdx_as",
+        );
+        expect(JSON.stringify(saveCall)).not.toContain("blob:");
+    });
+
+    it("Markdown 无本地资源候选时不提示并直接另存", async () => {
+        const sourcePath = "C:\\notes\\plain.markdown";
+        const sourceContent = "[官网](https://example.com)";
+        mocks.markdownResourcePlans.set(sourcePath, {
+            rewrittenContent: sourceContent,
+            resources: [],
+            items: [],
+        });
+        mocks.saveDialog.mockResolvedValue("C:\\notes\\plain.mdx");
+        const host = await mountMarkdownImport(sourcePath, sourceContent);
+
+        findButton(host, "保存")?.click();
+
+        await vi.waitFor(() =>
+            expect(mocks.invoke).toHaveBeenCalledWith(
+                "save_mdx_as",
+                expect.objectContaining({ path: "C:\\notes\\plain.mdx" }),
+            ),
+        );
+        expect(mocks.invoke).toHaveBeenCalledWith("prepare_markdown_resources", {
+            sourcePath,
+            markdown: sourceContent,
+        });
+        expect(
+            host.querySelector(
+                '[aria-labelledby="markdown-resources-dialog-title"][open]',
+            ),
+        ).toBeNull();
+    });
+
+    it("取消 Markdown 资源确认时不写目标且不改变源文档", async () => {
+        const sourcePath = "C:\\notes\\cancel.md";
+        const sourceContent = "![照片](./images/photo.png)";
+        mocks.markdownResourcePlans.set(
+            sourcePath,
+            markdownPlan("![照片](assets/photo.png)"),
+        );
+        mocks.saveDialog.mockResolvedValue("C:\\notes\\cancel.mdx");
+        const host = await mountMarkdownImport(sourcePath, sourceContent);
+
+        findButton(host, "保存")?.click();
+        await vi.waitFor(() => expect(host.textContent).toContain("继续导入"));
+        findButton(host, "取消")?.click();
+        await nextTick();
+
+        expect(mocks.invoke).not.toHaveBeenCalledWith("save_mdx_as", expect.anything());
+        expect(mocks.getMoraEditorMarkdown?.()).toBe(sourceContent);
+        expect(host.querySelector(".menu-document-name")?.textContent).toContain(
+            "cancel.md",
+        );
+    });
+
+    it("Markdown 资源准备失败时不写目标且保留源文档", async () => {
+        const sourcePath = "C:\\notes\\prepare-error.md";
+        const sourceContent = "![照片](./images/photo.png)";
+        mocks.markdownResourceFailures.add(sourcePath);
+        mocks.saveDialog.mockResolvedValue("C:\\notes\\prepare-error.mdx");
+        const host = await mountMarkdownImport(sourcePath, sourceContent);
+
+        findButton(host, "保存")?.click();
+        await vi.waitFor(() =>
+            expect(host.textContent).toContain(`无法准备 ${sourcePath}`),
+        );
+
+        expect(mocks.invoke).not.toHaveBeenCalledWith("save_mdx_as", expect.anything());
+        expect(mocks.getMoraEditorMarkdown?.()).toBe(sourceContent);
+        expect(host.querySelector(".menu-document-name")?.textContent).toContain(
+            "prepare-error.md",
+        );
+    });
+
+    it("Markdown 打包失败后回滚规范正文和待保存资源", async () => {
+        const sourcePath = "C:\\notes\\save-error.md";
+        const sourceContent = "![照片](./images/photo.png)";
+        const targetPath = "C:\\notes\\save-error.mdx";
+        mocks.markdownResourcePlans.set(
+            sourcePath,
+            markdownPlan("![照片](assets/photo.png)"),
+        );
+        mocks.saveAsFailures.add(targetPath.toLowerCase());
+        mocks.saveDialog.mockResolvedValue(targetPath);
+        const host = await mountMarkdownImport(sourcePath, sourceContent);
+
+        findButton(host, "保存")?.click();
+        await vi.waitFor(() => expect(host.textContent).toContain("继续导入"));
+        findButton(host, "继续导入（保留未解决链接）")?.click();
+        await vi.waitFor(() =>
+            expect(host.textContent).toContain(`无法另存为 ${targetPath}`),
+        );
+
+        expect(mocks.getMoraEditorMarkdown?.()).toBe(sourceContent);
+        expect(host.querySelector(".menu-document-name")?.textContent).toContain(
+            "save-error.md",
+        );
+    });
+
+    it("Markdown 资源确认结果始终保存发起文档而不污染当前文档", async () => {
+        const sourceA = "C:\\notes\\a.md";
+        const sourceB = "C:\\notes\\b.md";
+        const contentA = "![A](./images/photo.png)";
+        const contentB = "# B";
+        mocks.isTauri.mockReturnValue(true);
+        mocks.markdownImports.set(sourceA, {
+            title: "a",
+            content: contentA,
+            frontMatter: null,
+        });
+        mocks.markdownImports.set(sourceB, {
+            title: "b",
+            content: contentB,
+            frontMatter: null,
+        });
+        mocks.markdownResourcePlans.set(sourceA, markdownPlan("![A](assets/photo.png)"));
+        mocks.openDialog.mockResolvedValue([sourceA, sourceB]);
+        mocks.saveDialog.mockResolvedValue("C:\\notes\\a.mdx");
+        const host = document.createElement("div");
+        document.body.append(host);
+        const app = createApp(App);
+        app.mount(host);
+        cleanup = () => app.unmount();
+        await vi.waitFor(() => expect(mocks.closeHandler).toBeTypeOf("function"));
+        findButton(host, "打开文件...")?.click();
+        await vi.waitFor(() => expect(documentRow(host, "a.md")).not.toBeUndefined());
+        documentRow(host, "a.md")?.click();
+        await nextTick();
+        findButton(host, "保存")?.click();
+        await vi.waitFor(() => expect(host.textContent).toContain("继续导入"));
+
+        const closeEvent = { preventDefault: vi.fn() };
+        const closeRequest = mocks.closeHandler?.(closeEvent);
+        await nextTick();
+        expect(closeEvent.preventDefault).toHaveBeenCalledTimes(1);
+        expect(
+            host.querySelector('[aria-labelledby="leave-dialog-title"][open]'),
+        ).toBeNull();
+        await closeRequest;
+
+        host.querySelector<HTMLButtonElement>('[aria-label="关闭 a.md"]')?.click();
+        await nextTick();
+        expect(documentRow(host, "a.md")).not.toBeUndefined();
+        expect(
+            host.querySelector('[aria-labelledby="leave-dialog-title"][open]'),
+        ).toBeNull();
+
+        documentRow(host, "b.md")?.click();
+        await vi.waitFor(() => expect(mocks.getMoraEditorMarkdown?.()).toBe(contentB));
+        findButton(host, "继续导入（保留未解决链接）")?.click();
+
+        await vi.waitFor(() =>
+            expect(mocks.invoke).toHaveBeenCalledWith(
+                "save_mdx_as",
+                expect.objectContaining({
+                    path: "C:\\notes\\a.mdx",
+                    request: expect.objectContaining({
+                        content: "![A](assets/photo.png)",
+                    }),
+                }),
+            ),
+        );
+        expect(mocks.getMoraEditorMarkdown?.()).toBe(contentB);
+        expect(host.querySelector(".menu-document-name")?.textContent?.trim()).toBe(
+            "b.md",
+        );
+    });
+
+    it("Markdown 资源确认期间正文变化时丢弃旧计划且不写目标", async () => {
+        const sourcePath = "C:\\notes\\changed.md";
+        const sourceContent = "![照片](./images/photo.png)";
+        const changedContent = `${sourceContent}\n新内容`;
+        mocks.markdownResourcePlans.set(
+            sourcePath,
+            markdownPlan("![照片](assets/photo.png)"),
+        );
+        mocks.saveDialog.mockResolvedValue("C:\\notes\\changed.mdx");
+        const host = await mountMarkdownImport(sourcePath, sourceContent);
+
+        findButton(host, "保存")?.click();
+        await vi.waitFor(() => expect(host.textContent).toContain("继续导入"));
+        mocks.editorUpdate?.(changedContent);
+        await nextTick();
+        findButton(host, "继续导入（保留未解决链接）")?.click();
+
+        await vi.waitFor(() => expect(host.textContent).toContain("文档已更改"));
+        expect(mocks.invoke).not.toHaveBeenCalledWith("save_mdx_as", expect.anything());
+        expect(mocks.getMoraEditorMarkdown?.()).toBe(changedContent);
+    });
+
+    it("同一 Markdown 文档的并发保存只打开一个保存对话框", async () => {
+        const sourcePath = "C:\\notes\\single-save.md";
+        const sourceContent = "# 单次保存";
+        const destination = deferred<string | null>();
+        mocks.saveDialog.mockReturnValue(destination.promise);
+        const host = await mountMarkdownImport(sourcePath, sourceContent);
+
+        findButton(host, "保存")?.click();
+        findButton(host, "保存")?.click();
+        await nextTick();
+
+        expect(mocks.saveDialog).toHaveBeenCalledTimes(1);
+        destination.resolve(null);
+        await vi.waitFor(() => expect(host.textContent).toContain("已取消保存"));
     });
 });
 
@@ -912,20 +1425,14 @@ describe("App 桌面关闭", () => {
         await vi.waitFor(() => expect(host.textContent).toContain("保存“a”？"));
         findButton(host, "放弃修改")?.click();
         await vi.waitFor(() => expect(host.textContent).toContain("保存“b”？"));
-        expect(mocks.invoke).not.toHaveBeenCalledWith(
-            "delete_draft",
-            expect.anything(),
-        );
+        expect(mocks.invoke).not.toHaveBeenCalledWith("delete_draft", expect.anything());
         findButton(host, "取消")?.click();
         await closing;
 
         expect(event.preventDefault).toHaveBeenCalledTimes(1);
         expect(mocks.windowClose).not.toHaveBeenCalled();
         expect(host.querySelectorAll('[role="treeitem"]')).toHaveLength(2);
-        expect(mocks.invoke).not.toHaveBeenCalledWith(
-            "delete_draft",
-            expect.anything(),
-        );
+        expect(mocks.invoke).not.toHaveBeenCalledWith("delete_draft", expect.anything());
     });
 
     it("后续文档保存失败时保留全部文档和草稿且不关闭窗口", async () => {
@@ -943,10 +1450,7 @@ describe("App 桌面关闭", () => {
         expect(mocks.windowClose).not.toHaveBeenCalled();
         expect(host.querySelectorAll('[role="treeitem"]')).toHaveLength(2);
         expect(host.textContent).toContain("无法保存 C:\\notes\\b.mdx");
-        expect(mocks.invoke).not.toHaveBeenCalledWith(
-            "delete_draft",
-            expect.anything(),
-        );
+        expect(mocks.invoke).not.toHaveBeenCalledWith("delete_draft", expect.anything());
     });
 
     it("所有 dirty 文档决策成功后才删除放弃草稿并关闭窗口", async () => {
