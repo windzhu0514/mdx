@@ -82,6 +82,7 @@ vi.mock("@tauri-apps/api/window", () => ({
     getCurrentWindow: () => ({
         onDragDropEvent: vi.fn(async () => () => undefined),
         onCloseRequested: vi.fn(async () => () => undefined),
+        onFocusChanged: vi.fn(async () => () => undefined),
         close: vi.fn(async () => undefined),
     }),
 }));

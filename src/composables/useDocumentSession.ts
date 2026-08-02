@@ -148,6 +148,7 @@ export function useDocumentSession(desktop: boolean) {
     const warnings = ref<string[]>([]);
     const folderIdentities = new Map<string, string>();
     const draftKeys = new Map<string, string>();
+    const discardedForWindowClose = new Set<string>();
     let nextDocumentId = 1;
     let nextUntitledNumber = 1;
     let sessionWriteTimer: ReturnType<typeof setTimeout> | null = null;
@@ -431,10 +432,18 @@ export function useDocumentSession(desktop: boolean) {
         }
     }
 
-    async function save(id: string) {
+    async function save(id: string, options: { overwrite?: boolean } = {}) {
         requireDesktop();
         const runtime = document(id);
         if (!runtime.path) throw { code: "SAVE_AS_REQUIRED", documentId: id };
+        if (!options.overwrite) {
+            const currentRevision = await readRevision(runtime.path);
+            if (!revisionsEqual(runtime.diskRevision, currentRevision)) {
+                runtime.conflict = true;
+                documents.value = [...documents.value];
+                throw { code: "EXTERNAL_CONFLICT", documentId: id };
+            }
+        }
         const storageKey =
             draftKeys.get(runtime.id) ?? draftKey(runtime.path, runtime.id);
         const title = documentNameFromPath(runtime.path);
@@ -593,6 +602,34 @@ export function useDocumentSession(desktop: boolean) {
             if (identity === resolved.identity) folderIdentities.delete(folderPath);
         }
         await persist();
+        return true;
+    }
+
+    async function prepareWindowClose(actions: CloseActions) {
+        const discarded: SessionDocument[] = [];
+        for (const runtime of documents.value) {
+            if (!runtime.dirty) continue;
+            const decision = await actions.decide(runtime);
+            if (decision === "cancel") return false;
+            if (decision === "save" && !(await actions.save(runtime.id))) return false;
+            if (decision === "discard") discarded.push(runtime);
+        }
+
+        const removed: SessionDocument[] = [];
+        try {
+            for (const runtime of discarded) {
+                await runtime.draft.remove();
+                removed.push(runtime);
+                discardedForWindowClose.add(runtime.id);
+            }
+        } catch (error) {
+            for (const runtime of removed) {
+                discardedForWindowClose.delete(runtime.id);
+                runtime.draft.schedule();
+                await runtime.draft.flush();
+            }
+            throw error;
+        }
         return true;
     }
 
@@ -776,6 +813,29 @@ export function useDocumentSession(desktop: boolean) {
         return left?.modifiedAtMs === right?.modifiedAtMs && left?.size === right?.size;
     }
 
+    async function reloadFromDisk(id: string) {
+        requireDesktop();
+        const runtime = document(id);
+        if (!runtime.path) throw { code: "RELOAD_REQUIRES_PATH", documentId: id };
+        const storageKey =
+            draftKeys.get(runtime.id) ?? draftKey(runtime.path, runtime.id);
+        const note = await invoke<MdxNote>("open_mdx", { path: runtime.path });
+        const revision = await readRevision(runtime.path);
+
+        await runtime.draft.remove(storageKey);
+        runtime.resources.clear();
+        runtime.path = note.path ?? runtime.path;
+        runtime.displayName = note.title;
+        runtime.content = note.content;
+        runtime.meta = note.meta;
+        runtime.dirty = false;
+        runtime.diskRevision = revision;
+        runtime.conflict = false;
+        runtime.unavailable = false;
+        documents.value = [...documents.value];
+        return runtime;
+    }
+
     async function refreshDiskState() {
         if (!desktop) return [];
         const saved = documents.value.filter(
@@ -823,8 +883,41 @@ export function useDocumentSession(desktop: boolean) {
                 warnings.value = [...warnings.value, String(error)];
             }
         }
-        triggerRef(documents);
+        documents.value = [...documents.value];
         return reloadedIds;
+    }
+
+    async function refreshFolders() {
+        if (!desktop || folders.value.length === 0) return;
+        const refreshed: WorkspaceFolder[] = [];
+        for (const current of folders.value) {
+            try {
+                const resolved = await resolve(current.path);
+                if (!resolved.available) throw new Error("文件夹暂时不可用");
+                const scan = await invoke<FolderScan>("scan_workspace_folder", {
+                    path: resolved.path,
+                });
+                const folder: WorkspaceFolder = {
+                    ...scan,
+                    name: baseName(scan.path),
+                    unavailable: false,
+                    error: null,
+                };
+                folderIdentities.set(folder.path, resolved.identity);
+                refreshed.push(folder);
+            } catch (error) {
+                refreshed.push({
+                    ...current,
+                    entries: [],
+                    entryCount: 0,
+                    truncated: false,
+                    unavailable: true,
+                    error: String(error),
+                });
+                warnings.value = [...warnings.value, String(error)];
+            }
+        }
+        folders.value = refreshed;
     }
 
     async function dispose() {
@@ -843,6 +936,7 @@ export function useDocumentSession(desktop: boolean) {
         }
 
         for (const runtime of documents.value) {
+            if (discardedForWindowClose.has(runtime.id)) continue;
             await attempt(() => runtime.draft.flush());
         }
         await attempt(persist);
@@ -854,6 +948,7 @@ export function useDocumentSession(desktop: boolean) {
         folders.value = [];
         folderIdentities.clear();
         draftKeys.clear();
+        discardedForWindowClose.clear();
         const sessionError = takeSessionWriteError();
         if (firstError === noError && sessionError !== noSessionWriteError) {
             firstError = sessionError;
@@ -882,8 +977,11 @@ export function useDocumentSession(desktop: boolean) {
         saveAs,
         closeDocument,
         closeFolder,
+        prepareWindowClose,
         restore,
         persist,
+        reloadFromDisk,
+        refreshFolders,
         refreshDiskState,
         dispose,
     };

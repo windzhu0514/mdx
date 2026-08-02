@@ -5,6 +5,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import "./experience.css";
 import FindReplacePanel from "./components/FindReplacePanel.vue";
+import ExternalConflictDialog from "./components/ExternalConflictDialog.vue";
 import HistoryPanel from "./components/HistoryPanel.vue";
 import LeaveConfirmDialog from "./components/LeaveConfirmDialog.vue";
 import LibraryPanel from "./components/LibraryPanel.vue";
@@ -128,9 +129,15 @@ const aiProvider = createOpenAICompatibleProvider(
 const showLeavePrompt = ref(false);
 const leavePromptDocumentName = ref("");
 let leavePromptResolver: ((decision: LeaveDecision) => void) | null = null;
+type ConflictDecision = "overwrite" | "reload" | "save-as" | "cancel";
+const showConflictPrompt = ref(false);
+const conflictPromptDocumentName = ref("");
+let conflictPromptResolver: ((decision: ConflictDecision) => void) | null = null;
 let unlistenClose: (() => void) | null = null;
 let unlistenDragDrop: (() => void) | null = null;
+let unlistenFocus: (() => void) | null = null;
 let allowWindowClose = false;
+let windowCloseInProgress = false;
 function blobToBase64(blob: Blob): Promise<string> {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -506,22 +513,21 @@ function resolveLeaveDecision(decision: LeaveDecision) {
     resolve?.(decision);
 }
 
-async function confirmLeave() {
-    const active = activeDocument.value;
-    if (!active || !active.dirty) return true;
-    try {
-        await active.draft.flush();
-    } catch (error) {
-        errorMessage.value = `草稿保存失败：${stringifyError(error)}`;
-    }
+function requestConflictDecision(documentId: string) {
+    const target = session.document(documentId);
+    conflictPromptDocumentName.value = target.displayName;
+    showConflictPrompt.value = true;
+    return new Promise<ConflictDecision>((resolve) => {
+        conflictPromptResolver = resolve;
+    });
+}
 
-    const decision = await requestLeaveDecision(active.displayName);
-    if (decision === "discard") {
-        await active.draft.remove();
-    }
-    if (decision === "cancel") return false;
-    if (decision === "discard") return true;
-    return saveDocument(active.id);
+function resolveConflictDecision(decision: ConflictDecision) {
+    const resolve = conflictPromptResolver;
+    conflictPromptResolver = null;
+    showConflictPrompt.value = false;
+    conflictPromptDocumentName.value = "";
+    resolve?.(decision);
 }
 
 watch(
@@ -609,19 +615,53 @@ onMounted(async () => {
 
     if (!tauriRuntime) return;
 
+    try {
+        await session.restore();
+        const restored = activeDocument.value;
+        if (restored) await hydrateDocumentResources(restored);
+        if (session.warnings.value.length > 0) {
+            errorMessage.value = session.warnings.value.join("\n");
+            statusMessage.value = "工作区已部分恢复";
+        }
+    } catch (error) {
+        errorMessage.value = `恢复工作区失败：${stringifyError(error)}`;
+        statusMessage.value = "工作区恢复失败";
+    }
+
     await refreshAiKeyConfigured();
 
     const appWindow = getCurrentWindow();
+    unlistenFocus = await appWindow.onFocusChanged(async (event) => {
+        if (!event.payload) return;
+        await session.refreshFolders();
+        const reloadedIds = await session.refreshDiskState();
+        for (const id of reloadedIds) editorRef.value?.releaseDocument(id);
+        const activeId = activeDocumentId.value;
+        if (activeId && session.document(activeId).conflict) {
+            await resolveDocumentConflict(activeId);
+        }
+    });
     unlistenDragDrop = await appWindow.onDragDropEvent(async (event) => {
         if (event.payload.type !== "drop") return;
         await importResourcePaths(event.payload.paths);
     });
     unlistenClose = await appWindow.onCloseRequested(async (event) => {
-        if (allowWindowClose || !dirty.value) return;
+        if (allowWindowClose || !documents.value.some((document) => document.dirty)) {
+            return;
+        }
         event.preventDefault();
-        if (await confirmLeave()) {
-            allowWindowClose = true;
-            await appWindow.close();
+        if (windowCloseInProgress) return;
+        windowCloseInProgress = true;
+        try {
+            if (await session.prepareWindowClose(closeActions)) {
+                allowWindowClose = true;
+                await appWindow.close();
+            }
+        } catch (error) {
+            errorMessage.value = `关闭前处理失败：${stringifyError(error)}`;
+            statusMessage.value = "窗口关闭已取消";
+        } finally {
+            windowCloseInProgress = false;
         }
     });
 
@@ -633,6 +673,7 @@ onBeforeUnmount(() => {
     window.removeEventListener("keydown", handleWindowKeyDown);
     unlistenClose?.();
     unlistenDragDrop?.();
+    unlistenFocus?.();
     disposePreferences();
     void session.dispose().catch((error: unknown) => {
         console.warn("释放文档会话失败", error);
@@ -960,10 +1001,17 @@ async function openFolder() {
     });
 }
 
-function activateDocument(id: string) {
+async function activateDocument(id: string) {
     if (id === activeDocumentId.value) return;
     editorRef.value?.cancelAi();
     session.activate(id);
+
+    const targetDocument = session.document(id);
+    await hydrateDocumentResources(targetDocument);
+
+    if (activeDocumentId.value === id && targetDocument.conflict) {
+        await resolveDocumentConflict(id);
+    }
 }
 
 async function ensureSavedForExport(id: string): Promise<SessionDocument | null> {
@@ -1049,16 +1097,39 @@ async function saveNoteAs() {
     if (active) await saveDocumentAs(active.id);
 }
 
-async function saveDocument(id: string) {
+async function resolveDocumentConflict(id: string): Promise<boolean> {
+    const target = documents.value.find((document) => document.id === id);
+    if (!target?.conflict) return true;
+    const decision = await requestConflictDecision(id);
+    if (decision === "cancel") return false;
+    if (decision === "overwrite") return saveDocument(id, true);
+    if (decision === "save-as") return saveDocumentAs(id);
+
+    let reloaded = false;
+    await runAction(async () => {
+        const runtime = await session.reloadFromDisk(id);
+        await hydrateDocumentResources(runtime);
+        reloaded = true;
+        statusMessage.value = "已重新加载磁盘版本";
+    });
+    if (reloaded) editorRef.value?.releaseDocument(id);
+    return reloaded;
+}
+
+async function saveDocument(id: string, overwrite = false): Promise<boolean> {
     const runtime = session.document(id);
     if (!runtime.path) return saveDocumentAs(id);
+    if (runtime.conflict && !overwrite) return resolveDocumentConflict(id);
     let saved = false;
     await runAction(async () => {
-        const note = await session.save(id);
+        const note = await session.save(id, { overwrite });
         if (note.path) await pushRecentFile(note.path, note.displayName);
-        saved = true;
-        statusMessage.value = "保存成功";
+        saved = !note.dirty;
+        statusMessage.value = saved ? "保存成功" : "保存期间文档已再次修改";
     });
+    if (!saved && !overwrite && session.document(id).conflict) {
+        return resolveDocumentConflict(id);
+    }
     return saved;
 }
 
@@ -1077,8 +1148,8 @@ async function saveDocumentAs(id: string) {
     await runAction(async () => {
         const note = await session.saveAs(id, selected);
         if (note.path) await pushRecentFile(note.path, note.displayName);
-        saved = true;
-        statusMessage.value = "另存为成功";
+        saved = !note.dirty;
+        statusMessage.value = saved ? "另存为成功" : "另存为期间文档已再次修改";
     });
     return saved;
 }
@@ -1904,6 +1975,11 @@ function stringifyError(error: unknown) {
             :open="showLeavePrompt"
             :document-name="leavePromptDocumentName"
             @decide="resolveLeaveDecision"
+        />
+        <ExternalConflictDialog
+            :open="showConflictPrompt"
+            :document-name="conflictPromptDocumentName"
+            @decide="resolveConflictDecision"
         />
         <StatusBar
             :error-message="errorMessage"

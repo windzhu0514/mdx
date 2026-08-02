@@ -110,6 +110,7 @@ vi.mock("@tauri-apps/api/window", () => ({
     getCurrentWindow: vi.fn(() => ({
         onDragDropEvent: vi.fn(async () => () => undefined),
         onCloseRequested: vi.fn(async () => () => undefined),
+        onFocusChanged: vi.fn(async () => () => undefined),
         close: vi.fn(async () => undefined),
     })),
 }));
@@ -210,6 +211,11 @@ async function mountApp(): Promise<HTMLElement> {
     const app = createApp(App);
     app.mount(host);
     cleanup = () => app.unmount();
+    await vi.waitFor(() =>
+        expect(
+            mocks.invoke.mock.calls.some(([command]) => command === "has_ai_api_key"),
+        ).toBe(true),
+    );
     findButton(host, "新建文档").click();
     await vi.waitFor(() => expect(mocks.milkdown).toBeDefined());
     return host;
@@ -235,6 +241,9 @@ beforeEach(() => {
     mocks.invoke.mockImplementation(async (command: string, args?: unknown) => {
         if (command === "has_ai_api_key") return false;
         if (command === "get_recent_files" || command === "push_recent_file") return [];
+        if (command === "read_workspace_session") {
+            return { session: null, warning: null };
+        }
         if (command === "resolve_path") {
             const path = (args as { path: string }).path;
             return { path, identity: path.toLowerCase(), available: true };

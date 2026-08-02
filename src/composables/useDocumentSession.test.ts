@@ -278,6 +278,85 @@ describe("document session", () => {
         expect(invoke).not.toHaveBeenCalledWith("delete_draft", expect.anything());
     });
 
+    it("preflights all dirty documents in opening order and defers discard deletion on cancel", async () => {
+        const session = useDocumentSession(true);
+        const first = await session.openMdx("C:\\Notes\\first.mdx");
+        const second = await session.openMdx("C:\\Notes\\second.mdx");
+        session.updateContent(first.id, "dirty first");
+        session.updateContent(second.id, "dirty second");
+        await first.draft.flush();
+        await second.draft.flush();
+        const prompted: string[] = [];
+
+        const allowed = await session.prepareWindowClose({
+            decide: async (document) => {
+                prompted.push(document.id);
+                if (document.id === second.id) {
+                    expect(drafts.size).toBe(2);
+                    return "cancel";
+                }
+                return "discard";
+            },
+            save: async () => true,
+        });
+
+        expect(allowed).toBe(false);
+        expect(prompted).toEqual([first.id, second.id]);
+        expect(session.documents.value.map((document) => document.id)).toEqual([
+            first.id,
+            second.id,
+        ]);
+        expect(drafts.size).toBe(2);
+    });
+
+    it("keeps every document and draft when a later window-close save fails", async () => {
+        const session = useDocumentSession(true);
+        const first = await session.openMdx("C:\\Notes\\first.mdx");
+        const second = await session.openMdx("C:\\Notes\\second.mdx");
+        session.updateContent(first.id, "dirty first");
+        session.updateContent(second.id, "dirty second");
+        await first.draft.flush();
+        await second.draft.flush();
+
+        const allowed = await session.prepareWindowClose({
+            decide: async (document) =>
+                document.id === first.id ? "discard" : "save",
+            save: async () => false,
+        });
+
+        expect(allowed).toBe(false);
+        expect(session.documents.value.map((document) => document.id)).toEqual([
+            first.id,
+            second.id,
+        ]);
+        expect(drafts.size).toBe(2);
+    });
+
+    it("deletes deferred discard drafts only after every close decision succeeds", async () => {
+        const session = useDocumentSession(true);
+        const first = await session.openMdx("C:\\Notes\\first.mdx");
+        const second = await session.openMdx("C:\\Notes\\second.mdx");
+        session.updateContent(first.id, "dirty first");
+        session.updateContent(second.id, "dirty second");
+        await first.draft.flush();
+        await second.draft.flush();
+
+        await expect(
+            session.prepareWindowClose({
+                decide: async () => "discard",
+                save: async () => true,
+            }),
+        ).resolves.toBe(true);
+
+        expect(session.documents.value.map((document) => document.id)).toEqual([
+            first.id,
+            second.id,
+        ]);
+        expect(drafts.size).toBe(0);
+        await session.dispose();
+        expect(drafts.size).toBe(0);
+    });
+
     it("rejects save-as before writing when another document owns the target", async () => {
         const session = useDocumentSession(true);
         const existing = await session.openMdx("C:\\Notes\\taken.mdx");
@@ -867,6 +946,51 @@ describe("document session", () => {
         expect(session.document(clean.id).conflict).toBe(false);
         expect(session.document(dirty.id).content).toBe("local");
         expect(session.document(dirty.id).conflict).toBe(true);
+    });
+
+    it("checks the target revision immediately before save and keeps the conflict dirty", async () => {
+        const session = useDocumentSession(true);
+        const runtime = await session.openMdx("C:\\Notes\\changed-before-save.mdx");
+        session.updateContent(runtime.id, "local edit");
+        await runtime.draft.flush();
+        diskRevisions.set(pathKey(runtime.path!), 2);
+
+        await expect(session.save(runtime.id)).rejects.toMatchObject({
+            code: "EXTERNAL_CONFLICT",
+            documentId: runtime.id,
+        });
+
+        expect(runtime.content).toBe("local edit");
+        expect(runtime.dirty).toBe(true);
+        expect(runtime.conflict).toBe(true);
+        expect(Array.from(drafts.values())[0]?.content).toBe("local edit");
+        expect(invoke).not.toHaveBeenCalledWith("save_mdx", expect.anything());
+    });
+
+    it("reloads only the requested conflicted document and removes only its draft", async () => {
+        const session = useDocumentSession(true);
+        const first = await session.openMdx("C:\\Notes\\first.mdx");
+        const second = await session.openMdx("C:\\Notes\\second.mdx");
+        session.updateContent(first.id, "local first");
+        session.updateContent(second.id, "local second");
+        await first.draft.flush();
+        await second.draft.flush();
+        diskContents.set(pathKey(first.path!), "disk first");
+        diskContents.set(pathKey(second.path!), "disk second");
+        diskRevisions.set(pathKey(first.path!), 2);
+        diskRevisions.set(pathKey(second.path!), 2);
+        await session.refreshDiskState();
+
+        await session.reloadFromDisk(first.id);
+
+        expect(first.content).toBe("disk first");
+        expect(first.dirty).toBe(false);
+        expect(first.conflict).toBe(false);
+        expect(second.content).toBe("local second");
+        expect(second.dirty).toBe(true);
+        expect(second.conflict).toBe(true);
+        expect(drafts.size).toBe(1);
+        expect(Array.from(drafts.values())[0]?.content).toBe("local second");
     });
 
     it("flushes resource snapshots before disposal clears object URLs", async () => {
