@@ -23,6 +23,7 @@ let failNextDraftWrite = false;
 const workspaceWriteSnapshots: WorkspaceSessionSnapshot[] = [];
 let workspaceWriteHandler:
     ((snapshot: WorkspaceSessionSnapshot) => Promise<void>) | null = null;
+let openMdxHandler: ((path: string) => Promise<MdxNote>) | null = null;
 let saveHandler:
     | ((
           command: "save_mdx" | "save_mdx_as",
@@ -124,6 +125,7 @@ describe("document session", () => {
         failNextDraftWrite = false;
         workspaceWriteSnapshots.length = 0;
         workspaceWriteHandler = null;
+        openMdxHandler = null;
         saveHandler = null;
         Object.defineProperty(URL, "revokeObjectURL", {
             configurable: true,
@@ -147,6 +149,7 @@ describe("document session", () => {
             if (command === "open_mdx") {
                 const path = normalizedPath(String(payload.path));
                 if (/missing/i.test(path)) throw new Error("unavailable");
+                if (openMdxHandler) return openMdxHandler(path);
                 return note(
                     path,
                     fileName(path).replace(/\.mdx$/i, ""),
@@ -319,8 +322,7 @@ describe("document session", () => {
         await second.draft.flush();
 
         const allowed = await session.prepareWindowClose({
-            decide: async (document) =>
-                document.id === first.id ? "discard" : "save",
+            decide: async (document) => (document.id === first.id ? "discard" : "save"),
             save: async () => false,
         });
 
@@ -946,6 +948,58 @@ describe("document session", () => {
         expect(session.document(clean.id).conflict).toBe(false);
         expect(session.document(dirty.id).content).toBe("local");
         expect(session.document(dirty.id).conflict).toBe(true);
+    });
+
+    it("preserves edits made while a clean disk reload is in flight", async () => {
+        const session = useDocumentSession(true);
+        const runtime = await session.openMdx("C:\\Notes\\late-reload.mdx");
+        const pendingOpen = deferred<MdxNote>();
+        openMdxHandler = () => pendingOpen.promise;
+        diskRevisions.set(pathKey(runtime.path!), 2);
+
+        const refreshing = session.refreshDiskState();
+        await vi.waitFor(() =>
+            expect(
+                invoke.mock.calls.filter(([command]) => command === "open_mdx"),
+            ).toHaveLength(2),
+        );
+        session.updateContent(runtime.id, "local edit during reload");
+        pendingOpen.resolve(note(runtime.path, runtime.displayName, "late disk content"));
+
+        await expect(refreshing).resolves.toEqual([]);
+        expect(runtime.content).toBe("local edit during reload");
+        expect(runtime.dirty).toBe(true);
+        expect(runtime.conflict).toBe(true);
+    });
+
+    it("ignores a late concurrent reload after the same revision was already applied", async () => {
+        const session = useDocumentSession(true);
+        const runtime = await session.openMdx("C:\\Notes\\concurrent-reload.mdx");
+        const firstOpen = deferred<MdxNote>();
+        const secondOpen = deferred<MdxNote>();
+        let reloadIndex = 0;
+        openMdxHandler = () => [firstOpen.promise, secondOpen.promise][reloadIndex++]!;
+        diskRevisions.set(pathKey(runtime.path!), 2);
+
+        const firstRefresh = session.refreshDiskState();
+        const secondRefresh = session.refreshDiskState();
+        await vi.waitFor(() =>
+            expect(
+                invoke.mock.calls.filter(([command]) => command === "open_mdx"),
+            ).toHaveLength(3),
+        );
+        secondOpen.resolve(
+            note(runtime.path, runtime.displayName, "applied disk content"),
+        );
+        await expect(secondRefresh).resolves.toEqual([runtime.id]);
+        firstOpen.resolve(
+            note(runtime.path, runtime.displayName, "late duplicate response"),
+        );
+
+        await expect(firstRefresh).resolves.toEqual([]);
+        expect(runtime.content).toBe("applied disk content");
+        expect(runtime.diskRevision?.modifiedAtMs).toBe(2);
+        expect(runtime.conflict).toBe(false);
     });
 
     it("checks the target revision immediately before save and keeps the conflict dirty", async () => {

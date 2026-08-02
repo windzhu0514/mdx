@@ -23,6 +23,7 @@ import type {
     MoraEditorHandle,
 } from "./components/editor/editorTypes";
 import {
+    sameResources,
     useDocumentSession,
     type OpenDocument,
     type SessionDocument,
@@ -1248,16 +1249,30 @@ async function saveMarkdownImportAs(id: string, selected: string, sourcePath: st
 
     const originalContent = runtime.content;
     const originalResources = runtime.resources.snapshot();
+    let convertedContent: string | null = null;
+    let convertedResources: ReturnType<typeof runtime.resources.snapshot> | null = null;
     try {
         runtime.content = plan.rewrittenContent;
         for (const resource of plan.resources) {
             registerResourceInSession(id, resource);
         }
+        convertedContent = runtime.content;
+        convertedResources = runtime.resources.snapshot();
         return await session.saveAs(id, selected);
     } catch (error) {
-        runtime.content = originalContent;
-        runtime.resources.clear();
-        runtime.resources.restore(originalResources);
+        const conversionIsUnchanged =
+            convertedContent === null ||
+            convertedResources === null ||
+            (runtime.content === convertedContent &&
+                sameResources(
+                    runtime.resources.newResources(),
+                    convertedResources.newResources,
+                ));
+        if (conversionIsUnchanged) {
+            runtime.content = originalContent;
+            runtime.resources.clear();
+            runtime.resources.restore(originalResources);
+        }
         throw error;
     }
 }
@@ -1283,6 +1298,13 @@ async function closeActiveDocument() {
 }
 
 async function closeFolder(path: string) {
+    const savingDocumentInFolder = Array.from(savingDocumentIds).some((id) =>
+        session.folderContainsDocument(path, id),
+    );
+    if (savingDocumentInFolder) {
+        statusMessage.value = "请先完成当前保存操作";
+        return;
+    }
     editorRef.value?.cancelAi();
     const before = new Set(documents.value.map((document) => document.id));
     const closed = await session.closeFolder(path, closeActions);

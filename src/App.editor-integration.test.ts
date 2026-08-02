@@ -7,6 +7,7 @@ import type { HistoryListItem, HistorySnapshot } from "./types/history";
 import { countNonWhitespaceCharacters } from "./utils/text";
 
 type LowestEditorControls = {
+    cancelAi: ReturnType<typeof vi.fn>;
     emitUpdate: (markdown: string) => void;
     focus: ReturnType<typeof vi.fn>;
     readiness: Promise<void>;
@@ -136,6 +137,7 @@ function lowestEditorStub(kind: "milkdown" | "source") {
                     : Promise.resolve();
             if (kind === "milkdown") mocks.nextMilkdownReadiness = undefined;
             const controls: LowestEditorControls = {
+                cancelAi: vi.fn(),
                 emitUpdate: (markdown) => emit("update:modelValue", markdown),
                 focus: vi.fn(),
                 readiness,
@@ -152,7 +154,7 @@ function lowestEditorStub(kind: "milkdown" | "source") {
             );
 
             expose({
-                cancelAi: vi.fn(),
+                cancelAi: controls.cancelAi,
                 execute: vi.fn(),
                 focus: controls.focus,
                 getSelectedText: vi.fn(() => ""),
@@ -205,6 +207,12 @@ function findButton(host: HTMLElement, label: string): HTMLButtonElement {
     return button;
 }
 
+function documentRow(host: HTMLElement, name: string) {
+    return Array.from(host.querySelectorAll<HTMLElement>('[role="treeitem"]')).find(
+        (item) => item.querySelector(".workspace-name")?.textContent === name,
+    );
+}
+
 async function mountApp(): Promise<HTMLElement> {
     const host = document.createElement("div");
     document.body.append(host);
@@ -222,6 +230,12 @@ async function mountApp(): Promise<HTMLElement> {
 }
 
 beforeEach(() => {
+    HTMLDialogElement.prototype.showModal = vi.fn(function (this: HTMLDialogElement) {
+        this.setAttribute("open", "");
+    });
+    HTMLDialogElement.prototype.close = vi.fn(function (this: HTMLDialogElement) {
+        this.removeAttribute("open");
+    });
     mocks.milkdown = undefined;
     mocks.source = undefined;
     mocks.openedNote = undefined;
@@ -347,6 +361,97 @@ afterEach(() => {
 });
 
 describe("App 编辑器状态集成", () => {
+    it.each([
+        ["wysiwyg", null, "milkdown"],
+        ["source", "仅源码", "source"],
+        ["split", "垂直双栏", "source"],
+    ] as const)(
+        "在 %s 模式切换文档后仍保存各自的 canonical Markdown",
+        async (_mode, modeButton, editorKind) => {
+            const host = await mountApp();
+            const editableMilkdown = mocks.milkdown;
+            if (modeButton) {
+                findButton(host, modeButton).click();
+                await nextTick();
+            }
+
+            mocks[editorKind]?.emitUpdate("A edit");
+            await nextTick();
+            findButton(host, "新建").click();
+            await vi.waitFor(() =>
+                expect(documentRow(host, "未命名文档 2")).not.toBeUndefined(),
+            );
+            mocks[editorKind]?.emitUpdate("B edit");
+            await nextTick();
+
+            documentRow(host, "未命名文档 1")?.click();
+            await vi.waitFor(() => expect(editorValue(host, editorKind)).toBe("A edit"));
+            expect(editableMilkdown?.cancelAi).toHaveBeenCalled();
+
+            findButton(host, "另存为...").click();
+            await vi.waitFor(() => {
+                const saveCall = mocks.invoke.mock.calls.find(
+                    ([command]) => command === "save_mdx_as",
+                );
+                expect(
+                    (saveCall?.[1] as { request: { content: string } }).request.content,
+                ).toBe("A edit");
+            });
+
+            documentRow(host, "未命名文档 2")?.click();
+            await vi.waitFor(() => expect(editorValue(host, editorKind)).toBe("B edit"));
+        },
+    );
+
+    it("输入法组合期间不执行全局文档快捷键", async () => {
+        const host = await mountApp();
+        const event = new KeyboardEvent("keydown", {
+            key: "n",
+            ctrlKey: true,
+            bubbles: true,
+            isComposing: true,
+        });
+
+        window.dispatchEvent(event);
+        await nextTick();
+
+        expect(documentRow(host, "未命名文档 1")).not.toBeUndefined();
+        expect(documentRow(host, "未命名文档 2")).toBeUndefined();
+    });
+
+    it("资源 Blob URL 跨文档切换存活并在关闭所属文档时撤销", async () => {
+        const host = await mountApp();
+        const file = new File(["image"], "switch.png", { type: "image/png" });
+        const displayUrl = await mocks.milkdown?.uploadImage?.(file);
+        mocks.milkdown?.emitUpdate(`![图](${displayUrl})`);
+        await nextTick();
+
+        findButton(host, "新建").click();
+        await vi.waitFor(() =>
+            expect(documentRow(host, "未命名文档 2")).not.toBeUndefined(),
+        );
+        expect(URL.revokeObjectURL).not.toHaveBeenCalledWith(mocks.objectUrl);
+
+        documentRow(host, "未命名文档 1")?.click();
+        await vi.waitFor(() =>
+            expect(editorValue(host, "milkdown")).toBe(`![图](${mocks.objectUrl})`),
+        );
+        findButton(host, "仅源码").click();
+        await nextTick();
+        expect(editorValue(host, "source")).toBe("![图](assets/image-resource-id.png)");
+
+        documentRow(host, "未命名文档 1")?.click();
+        await nextTick();
+        host.querySelector<HTMLButtonElement>(
+            '[aria-label="关闭 未命名文档 1"]',
+        )?.click();
+        await vi.waitFor(() => expect(host.textContent).toContain("放弃修改"));
+        findButton(host, "放弃修改").click();
+        await vi.waitFor(() => expect(documentRow(host, "未命名文档 1")).toBeUndefined());
+
+        expect(URL.revokeObjectURL).toHaveBeenCalledWith(mocks.objectUrl);
+    });
+
     it("打开旧笔记时以文件名显示文档名称而不是包内标题", async () => {
         const note = createNote("# 正文", "C:\\notes\\项目计划.MDX");
         note.title = "包内旧标题";

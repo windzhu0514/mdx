@@ -67,6 +67,7 @@ const mocks = vi.hoisted(() => ({
     >(),
     markdownResourceFailures: new Set<string>(),
     saveAsFailures: new Set<string>(),
+    nextSaveAs: undefined as Promise<unknown> | undefined,
     recentFiles: [] as Array<{
         path: string;
         title: string;
@@ -288,6 +289,11 @@ const mocks = vi.hoisted(() => ({
                     meta: Record<string, unknown> | null;
                 };
             };
+            if (mocks.nextSaveAs) {
+                const pending = mocks.nextSaveAs;
+                mocks.nextSaveAs = undefined;
+                return pending;
+            }
             if (mocks.saveAsFailures.has(payload.path.toLowerCase())) {
                 throw new Error(`无法另存为 ${payload.path}`);
             }
@@ -389,10 +395,12 @@ let cleanup: (() => void) | undefined;
 
 function deferred<T>() {
     let resolve!: (value: T | PromiseLike<T>) => void;
-    const promise = new Promise<T>((resolvePromise) => {
+    let reject!: (reason?: unknown) => void;
+    const promise = new Promise<T>((resolvePromise, rejectPromise) => {
         resolve = resolvePromise;
+        reject = rejectPromise;
     });
-    return { promise, resolve };
+    return { promise, resolve, reject };
 }
 
 function documentRow(host: HTMLElement, name: string) {
@@ -529,6 +537,7 @@ beforeEach(() => {
     mocks.markdownResourcePlans.clear();
     mocks.markdownResourceFailures.clear();
     mocks.saveAsFailures.clear();
+    mocks.nextSaveAs = undefined;
     mocks.recentFiles = [];
     mocks.openMdxFailures.clear();
     mocks.saveFailures.clear();
@@ -1390,6 +1399,79 @@ describe("App 多文档工作区", () => {
         expect(mocks.saveDialog).toHaveBeenCalledTimes(1);
         destination.resolve(null);
         await vi.waitFor(() => expect(host.textContent).toContain("已取消保存"));
+    });
+
+    it("Markdown 打包失败时保留保存期间产生的新编辑", async () => {
+        const sourcePath = "C:\\notes\\concurrent-error.md";
+        const sourceContent = "![照片](./images/photo.png)";
+        const targetPath = "C:\\notes\\concurrent-error.mdx";
+        const changedContent = "![照片](assets/photo.png)\n保存期间的新内容";
+        mocks.markdownResourcePlans.set(
+            sourcePath,
+            markdownPlan("![照片](assets/photo.png)"),
+        );
+        mocks.saveDialog.mockResolvedValue(targetPath);
+        const pendingSave = deferred<never>();
+        mocks.nextSaveAs = pendingSave.promise;
+        const host = await mountMarkdownImport(sourcePath, sourceContent);
+
+        findButton(host, "保存")?.click();
+        await vi.waitFor(() => expect(host.textContent).toContain("继续导入"));
+        findButton(host, "继续导入（保留未解决链接）")?.click();
+        await vi.waitFor(() =>
+            expect(
+                mocks.invoke.mock.calls.filter(([command]) => command === "save_mdx_as"),
+            ).toHaveLength(1),
+        );
+        mocks.editorUpdate?.(changedContent);
+        await nextTick();
+        pendingSave.reject(new Error("延迟保存失败"));
+
+        await vi.waitFor(() => expect(host.textContent).toContain("延迟保存失败"));
+        expect(mocks.getMoraEditorMarkdown?.()).toBe(
+            "![照片](blob:restored-asset)\n保存期间的新内容",
+        );
+        expect(host.textContent).toContain("未保存");
+
+        findButton(host, "保存")?.click();
+        await vi.waitFor(() =>
+            expect(
+                mocks.invoke.mock.calls.filter(
+                    ([command]) => command === "prepare_markdown_resources",
+                ),
+            ).toHaveLength(2),
+        );
+        const prepareCalls = mocks.invoke.mock.calls.filter(
+            ([command]) => command === "prepare_markdown_resources",
+        );
+        expect(prepareCalls[1]?.[1]).toMatchObject({ markdown: changedContent });
+    });
+
+    it("Markdown 转换进行中拒绝关闭包含目标文档的文件夹", async () => {
+        const sourcePath = "C:\\notes\\folder-save.md";
+        const sourceContent = "![照片](./images/photo.png)";
+        mocks.markdownResourcePlans.set(
+            sourcePath,
+            markdownPlan("![照片](assets/photo.png)"),
+        );
+        mocks.saveDialog.mockResolvedValue("C:\\notes\\folder-save.mdx");
+        const host = await mountMarkdownImport(sourcePath, sourceContent);
+        mocks.openDialog.mockResolvedValue("C:\\notes");
+        findButton(host, "打开文件夹...")?.click();
+        await vi.waitFor(() => expect(documentRow(host, "notes")).not.toBeUndefined());
+
+        findButton(host, "保存")?.click();
+        await vi.waitFor(() => expect(host.textContent).toContain("继续导入"));
+        documentRow(host, "notes")?.click();
+        await nextTick();
+        host.querySelector<HTMLButtonElement>('[aria-label="关闭文件夹 notes"]')?.click();
+        await nextTick();
+
+        expect(host.textContent).toContain("请先完成当前保存操作");
+        expect(
+            host.querySelector('[aria-labelledby="leave-dialog-title"][open]'),
+        ).toBeNull();
+        expect(documentRow(host, "folder-save.md")).not.toBeUndefined();
     });
 });
 

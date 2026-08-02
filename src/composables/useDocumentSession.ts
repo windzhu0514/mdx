@@ -59,7 +59,7 @@ function mdxTargetPath(path: string) {
     return /\.mdx$/iu.test(path) ? path : `${path}.mdx`;
 }
 
-function sameResources(left: ResourceSaveData[], right: ResourceSaveData[]) {
+export function sameResources(left: ResourceSaveData[], right: ResourceSaveData[]) {
     return (
         left.length === right.length &&
         left.every((resource, index) => {
@@ -605,6 +605,16 @@ export function useDocumentSession(desktop: boolean) {
         return true;
     }
 
+    function folderContainsDocument(path: string, documentId: string) {
+        const rootIdentity = folderIdentities.get(path);
+        const runtime = documents.value.find((item) => item.id === documentId);
+        return Boolean(
+            rootIdentity &&
+            runtime?.pathIdentity &&
+            isInside(runtime.pathIdentity, rootIdentity),
+        );
+    }
+
     async function prepareWindowClose(actions: CloseActions) {
         const discarded: SessionDocument[] = [];
         for (const runtime of documents.value) {
@@ -867,9 +877,19 @@ export function useDocumentSession(desktop: boolean) {
             }
 
             try {
+                const revisionBeforeReload = runtime.diskRevision;
                 const note = await invoke<MdxNote>("open_mdx", {
                     path: runtime.path,
                 });
+                if (runtime.dirty) {
+                    runtime.conflict = true;
+                    continue;
+                }
+                if (!revisionsEqual(runtime.diskRevision, revisionBeforeReload)) {
+                    if (revisionsEqual(runtime.diskRevision, result.revision)) continue;
+                    runtime.conflict = true;
+                    continue;
+                }
                 runtime.resources.clear();
                 runtime.path = note.path ?? runtime.path;
                 runtime.displayName = note.title;
@@ -977,6 +997,7 @@ export function useDocumentSession(desktop: boolean) {
         saveAs,
         closeDocument,
         closeFolder,
+        folderContainsDocument,
         prepareWindowClose,
         restore,
         persist,
