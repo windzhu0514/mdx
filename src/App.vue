@@ -11,6 +11,7 @@ import LibraryPanel from "./components/LibraryPanel.vue";
 import SettingsPanel from "./components/SettingsPanel.vue";
 import StatusBar from "./components/StatusBar.vue";
 import TableOfContents from "./components/TableOfContents.vue";
+import WorkspaceSidebar from "./components/WorkspaceSidebar.vue";
 import MoraEditor from "./components/editor/MoraEditor.vue";
 import { createOpenAICompatibleProvider } from "./ai/openAICompatible";
 import type {
@@ -19,26 +20,17 @@ import type {
     MoraEditorHandle,
 } from "./components/editor/editorTypes";
 import {
-    createDraftRecovery,
-    draftKey,
-    shouldOfferDraftRestore,
-    type DraftSnapshot,
-    type DraftStore,
-} from "./composables/useDraftRecovery";
+    useDocumentSession,
+    type OpenDocument,
+    type SessionDocument,
+} from "./composables/useDocumentSession";
 import { usePreferences } from "./composables/usePreferences";
-import { createResourceSession } from "./composables/useResources";
 import type { HistoryListItem, HistorySnapshot } from "./types/history";
 import type { NoteListItem, NoteSearchResult } from "./types/library";
-import type {
-    ImportedMarkdown,
-    MdxMetadata,
-    MdxNote,
-    ResourceSaveData,
-} from "./types/mdx";
+import type { ResourceSaveData } from "./types/mdx";
 import type { RecentFileEntry } from "./types/workspace";
-import { runLeaveDecision, type LeaveDecision } from "./utils/leaveGuard";
+import type { LeaveDecision } from "./utils/leaveGuard";
 import { base64ToBlob } from "./utils/base64";
-import { createEmptyMetadata } from "./utils/note";
 import { isTextInputTarget } from "./utils/shortcuts";
 import {
     countNonWhitespaceCharacters,
@@ -46,21 +38,6 @@ import {
     extractMarkdownHeadings,
     UNNAMED_DOCUMENT_NAME,
 } from "./utils/text";
-
-type MdxSaveRequest = {
-    path: string | null;
-    title: string;
-    content: string;
-    meta: MdxMetadata | null;
-    newAssets?: {
-        name: string;
-        originalName: string;
-        mimeType: string;
-        size: number;
-        kind: "asset" | "attachment";
-        base64: string;
-    }[];
-};
 
 type MarkdownCommand = {
     label: string;
@@ -72,12 +49,40 @@ type MarkdownCommand = {
 const APP_NAME = "Mora";
 const APP_CN_NAME = "墨笺";
 const APP_TAGLINE = "Mora 墨笺，一款所见即所得的 MDX 扩展笔记编辑器";
+const tauriRuntime = isTauri();
+const session = useDocumentSession(tauriRuntime);
+const documents = session.documents;
+const folders = session.folders;
+const activeDocument = session.activeDocument;
+const activeDocumentId = session.activeDocumentId;
+const expandedPaths = session.expandedPaths;
+const sidebarCollapsed = session.collapsed;
+const sidebarWidth = session.width;
 
-const currentPath = ref<string | null>(null);
-const title = ref(UNNAMED_DOCUMENT_NAME);
-const content = ref("");
-const meta = ref<MdxMetadata | null>(null);
-const dirty = ref(false);
+const currentPath = computed(() => {
+    void documents.value;
+    return activeDocument.value?.path ?? null;
+});
+const title = computed(() => {
+    void documents.value;
+    const active = activeDocument.value;
+    if (!active) return "未打开文档";
+    return active.path ? documentNameFromPath(active.path) : active.displayName;
+});
+const content = computed({
+    get: () => {
+        void documents.value;
+        return activeDocument.value?.content ?? "";
+    },
+    set: (markdown: string) => {
+        const active = activeDocument.value;
+        if (active) session.updateContent(active.id, markdown);
+    },
+});
+const dirty = computed(() => {
+    void documents.value;
+    return activeDocument.value?.dirty ?? false;
+});
 const loading = ref(false);
 const statusMessage = ref("准备就绪");
 const errorMessage = ref("");
@@ -87,7 +92,6 @@ const findPanel = ref<InstanceType<typeof FindReplacePanel> | null>(null);
 
 const editorMode = ref<EditorMode>("wysiwyg");
 const sourcePreview = ref(true);
-const editorDocumentId = computed(() => meta.value?.id ?? "untitled-current");
 let printing = false;
 const showToc = ref(true);
 const recentFiles = ref<RecentFileEntry[]>([]);
@@ -108,7 +112,6 @@ const aiKeyConfigured = ref(false);
 const aiKeySaving = ref(false);
 let aiKeyStatusRequestId = 0;
 
-const resourceSession = createResourceSession();
 const {
     preferences,
     update: updatePreferences,
@@ -119,32 +122,13 @@ const aiProvider = createOpenAICompatibleProvider(
         baseUrl: preferences.value.aiBaseUrl,
         model: preferences.value.aiModel,
     }),
-    resourceSession.persistedMarkdown,
+    (markdown) => activeDocument.value?.resources.persistedMarkdown(markdown) ?? markdown,
 );
 const showLeavePrompt = ref(false);
 let leavePromptResolver: ((decision: LeaveDecision) => void) | null = null;
 let unlistenClose: (() => void) | null = null;
 let unlistenDragDrop: (() => void) | null = null;
 let allowWindowClose = false;
-const tauriRuntime = isTauri();
-
-const draftStore: DraftStore = tauriRuntime
-    ? {
-          write: (key, draft) => invoke("write_draft", { key, draft }),
-          read: (key) => invoke<DraftSnapshot | null>("read_draft", { key }),
-          remove: (key) => invoke("delete_draft", { key }),
-      }
-    : {
-          write: async () => undefined,
-          read: async () => null,
-          remove: async () => undefined,
-      };
-const draftRecovery = createDraftRecovery(
-    draftStore,
-    currentDraftKey,
-    buildDraftSnapshot,
-);
-
 function blobToBase64(blob: Blob): Promise<string> {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -169,11 +153,13 @@ function imageExtension(mimeType: string): string {
 }
 
 async function registerPastedImage(file: File): Promise<string> {
+    const active = activeDocument.value;
+    if (!active) throw new Error("请先打开或新建文档");
     const extension = imageExtension(file.type);
     const filename = `assets/image-${crypto.randomUUID()}.${extension}`;
     const base64 = await blobToBase64(file);
     const objectUrl = URL.createObjectURL(file);
-    resourceSession.registerNew({
+    active.resources.registerNew({
         path: filename,
         originalName: file.name || `图片.${extension}`,
         mimeType: file.type || `image/${extension}`,
@@ -187,13 +173,18 @@ async function registerPastedImage(file: File): Promise<string> {
 }
 
 const wordCount = computed(() => countNonWhitespaceCharacters(content.value));
-const displayContent = computed(() => resourceSession.displayMarkdown(content.value));
-const findMatchCount = computed(() => countOccurrences(content.value, findQuery.value));
-const windowTitle = computed(
-    () =>
-        `${dirty.value ? "* " : ""}${title.value || UNNAMED_DOCUMENT_NAME} - ${APP_NAME}`,
+const displayContent = computed(
+    () => activeDocument.value?.resources.displayMarkdown(content.value) ?? "",
 );
-const displayPath = computed(() => currentPath.value || "尚未保存");
+const findMatchCount = computed(() => countOccurrences(content.value, findQuery.value));
+const windowTitle = computed(() =>
+    activeDocument.value
+        ? `${dirty.value ? "* " : ""}${title.value} - ${APP_NAME}`
+        : `${APP_NAME} ${APP_CN_NAME}`,
+);
+const displayPath = computed(() =>
+    activeDocument.value ? currentPath.value || "尚未保存" : "未打开文档",
+);
 const modeLabel = computed(() => {
     if (editorMode.value === "wysiwyg") return "所见即所得";
     return sourcePreview.value ? "垂直双栏" : "仅源码";
@@ -217,6 +208,29 @@ function toggleToc() {
     setTocVisibility(!showToc.value);
 }
 
+function persistWorkspaceLayout() {
+    void session.persist().catch((error: unknown) => {
+        console.warn("保存工作区布局失败", error);
+    });
+}
+
+function toggleWorkspacePath(path: string) {
+    expandedPaths.value = expandedPaths.value.includes(path)
+        ? expandedPaths.value.filter((item) => item !== path)
+        : [...expandedPaths.value, path];
+    persistWorkspaceLayout();
+}
+
+function updateSidebarCollapsed(collapsed: boolean) {
+    sidebarCollapsed.value = collapsed;
+    persistWorkspaceLayout();
+}
+
+function updateSidebarWidth(width: number) {
+    sidebarWidth.value = width;
+    persistWorkspaceLayout();
+}
+
 function countOccurrences(source: string, query: string) {
     if (!query) return 0;
 
@@ -235,9 +249,15 @@ function countOccurrences(source: string, query: string) {
 }
 
 const fileMenu = computed<MarkdownCommand[]>(() => [
-    { label: "新建", shortcut: "Ctrl+N", action: () => createNewNote() },
-    { label: "打开...", shortcut: "Ctrl+O", action: openNote },
-    { label: "导入 Markdown...", action: importMarkdown },
+    { label: "新建", shortcut: "Ctrl+N", action: createNewNote },
+    { label: "打开文件...", shortcut: "Ctrl+O", action: openFiles },
+    { label: "打开文件夹...", action: openFolder },
+    {
+        label: "关闭当前文档",
+        shortcut: "Ctrl+W",
+        action: closeActiveDocument,
+        disabled: !activeDocument.value,
+    },
     {
         label: "笔记库与全文搜索...",
         shortcut: "Ctrl+Shift+F",
@@ -247,27 +267,75 @@ const fileMenu = computed<MarkdownCommand[]>(() => [
         label: "保存",
         shortcut: "Ctrl+S",
         action: saveNote,
-        disabled: loading.value,
+        disabled: loading.value || !activeDocument.value,
     },
     {
         label: "另存为...",
         shortcut: "Ctrl+Shift+S",
         action: saveNoteAs,
-        disabled: loading.value,
+        disabled: loading.value || !activeDocument.value,
     },
-    { label: "导出 Markdown...", action: exportMarkdown },
-    { label: "导出 PDF / 打印...", action: exportPdf },
+    {
+        label: "导出 Markdown...",
+        action: exportMarkdown,
+        disabled: !activeDocument.value,
+    },
+    {
+        label: "导出 PDF / 打印...",
+        action: exportPdf,
+        disabled: !activeDocument.value,
+    },
 ]);
 
 const editMenu = computed<MarkdownCommand[]>(() => [
-    { label: "撤销", shortcut: "Ctrl+Z", action: undoEdit },
-    { label: "重做", shortcut: "Ctrl+Y", action: redoEdit },
-    { label: "剪切", shortcut: "Ctrl+X", action: cutSelection },
-    { label: "复制", shortcut: "Ctrl+C", action: copySelection },
-    { label: "粘贴", shortcut: "Ctrl+V", action: pasteClipboard },
-    { label: "全选", shortcut: "Ctrl+A", action: selectAllContent },
-    { label: "查找", shortcut: "Ctrl+F", action: findInDocument },
-    { label: "替换", shortcut: "Ctrl+H", action: replaceInDocument },
+    {
+        label: "撤销",
+        shortcut: "Ctrl+Z",
+        action: undoEdit,
+        disabled: !activeDocument.value,
+    },
+    {
+        label: "重做",
+        shortcut: "Ctrl+Y",
+        action: redoEdit,
+        disabled: !activeDocument.value,
+    },
+    {
+        label: "剪切",
+        shortcut: "Ctrl+X",
+        action: cutSelection,
+        disabled: !activeDocument.value,
+    },
+    {
+        label: "复制",
+        shortcut: "Ctrl+C",
+        action: copySelection,
+        disabled: !activeDocument.value,
+    },
+    {
+        label: "粘贴",
+        shortcut: "Ctrl+V",
+        action: pasteClipboard,
+        disabled: !activeDocument.value,
+    },
+    {
+        label: "全选",
+        shortcut: "Ctrl+A",
+        action: selectAllContent,
+        disabled: !activeDocument.value,
+    },
+    {
+        label: "查找",
+        shortcut: "Ctrl+F",
+        action: findInDocument,
+        disabled: !activeDocument.value,
+    },
+    {
+        label: "替换",
+        shortcut: "Ctrl+H",
+        action: replaceInDocument,
+        disabled: !activeDocument.value,
+    },
 ]);
 
 const formatMenu = computed<MarkdownCommand[]>(() => [
@@ -381,53 +449,44 @@ const viewMenu = computed<MarkdownCommand[]>(() => [
         label: "所见即所得编辑",
         shortcut: "Alt+1",
         action: () => setEditorMode("wysiwyg"),
+        disabled: !activeDocument.value,
     },
     {
         label: "垂直双栏",
         shortcut: "Alt+2",
         action: () => setSourcePreview(true),
+        disabled: !activeDocument.value,
     },
     {
         label: "仅源码",
         shortcut: "Alt+3",
         action: () => setSourcePreview(false),
+        disabled: !activeDocument.value,
     },
     {
         label: showToc.value ? "隐藏侧边栏" : "显示侧边栏",
         action: toggleToc,
+        disabled: !activeDocument.value,
     },
-    { label: "历史版本...", action: openHistoryPanel },
+    { label: "历史版本...", action: openHistoryPanel, disabled: !activeDocument.value },
     { label: "偏好设置...", action: openSettingsPanel },
     {
         label: "光标移到文首",
         shortcut: "Ctrl+Home",
         action: () => editorRef.value?.moveCursor("start"),
+        disabled: !activeDocument.value,
     },
     {
         label: "光标移到文末",
         shortcut: "Ctrl+End",
         action: () => editorRef.value?.moveCursor("end"),
+        disabled: !activeDocument.value,
     },
 ]);
 
 const aboutMenu = computed<MarkdownCommand[]>(() => [
     { label: `关于 ${APP_NAME} ${APP_CN_NAME}`, action: showAbout },
 ]);
-
-function currentDraftKey() {
-    return draftKey(currentPath.value, meta.value?.id || "unsaved");
-}
-
-function buildDraftSnapshot(): DraftSnapshot {
-    return {
-        path: currentPath.value,
-        title: title.value,
-        content: resourceSession.persistedMarkdown(content.value),
-        meta: meta.value,
-        newResources: resourceSession.newResources(),
-        updatedAt: new Date().toISOString(),
-    };
-}
 
 function requestLeaveDecision() {
     showLeavePrompt.value = true;
@@ -443,79 +502,21 @@ function resolveLeaveDecision(decision: LeaveDecision) {
 }
 
 async function confirmLeave() {
-    if (!dirty.value) return true;
+    const active = activeDocument.value;
+    if (!active || !active.dirty) return true;
     try {
-        await draftRecovery.flush();
+        await active.draft.flush();
     } catch (error) {
         errorMessage.value = `草稿保存失败：${stringifyError(error)}`;
     }
 
     const decision = await requestLeaveDecision();
     if (decision === "discard") {
-        await draftRecovery.remove();
+        await active.draft.remove();
     }
-    return runLeaveDecision(decision, async () => {
-        await saveNote();
-        return !dirty.value;
-    });
-}
-
-async function restoreDraft(snapshot: DraftSnapshot) {
-    let baseNote: MdxNote;
-    if (snapshot.path) {
-        try {
-            baseNote = await invoke<MdxNote>("open_mdx", { path: snapshot.path });
-        } catch {
-            baseNote = await invoke<MdxNote>("create_mdx");
-        }
-    } else {
-        baseNote = await invoke<MdxNote>("create_mdx");
-    }
-    await applyNote(baseNote, false);
-    currentPath.value = snapshot.path;
-    title.value = documentNameFromPath(snapshot.path);
-    meta.value = snapshot.meta ?? baseNote.meta;
-
-    for (const resource of snapshot.newResources) {
-        const blob = base64ToBlob(resource.base64, resource.mimeType);
-        resourceSession.registerNew({
-            path: resource.name,
-            originalName: resource.originalName,
-            mimeType: resource.mimeType,
-            size: resource.size,
-            base64: resource.base64,
-            objectUrl: URL.createObjectURL(blob),
-            kind: resource.kind,
-            isNew: true,
-        });
-    }
-
-    content.value = resourceSession.persistedMarkdown(snapshot.content);
-    dirty.value = true;
-    statusMessage.value = "已恢复未保存草稿";
-}
-
-async function restoreLatestDraft() {
-    try {
-        const latest = tauriRuntime
-            ? await invoke<DraftSnapshot | null>("read_latest_draft")
-            : null;
-        if (!latest) return false;
-        const key = draftKey(latest.path, latest.meta?.id || "unsaved");
-        if (!shouldOfferDraftRestore(latest.updatedAt, latest.meta?.updatedAt)) {
-            await draftStore.remove(key);
-            return false;
-        }
-        if (!confirm(`检测到“${latest.title}”的未保存草稿，是否恢复？`)) {
-            await draftStore.remove(key);
-            return false;
-        }
-        await restoreDraft(latest);
-        return true;
-    } catch (error) {
-        console.warn("读取恢复草稿失败", error);
-        return false;
-    }
+    if (decision === "cancel") return false;
+    if (decision === "discard") return true;
+    return saveDocument(active.id);
 }
 
 watch(
@@ -593,10 +594,7 @@ onMounted(async () => {
     window.addEventListener("pointerdown", handleWindowPointerDown, true);
     window.addEventListener("keydown", handleWindowKeyDown);
 
-    if (!tauriRuntime) {
-        meta.value = createEmptyMetadata(title.value);
-        return;
-    }
+    if (!tauriRuntime) return;
 
     await refreshAiKeyConfigured();
 
@@ -615,9 +613,6 @@ onMounted(async () => {
     });
 
     await loadRecentFiles();
-    if (!(await restoreLatestDraft())) {
-        await createNewNote(false);
-    }
 });
 
 onBeforeUnmount(() => {
@@ -625,23 +620,20 @@ onBeforeUnmount(() => {
     window.removeEventListener("keydown", handleWindowKeyDown);
     unlistenClose?.();
     unlistenDragDrop?.();
-    draftRecovery.dispose();
     disposePreferences();
-    resourceSession.clear();
+    void session.dispose().catch((error: unknown) => {
+        console.warn("释放文档会话失败", error);
+    });
 });
-
-function markDirty() {
-    dirty.value = true;
-    if (tauriRuntime) draftRecovery.schedule();
-}
 
 function handleEditorUpdate(markdown: string) {
     if (printing) return;
-    const persistedContent = resourceSession.persistedMarkdown(markdown);
+    const active = activeDocument.value;
+    if (!active) return;
+    const persistedContent = active.resources.persistedMarkdown(markdown);
     if (persistedContent === content.value) return;
 
-    content.value = persistedContent;
-    markDirty();
+    session.updateContent(active.id, persistedContent);
 }
 
 function handleAiError(message: string) {
@@ -651,14 +643,9 @@ function handleAiError(message: string) {
     statusMessage.value = "AI 生成失败";
 }
 
-async function applyNote(note: MdxNote, saved: boolean) {
-    resourceSession.clear();
-    currentPath.value = note.path;
-    title.value = documentNameFromPath(note.path);
-    meta.value = note.meta;
-
-    const persistedContent = note.content ?? "";
-    if (currentPath.value) {
+async function hydrateDocumentResources(runtime: SessionDocument) {
+    const persistedContent = runtime.content;
+    if (runtime.path && runtime.meta) {
         const assetRegex =
             /\]\(((?:assets|attachments)\/[^)]+)\)|(?:src|href)=["']((?:assets|attachments)\/[^"']+)["']/g;
         const assetPaths = new Set<string>();
@@ -669,17 +656,19 @@ async function applyNote(note: MdxNote, saved: boolean) {
 
         for (const assetPath of assetPaths) {
             try {
+                if (runtime.resources.objectUrls().has(assetPath)) continue;
                 const base64 = await invoke<string>("read_asset", {
-                    path: currentPath.value,
+                    path: runtime.path,
                     assetName: assetPath,
                 });
-                const resourceMeta = [...note.meta.assets, ...note.meta.attachments].find(
-                    (resource) => resource.path === assetPath,
-                );
+                const resourceMeta = [
+                    ...runtime.meta.assets,
+                    ...runtime.meta.attachments,
+                ].find((resource) => resource.path === assetPath);
                 const mimeType = resourceMeta?.type || "application/octet-stream";
                 const blob = base64ToBlob(base64, mimeType);
                 const objectUrl = URL.createObjectURL(blob);
-                resourceSession.registerLoaded({
+                runtime.resources.registerLoaded({
                     path: assetPath,
                     originalName:
                         resourceMeta?.originalName ||
@@ -697,26 +686,6 @@ async function applyNote(note: MdxNote, saved: boolean) {
             }
         }
     }
-
-    content.value = persistedContent;
-    dirty.value = !saved;
-    errorMessage.value = "";
-}
-function buildRequest(pathOverride?: string | null): MdxSaveRequest {
-    const finalContent = resourceSession.persistedMarkdown(content.value);
-    const requestPath = pathOverride ?? currentPath.value;
-    const requestTitle = documentNameFromPath(requestPath);
-    const newAssets = resourceSession
-        .newResources()
-        .filter((resource) => finalContent.includes(resource.name));
-
-    return {
-        path: requestPath,
-        title: requestTitle,
-        content: finalContent,
-        meta: meta.value ? { ...meta.value, title: requestTitle } : null,
-        newAssets,
-    };
 }
 async function runAction(action: () => Promise<void>) {
     if (loading.value) return;
@@ -734,14 +703,11 @@ async function runAction(action: () => Promise<void>) {
     }
 }
 
-async function createNewNote(askConfirm = true) {
-    if (askConfirm && !(await confirmLeave())) return;
-
-    await runAction(async () => {
-        const note = await invoke<MdxNote>("create_mdx");
-        await applyNote(note, true);
-        statusMessage.value = "已新建笔记";
-    });
+function createNewNote() {
+    editorRef.value?.cancelAi();
+    session.newDocument();
+    errorMessage.value = "";
+    statusMessage.value = "已新建文档";
 }
 
 async function loadRecentFiles() {
@@ -776,7 +742,14 @@ function formatRecentFileLabel(entry: RecentFileEntry) {
 }
 
 async function openRecentFile(path: string) {
-    await openNote(path);
+    await runAction(async () => {
+        try {
+            await openPath(path, true);
+        } catch (error) {
+            await removeRecentFile(path);
+            throw error;
+        }
+    });
 }
 
 function focusFindField(selectText = true) {
@@ -907,84 +880,66 @@ function replaceAllMatches() {
     }
 
     content.value = content.value.split(query).join(replaceQuery.value);
-    markDirty();
     statusMessage.value = `已替换 ${matchCount} 处“${query}”`;
 }
 
-async function openNote(path?: string) {
-    if (!(await confirmLeave())) return;
-
-    await runAction(async () => {
-        let selectedPath = path;
-
-        if (!selectedPath) {
-            const selected = await open({
-                multiple: false,
-                filters: [{ name: "Mora 墨笺笔记", extensions: ["mdx"] }],
-            });
-
-            if (!selected || Array.isArray(selected)) {
-                statusMessage.value = "已取消打开";
-                return;
-            }
-
-            selectedPath = selected;
-        }
-
-        try {
-            const note = await invoke<MdxNote>("open_mdx", { path: selectedPath });
-            await applyNote(note, true);
-
-            if (note.path) {
-                await pushRecentFile(note.path, title.value);
-            }
-        } catch (error) {
-            if (selectedPath) {
-                try {
-                    await removeRecentFile(selectedPath);
-                } catch (removeError) {
-                    console.warn("移除无效最近文件失败", removeError);
-                }
-            }
-
-            throw error;
-        }
-
-        statusMessage.value = "已打开笔记";
-    });
+async function openPath(path: string, recordRecent: boolean) {
+    editorRef.value?.cancelAi();
+    const runtime = /\.mdx$/iu.test(path)
+        ? await session.openMdx(path)
+        : await session.openMarkdown(path);
+    if (runtime.path) runtime.displayName = documentNameFromPath(runtime.path);
+    await hydrateDocumentResources(runtime);
+    if (recordRecent && runtime.path) {
+        await pushRecentFile(runtime.path, runtime.displayName);
+    }
+    errorMessage.value = "";
+    statusMessage.value = "已打开文档";
+    return runtime;
 }
 
-async function importMarkdown() {
-    if (!(await confirmLeave())) return;
-
+async function openFiles() {
     const selected = await open({
-        multiple: false,
-        filters: [{ name: "Markdown", extensions: ["md", "markdown"] }],
+        multiple: true,
+        filters: [
+            {
+                name: "Mora 与 Markdown 文档",
+                extensions: ["mdx", "md", "markdown"],
+            },
+        ],
     });
-    if (!selected || Array.isArray(selected)) {
-        statusMessage.value = "已取消导入";
+    if (!selected) {
+        statusMessage.value = "已取消打开";
         return;
     }
 
     await runAction(async () => {
-        const imported = await invoke<ImportedMarkdown>("import_markdown", {
-            path: selected,
-        });
-        const note = await invoke<MdxNote>("create_mdx");
-        note.title = imported.title;
-        note.content = imported.content;
-        note.meta.title = imported.title;
-
-        if (imported.frontMatter) {
-            note.meta.author = imported.frontMatter.author;
-            note.meta.summary = imported.frontMatter.summary;
-            note.meta.tags = imported.frontMatter.tags;
-            note.meta.category = imported.frontMatter.categories[0] ?? "";
+        for (const path of Array.isArray(selected) ? selected : [selected]) {
+            await openPath(path, true);
         }
-
-        await applyNote(note, false);
-        statusMessage.value = "已导入 Markdown 文件";
     });
+}
+
+async function openWorkspacePath(path: string) {
+    await runAction(() => openPath(path, false).then(() => undefined));
+}
+
+async function openFolder() {
+    const selected = await open({ directory: true, multiple: false });
+    if (!selected || Array.isArray(selected)) {
+        statusMessage.value = "已取消打开文件夹";
+        return;
+    }
+    await runAction(async () => {
+        await session.openFolder(selected);
+        statusMessage.value = "已打开文件夹";
+    });
+}
+
+function activateDocument(id: string) {
+    if (id === activeDocumentId.value) return;
+    editorRef.value?.cancelAi();
+    session.activate(id);
 }
 
 async function ensureSavedForExport() {
@@ -1039,49 +994,74 @@ async function exportPdf() {
 }
 
 async function saveNote() {
-    if (!currentPath.value) {
-        await saveNoteAs();
-        return;
-    }
-
-    const previousDraftKey = currentDraftKey();
-    await runAction(async () => {
-        const note = await invoke<MdxNote>("save_mdx", {
-            request: buildRequest(),
-        });
-        await applyNote(note, true);
-        await draftRecovery.remove(previousDraftKey);
-        if (note.path) {
-            await pushRecentFile(note.path, title.value);
-        }
-        statusMessage.value = "保存成功";
-    });
+    const active = activeDocument.value;
+    if (active) await saveDocument(active.id);
 }
 
 async function saveNoteAs() {
-    const previousDraftKey = currentDraftKey();
+    const active = activeDocument.value;
+    if (active) await saveDocumentAs(active.id);
+}
+
+async function saveDocument(id: string) {
+    const runtime = session.document(id);
+    if (!runtime.path) return saveDocumentAs(id);
+    let saved = false;
     await runAction(async () => {
-        const selected = await save({
-            defaultPath: `${sanitizeFileName(title.value || UNNAMED_DOCUMENT_NAME)}.mdx`,
-            filters: [{ name: "Mora 墨笺笔记", extensions: ["mdx"] }],
-        });
+        const note = await session.save(id);
+        if (note.path) await pushRecentFile(note.path, note.displayName);
+        saved = true;
+        statusMessage.value = "保存成功";
+    });
+    return saved;
+}
 
-        if (!selected) {
-            statusMessage.value = "已取消保存";
-            return;
-        }
+async function saveDocumentAs(id: string) {
+    const runtime = session.document(id);
+    const selected = await save({
+        defaultPath: `${sanitizeFileName(runtime.displayName || UNNAMED_DOCUMENT_NAME)}.mdx`,
+        filters: [{ name: "Mora 墨笺笔记", extensions: ["mdx"] }],
+    });
+    if (!selected) {
+        statusMessage.value = "已取消保存";
+        return false;
+    }
 
-        const note = await invoke<MdxNote>("save_mdx_as", {
-            request: buildRequest(selected),
-            path: selected,
-        });
-        await applyNote(note, true);
-        await draftRecovery.remove(previousDraftKey);
-        if (note.path) {
-            await pushRecentFile(note.path, title.value);
-        }
+    let saved = false;
+    await runAction(async () => {
+        const note = await session.saveAs(id, selected);
+        if (note.path) await pushRecentFile(note.path, note.displayName);
+        saved = true;
         statusMessage.value = "另存为成功";
     });
+    return saved;
+}
+
+const closeActions = {
+    decide: async (_document: OpenDocument) => requestLeaveDecision(),
+    save: saveDocument,
+};
+
+async function closeDocument(id: string) {
+    editorRef.value?.cancelAi();
+    const closed = await session.closeDocument(id, closeActions);
+    if (closed) editorRef.value?.releaseDocument(id);
+}
+
+async function closeActiveDocument() {
+    const id = activeDocumentId.value;
+    if (id) await closeDocument(id);
+}
+
+async function closeFolder(path: string) {
+    editorRef.value?.cancelAi();
+    const before = new Set(documents.value.map((document) => document.id));
+    const closed = await session.closeFolder(path, closeActions);
+    if (!closed) return;
+    const remaining = new Set(documents.value.map((document) => document.id));
+    for (const id of before) {
+        if (!remaining.has(id)) editorRef.value?.releaseDocument(id);
+    }
 }
 
 async function setEditorMode(mode: EditorMode) {
@@ -1274,6 +1254,7 @@ function handleWindowKeyDown(event: KeyboardEvent) {
             key === "s" ||
             key === "n" ||
             key === "o" ||
+            key === "w" ||
             key === "f" ||
             (key === "h" && !event.shiftKey);
 
@@ -1291,7 +1272,10 @@ function handleWindowKeyDown(event: KeyboardEvent) {
             createNewNote();
         } else if (key === "o" && !event.shiftKey) {
             event.preventDefault();
-            openNote();
+            openFiles();
+        } else if (key === "w" && !event.shiftKey) {
+            event.preventDefault();
+            closeActiveDocument();
         } else if (key === "z" && !event.shiftKey) {
             event.preventDefault();
             undoEdit();
@@ -1423,7 +1407,7 @@ async function openLibrary() {
 
 async function openLibraryNote(path: string) {
     showLibrary.value = false;
-    await openNote(path);
+    await openWorkspacePath(path);
 }
 
 async function refreshHistory() {
@@ -1451,23 +1435,16 @@ async function openHistoryPanel() {
 }
 
 async function restoreHistory(name: string) {
-    if (!currentPath.value) return;
+    const active = activeDocument.value;
+    if (!active?.path) return;
     await runAction(async () => {
         const snapshot = await invoke<HistorySnapshot>("read_history", {
-            path: currentPath.value,
+            path: active.path,
             name,
         });
-        const base = await invoke<MdxNote>("open_mdx", { path: currentPath.value });
-        await applyNote(
-            {
-                ...base,
-                title: snapshot.title,
-                content: snapshot.content,
-                meta: snapshot.meta,
-            },
-            false,
-        );
-        markDirty();
+        active.meta = snapshot.meta;
+        session.updateContent(active.id, snapshot.content);
+        await hydrateDocumentResources(active);
         showHistory.value = false;
         statusMessage.value = "已恢复历史版本，保存后生效";
     });
@@ -1480,9 +1457,11 @@ function showAbout() {
 }
 
 async function importedResourceToSession(resource: ResourceSaveData) {
+    const active = activeDocument.value;
+    if (!active) return;
     const blob = base64ToBlob(resource.base64, resource.mimeType);
     const objectUrl = URL.createObjectURL(blob);
-    resourceSession.registerNew({
+    active.resources.registerNew({
         path: resource.name,
         originalName: resource.originalName,
         mimeType: resource.mimeType,
@@ -1500,7 +1479,7 @@ async function importedResourceToSession(resource: ResourceSaveData) {
 }
 
 async function importResourcePaths(paths: string[]) {
-    if (!paths.length) return;
+    if (!paths.length || !activeDocument.value) return;
     await runAction(async () => {
         for (const path of paths) {
             const resource = await invoke<ResourceSaveData>("import_resource", {
@@ -1646,6 +1625,7 @@ function stringifyError(error: unknown) {
                         v-for="item in formatMenu"
                         :key="item.label"
                         type="button"
+                        :disabled="item.disabled || !activeDocument"
                         @click="runMenuAction(item.action)"
                     >
                         <span>{{ item.label }}</span>
@@ -1663,6 +1643,7 @@ function stringifyError(error: unknown) {
                         v-for="item in insertMenu"
                         :key="item.label"
                         type="button"
+                        :disabled="item.disabled || !activeDocument"
                         @click="runMenuAction(item.action)"
                     >
                         <span>{{ item.label }}</span>
@@ -1680,6 +1661,7 @@ function stringifyError(error: unknown) {
                         v-for="item in viewMenu"
                         :key="item.label"
                         type="button"
+                        :disabled="item.disabled"
                         @click="runMenuAction(item.action)"
                     >
                         <span>{{ item.label }}</span>
@@ -1715,6 +1697,7 @@ function stringifyError(error: unknown) {
             <div class="mode-switch compact" aria-label="编辑模式">
                 <button
                     type="button"
+                    :disabled="!activeDocument"
                     :class="{ active: editorMode === 'wysiwyg' }"
                     @click="setEditorMode('wysiwyg')"
                 >
@@ -1722,6 +1705,7 @@ function stringifyError(error: unknown) {
                 </button>
                 <button
                     type="button"
+                    :disabled="!activeDocument"
                     :class="{
                         active: editorMode === 'source' && !sourcePreview,
                     }"
@@ -1731,6 +1715,7 @@ function stringifyError(error: unknown) {
                 </button>
                 <button
                     type="button"
+                    :disabled="!activeDocument"
                     :class="{
                         active: editorMode === 'source' && sourcePreview,
                     }"
@@ -1742,14 +1727,30 @@ function stringifyError(error: unknown) {
         </nav>
 
         <div class="main-body">
+            <WorkspaceSidebar
+                :documents="documents"
+                :folders="folders"
+                :active-document-id="activeDocumentId"
+                :expanded-paths="expandedPaths"
+                :collapsed="sidebarCollapsed"
+                :width="sidebarWidth"
+                @activate="activateDocument"
+                @open-path="openWorkspacePath"
+                @close-document="closeDocument"
+                @close-folder="closeFolder"
+                @toggle-expanded="toggleWorkspacePath"
+                @update:collapsed="updateSidebarCollapsed"
+                @update:width="updateSidebarWidth"
+            />
             <TableOfContents
+                v-if="activeDocument"
                 :items="toc"
                 :visible="showToc"
                 @select="scrollToHeading"
                 @visibility="setTocVisibility"
             />
 
-            <section class="note-panel" :aria-busy="loading">
+            <section v-if="activeDocument" class="note-panel" :aria-busy="loading">
                 <div class="editor-card">
                     <FindReplacePanel
                         ref="findPanel"
@@ -1768,7 +1769,7 @@ function stringifyError(error: unknown) {
                     <div class="markdown-editor">
                         <MoraEditor
                             ref="editorRef"
-                            :document-id="editorDocumentId"
+                            :document-id="activeDocument.id"
                             :model-value="content"
                             :display-value="displayContent"
                             :mode="editorMode"
@@ -1778,6 +1779,20 @@ function stringifyError(error: unknown) {
                             @update:model-value="handleEditorUpdate"
                             @ai-error="handleAiError"
                         />
+                    </div>
+                </div>
+            </section>
+            <section v-else class="workspace-welcome" aria-label="开始使用 Mora">
+                <div class="workspace-welcome-card">
+                    <p class="workspace-welcome-eyebrow">Mora 墨笺</p>
+                    <h1>开始写作</h1>
+                    <p>新建一篇文档，或打开已有文件和工作区文件夹。</p>
+                    <div class="workspace-welcome-actions">
+                        <button type="button" class="primary" @click="createNewNote">
+                            新建文档
+                        </button>
+                        <button type="button" @click="openFiles">打开文件</button>
+                        <button type="button" @click="openFolder">打开文件夹</button>
                     </div>
                 </div>
             </section>

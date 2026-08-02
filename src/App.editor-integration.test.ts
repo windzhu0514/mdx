@@ -92,12 +92,16 @@ function createNote(
 }
 
 vi.mock("@tauri-apps/api/core", () => ({
-    isTauri: () => false,
+    isTauri: () => true,
     invoke: mocks.invoke,
 }));
 
 vi.mock("@tauri-apps/api/window", () => ({
-    getCurrentWindow: vi.fn(),
+    getCurrentWindow: vi.fn(() => ({
+        onDragDropEvent: vi.fn(async () => () => undefined),
+        onCloseRequested: vi.fn(async () => () => undefined),
+        close: vi.fn(async () => undefined),
+    })),
 }));
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({
@@ -195,7 +199,8 @@ async function mountApp(): Promise<HTMLElement> {
     const app = createApp(App);
     app.mount(host);
     cleanup = () => app.unmount();
-    await nextTick();
+    findButton(host, "新建文档").click();
+    await vi.waitFor(() => expect(mocks.milkdown).toBeDefined());
     return host;
 }
 
@@ -209,15 +214,23 @@ beforeEach(() => {
     mocks.openDialog.mockResolvedValue("C:\\notes\\test.mdx");
     mocks.saveDialog.mockResolvedValue("C:\\notes\\saved.mdx");
     mocks.invoke.mockImplementation(async (command: string, args?: unknown) => {
+        if (command === "has_ai_api_key") return false;
+        if (command === "get_recent_files" || command === "push_recent_file") return [];
+        if (command === "resolve_path") {
+            const path = (args as { path: string }).path;
+            return { path, identity: path.toLowerCase(), available: true };
+        }
+        if (command === "get_disk_revisions") {
+            return [{ available: true, revision: { modifiedAtMs: 1, size: 1 } }];
+        }
         if (command === "open_mdx") return mocks.openedNote;
         if (command === "read_asset") return "aW1hZ2U=";
-        if (command === "get_recent_files" || command === "push_recent_file") return [];
         if (command === "save_mdx_as" || command === "save_mdx") {
             const request = (
                 args as {
                     request: {
                         content: string;
-                        meta: MdxMetadata;
+                        meta: MdxMetadata | null;
                         path?: string;
                     };
                 }
@@ -226,7 +239,7 @@ beforeEach(() => {
                 request.content,
                 request.path ?? "C:\\notes\\saved.mdx",
             );
-            note.meta = request.meta;
+            note.meta = request.meta ?? createMeta({ title: note.title });
             return note;
         }
         return undefined;
@@ -270,7 +283,7 @@ describe("App 编辑器状态集成", () => {
         mocks.openedNote = note;
         const host = await mountApp();
 
-        findButton(host, "打开...").click();
+        findButton(host, "打开文件...").click();
         await vi.waitFor(() => {
             expect(host.querySelector(".menu-document-name")?.textContent?.trim()).toBe(
                 "项目计划",
@@ -293,7 +306,7 @@ describe("App 编辑器状态集成", () => {
         mocks.openedNote = note;
         const host = await mountApp();
 
-        findButton(host, "打开...").click();
+        findButton(host, "打开文件...").click();
         await vi.waitFor(() =>
             expect(host.querySelector(".menu-document-name")?.textContent).toContain(
                 "文件标题",
@@ -326,11 +339,11 @@ describe("App 编辑器状态集成", () => {
             expect(call).toBeDefined();
             const request = (
                 call?.[1] as {
-                    request: { title: string; meta: MdxMetadata };
+                    request: { title: string; meta: MdxMetadata | null };
                 }
             ).request;
             expect(request.title).toBe("用户命名");
-            expect(request.meta.title).toBe("用户命名");
+            expect(request.meta).toBeNull();
         });
     });
 
@@ -357,7 +370,7 @@ describe("App 编辑器状态集成", () => {
         mocks.openedNote = createNote("   ## 缩进标题\n    ### 非标题");
         const host = await mountApp();
 
-        findButton(host, "打开...").click();
+        findButton(host, "打开文件...").click();
         await vi.waitFor(() => {
             expect(
                 Array.from(host.querySelectorAll(".toc-list button")).map((button) =>
@@ -371,7 +384,7 @@ describe("App 编辑器状态集成", () => {
         mocks.openedNote = createNote("# 外部\n```ts\n## 伪标题\n```");
         const host = await mountApp();
 
-        findButton(host, "打开...").click();
+        findButton(host, "打开文件...").click();
         await vi.waitFor(() => {
             expect(
                 Array.from(host.querySelectorAll(".toc-list button")).map((button) =>
@@ -420,7 +433,7 @@ describe("App 编辑器状态集成", () => {
         mocks.openedNote = note;
         const host = await mountApp();
 
-        findButton(host, "打开...").click();
+        findButton(host, "打开文件...").click();
         await vi.waitFor(() => {
             expect(editorValue(host, "milkdown")).toContain(mocks.objectUrl);
         });
@@ -460,7 +473,7 @@ describe("App PDF 打印视图", () => {
     it("打印期间用文档文件名作为标题且不注入额外正文标题", async () => {
         mocks.openedNote = createNote("## Markdown 中的标题", "C:\\notes\\项目计划.mdx");
         const host = await mountApp();
-        findButton(host, "打开...").click();
+        findButton(host, "打开文件...").click();
         await vi.waitFor(() =>
             expect(host.querySelector(".menu-document-name")?.textContent).toContain(
                 "项目计划",
@@ -479,7 +492,7 @@ describe("App PDF 打印视图", () => {
     it("prevents concurrent exports, recovers from rejected readiness, and releases the print guard", async () => {
         mocks.openedNote = createNote("# 原文");
         const host = await mountApp();
-        findButton(host, "打开...").click();
+        findButton(host, "打开文件...").click();
         await vi.waitFor(() => expect(editorValue(host, "milkdown")).toBe("# 原文"));
         const editableMilkdown = mocks.milkdown;
         findButton(host, "垂直双栏").click();
@@ -509,7 +522,7 @@ describe("App PDF 打印视图", () => {
     it("waits for the temporary WYSIWYG editor and ignores its normalization until printing ends", async () => {
         mocks.openedNote = createNote("# 原文");
         const host = await mountApp();
-        findButton(host, "打开...").click();
+        findButton(host, "打开文件...").click();
         await vi.waitFor(() => expect(editorValue(host, "milkdown")).toBe("# 原文"));
         findButton(host, "仅源码").click();
         await nextTick();

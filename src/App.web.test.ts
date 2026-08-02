@@ -10,7 +10,11 @@ const mocks = vi.hoisted(() => ({
     aiKeyConfigured: false,
     aiKeyStatusResponses: [] as Array<boolean | Promise<boolean>>,
     getMoraEditorAiProvider: undefined as (() => unknown) | undefined,
+    getMoraEditorMarkdown: undefined as (() => string) | undefined,
     moraEditorMounted: vi.fn(),
+    cancelAi: vi.fn(),
+    releaseDocument: vi.fn(),
+    openDialog: vi.fn(),
     getCurrentWindow: vi.fn(() => ({
         onDragDropEvent: vi.fn(async () => () => undefined),
         onCloseRequested: vi.fn(
@@ -21,7 +25,7 @@ const mocks = vi.hoisted(() => ({
         ),
         close: mocks.windowClose,
     })),
-    invoke: vi.fn(async (command: string) => {
+    invoke: vi.fn(async (command: string, args?: unknown) => {
         if (command === "has_ai_api_key") {
             const response = mocks.aiKeyStatusResponses.shift();
             return response ?? mocks.aiKeyConfigured;
@@ -34,8 +38,37 @@ const mocks = vi.hoisted(() => ({
             mocks.aiKeyConfigured = false;
             return undefined;
         }
-        if (command === "get_recent_files") return [];
+        if (command === "get_recent_files" || command === "push_recent_file") return [];
         if (command === "read_latest_draft") return null;
+        if (command === "resolve_path") {
+            const path = (args as { path: string }).path;
+            return { path, identity: path.toLowerCase(), available: true };
+        }
+        if (command === "get_disk_revisions") {
+            return [{ available: true, revision: { modifiedAtMs: 1, size: 1 } }];
+        }
+        if (command === "open_mdx") {
+            const path = (args as { path: string }).path;
+            const name =
+                path
+                    .split(/[\\/]/)
+                    .pop()
+                    ?.replace(/\.mdx$/iu, "") ?? "笔记";
+            return {
+                path,
+                title: name,
+                content: `# ${name}`,
+                meta: {
+                    id: name,
+                    title: name,
+                    createdAt: "",
+                    updatedAt: "",
+                    wordCount: 0,
+                    assets: [],
+                    attachments: [],
+                },
+            };
+        }
         if (command === "create_mdx") {
             return {
                 path: null,
@@ -68,7 +101,7 @@ vi.mock("@tauri-apps/api/window", () => ({
 }));
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({
-    open: vi.fn(),
+    open: mocks.openDialog,
     save: vi.fn(),
 }));
 
@@ -79,6 +112,7 @@ vi.mock("./components/editor/MoraEditor.vue", async () => {
             name: "MoraEditorStub",
             inheritAttrs: false,
             props: {
+                documentId: { type: String, required: true },
                 modelValue: { type: String, required: true },
                 mode: { type: String, required: true },
                 sourcePreview: { type: Boolean, required: true },
@@ -89,12 +123,15 @@ vi.mock("./components/editor/MoraEditor.vue", async () => {
                 mocks.moraEditorMounted();
                 mocks.editorUpdate = (markdown) => emit("update:modelValue", markdown);
                 mocks.getMoraEditorAiProvider = () => props.aiProvider;
+                mocks.getMoraEditorMarkdown = () => props.modelValue;
                 expose({
+                    cancelAi: mocks.cancelAi,
                     execute: vi.fn(),
                     focus: vi.fn(),
                     getSelectedText: vi.fn(() => ""),
                     moveCursor: vi.fn(),
                     replaceSelection: vi.fn(),
+                    releaseDocument: mocks.releaseDocument,
                     scrollToHeading: vi.fn(() => false),
                 });
                 return () => h("div", { class: "mora-editor-stub" });
@@ -119,9 +156,11 @@ beforeEach(() => {
     mocks.closeHandler = undefined;
     mocks.editorUpdate = undefined;
     mocks.getMoraEditorAiProvider = undefined;
+    mocks.getMoraEditorMarkdown = undefined;
     mocks.isTauri.mockReturnValue(false);
     mocks.aiKeyConfigured = false;
     mocks.aiKeyStatusResponses = [];
+    mocks.openDialog.mockReset();
     window.matchMedia = vi.fn(() => ({
         matches: false,
         media: "(prefers-color-scheme: dark)",
@@ -142,15 +181,25 @@ afterEach(() => {
 });
 
 describe("App Web 预览启动", () => {
-    it("初始化 MoraEditor 但不访问 Tauri 窗口和 IPC", async () => {
+    it("以空欢迎页启动，并只在请求后创建未命名文档", async () => {
         const host = document.createElement("div");
         document.body.append(host);
         const app = createApp(App);
         app.mount(host);
         cleanup = () => app.unmount();
 
+        await nextTick();
+
+        expect(host.textContent).toContain("新建文档");
+        expect(host.querySelector(".mora-editor-stub")).toBeNull();
+        expect(host.textContent).not.toContain("未命名文档 1");
+
+        Array.from(host.querySelectorAll("button"))
+            .find((button) => button.textContent?.trim() === "新建文档")
+            ?.click();
         await vi.waitFor(() => {
-            expect(mocks.moraEditorMounted).toHaveBeenCalledTimes(1);
+            expect(host.textContent).toContain("未命名文档 1");
+            expect(host.querySelector(".mora-editor-stub")).not.toBeNull();
         });
 
         expect(mocks.getCurrentWindow).not.toHaveBeenCalled();
@@ -165,6 +214,9 @@ describe("App Web 预览启动", () => {
         app.mount(host);
         cleanup = () => app.unmount();
 
+        Array.from(host.querySelectorAll("button"))
+            .find((button) => button.textContent?.trim() === "新建文档")
+            ?.click();
         await vi.waitFor(() => {
             expect(mocks.moraEditorMounted).toHaveBeenCalledTimes(1);
         });
@@ -189,30 +241,34 @@ describe("App Web 预览启动", () => {
         app.mount(host);
         cleanup = () => app.unmount();
 
+        Array.from(host.querySelectorAll("button"))
+            .find((button) => button.textContent?.trim() === "新建文档")
+            ?.click();
         await vi.waitFor(() => {
             expect(mocks.moraEditorMounted).toHaveBeenCalledTimes(1);
         });
 
         mocks.editorUpdate?.("你好😀");
-        await nextTick();
-
-        expect(host.textContent).toContain("3 字");
+        await vi.waitFor(() => expect(host.textContent).toContain("3 字"));
     });
 
-    it("新笔记在菜单栏显示只读名称且不渲染标题和标签输入", async () => {
+    it("新笔记在菜单栏显示编号名称且不渲染标题和标签输入", async () => {
         const host = document.createElement("div");
         document.body.append(host);
         const app = createApp(App);
         app.mount(host);
         cleanup = () => app.unmount();
 
+        Array.from(host.querySelectorAll("button"))
+            .find((button) => button.textContent?.trim() === "新建文档")
+            ?.click();
         await vi.waitFor(() => {
             expect(mocks.moraEditorMounted).toHaveBeenCalledTimes(1);
         });
 
         const documentName = host.querySelector(".menu-document-name");
-        expect(documentName?.textContent?.trim()).toBe("未命名文档");
-        expect(documentName?.getAttribute("title")).toBe("未命名文档");
+        expect(documentName?.textContent?.trim()).toBe("未命名文档 1");
+        expect(documentName?.getAttribute("title")).toBe("未命名文档 1");
         expect(host.querySelector(".title-input")).toBeNull();
         expect(host.querySelector('input[aria-label="添加标签"]')).toBeNull();
         expect(mocks.invoke).not.toHaveBeenCalled();
@@ -234,6 +290,63 @@ describe("App Web 预览启动", () => {
         expect(host.querySelector('[aria-labelledby="settings-title"]')).not.toBeNull();
         expect(host.textContent).toContain("未配置");
         expect(mocks.invoke).not.toHaveBeenCalled();
+    });
+});
+
+describe("App 多文档工作区", () => {
+    it("一次打开多个文件，并在切换时保留脏内容且不显示保存提示", async () => {
+        mocks.isTauri.mockReturnValue(true);
+        mocks.openDialog.mockResolvedValue(["C:\\notes\\a.mdx", "C:\\notes\\b.mdx"]);
+        const host = document.createElement("div");
+        document.body.append(host);
+        const app = createApp(App);
+        app.mount(host);
+        cleanup = () => app.unmount();
+
+        await vi.waitFor(() => expect(mocks.closeHandler).toBeTypeOf("function"));
+        Array.from(host.querySelectorAll("button"))
+            .find(
+                (button) =>
+                    button.querySelector("span")?.textContent?.trim() === "打开文件...",
+            )
+            ?.click();
+
+        await vi.waitFor(() => {
+            const names = Array.from(host.querySelectorAll('[role="treeitem"]')).map(
+                (item) => item.textContent?.trim(),
+            );
+            expect(names).toContain("a");
+            expect(names).toContain("b");
+            expect(mocks.getMoraEditorMarkdown?.()).toBe("# b");
+        });
+        expect(mocks.openDialog).toHaveBeenCalledWith({
+            multiple: true,
+            filters: [
+                {
+                    name: "Mora 与 Markdown 文档",
+                    extensions: ["mdx", "md", "markdown"],
+                },
+            ],
+        });
+
+        const activate = async (name: string) => {
+            Array.from(host.querySelectorAll('[role="treeitem"]'))
+                .find((item) => item.textContent?.includes(name))
+                ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+            await nextTick();
+        };
+        await activate("a");
+        mocks.editorUpdate?.("dirty a");
+        await nextTick();
+        await activate("b");
+        await activate("a");
+
+        expect(mocks.getMoraEditorMarkdown?.()).toBe("dirty a");
+        expect(
+            host.querySelector('[aria-labelledby="leave-dialog-title"][open]'),
+        ).toBeNull();
+        expect(host.textContent).not.toContain("保存并继续");
+        expect(mocks.cancelAi).toHaveBeenCalledTimes(4);
     });
 });
 
@@ -273,7 +386,7 @@ describe("App 桌面关闭", () => {
         expect(host.textContent).toContain("已配置");
     });
 
-    it("全新空白笔记不拦截原生关闭请求", async () => {
+    it("空工作区不拦截原生关闭请求", async () => {
         mocks.isTauri.mockReturnValue(true);
         const host = document.createElement("div");
         document.body.append(host);
@@ -283,10 +396,10 @@ describe("App 桌面关闭", () => {
 
         await vi.waitFor(() => {
             expect(mocks.closeHandler).toBeTypeOf("function");
-            expect(host.textContent).toContain("已新建笔记");
+            expect(host.textContent).toContain("新建文档");
         });
 
-        expect(host.textContent).toContain("已保存");
+        expect(host.querySelector(".mora-editor-stub")).toBeNull();
         const event = { preventDefault: vi.fn() };
         await mocks.closeHandler?.(event);
 

@@ -193,6 +193,7 @@ async function mountApp(): Promise<HTMLElement> {
     const app = createApp(App);
     app.mount(host);
     cleanup = () => app.unmount();
+    findButton(host, "新建文档").click();
     await vi.waitFor(() => expect(mocks.editors).toHaveLength(1));
     return host;
 }
