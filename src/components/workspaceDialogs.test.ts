@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import ExternalConflictDialog from "./ExternalConflictDialog.vue";
 import LeaveConfirmDialog from "./LeaveConfirmDialog.vue";
 import MarkdownResourcesDialog from "./MarkdownResourcesDialog.vue";
+import RecentFilesDialog from "./RecentFilesDialog.vue";
 import type { MarkdownResourcePlan } from "../types/workspace";
 
 let cleanup: (() => void) | undefined;
@@ -132,7 +133,7 @@ describe("workspace decision dialogs", () => {
         expect(dialog.emitted("decide")).toEqual([["cancel"]]);
     });
 
-    it("renders the document name and keeps save and cancel decisions", () => {
+    it("renders the document name and keeps save, discard, and cancel decisions", () => {
         const dialog = mount(LeaveConfirmDialog, {
             open: true,
             documentName: "草稿.mdx",
@@ -143,8 +144,9 @@ describe("workspace decision dialogs", () => {
             dialog.host.querySelectorAll<HTMLButtonElement>("button"),
         );
         buttons.find((button) => button.textContent?.includes("保存并继续"))?.click();
+        buttons.find((button) => button.textContent?.includes("放弃修改"))?.click();
         buttons.find((button) => button.textContent?.includes("取消"))?.click();
-        expect(dialog.emitted("decide")).toEqual([["save"], ["cancel"]]);
+        expect(dialog.emitted("decide")).toEqual([["save"], ["discard"], ["cancel"]]);
     });
 
     it("opens each decision surface as a native modal and maps native cancel", async () => {
@@ -178,9 +180,14 @@ describe("workspace decision dialogs", () => {
         }
     });
 
-    it("closes each mounted native dialog when the open prop becomes false", async () => {
-        const cases: Array<[Component, Record<string, unknown>]> = [
-            [ExternalConflictDialog, { open: true, documentName: "note.mdx" }],
+    it("keeps the native dialog mounted but removes closed dialog content", async () => {
+        const cases: Array<[Component, Record<string, unknown>, string]> = [
+            [RecentFilesDialog, { open: true, entries: [] }, "搜索最近打开的文件"],
+            [
+                ExternalConflictDialog,
+                { open: true, documentName: "note.mdx" },
+                "检测到外部更改",
+            ],
             [
                 MarkdownResourcesDialog,
                 {
@@ -188,21 +195,30 @@ describe("workspace decision dialogs", () => {
                     documentName: "note.md",
                     plan: planWith("ready"),
                 },
+                "Markdown 资源检查",
             ],
-            [LeaveConfirmDialog, { open: true, documentName: "note.mdx" }],
+            [
+                LeaveConfirmDialog,
+                { open: true, documentName: "note.mdx" },
+                "当前内容尚未保存",
+            ],
         ];
 
-        for (const [component, props] of cases) {
+        for (const [component, props, content] of cases) {
             cleanup?.();
             cleanup = undefined;
             document.body.innerHTML = "";
             vi.mocked(HTMLDialogElement.prototype.close).mockClear();
+            vi.mocked(HTMLDialogElement.prototype.showModal).mockClear();
             const mounted = mount(component, props);
             await nextTick();
+            expect(HTMLDialogElement.prototype.showModal).toHaveBeenCalledOnce();
+            expect(mounted.host.textContent).toContain(content);
             await mounted.setOpen(false);
 
             expect(HTMLDialogElement.prototype.close).toHaveBeenCalledOnce();
             expect(mounted.host.querySelector("dialog")).not.toBeNull();
+            expect(mounted.host.textContent).not.toContain(content);
         }
     });
 });
