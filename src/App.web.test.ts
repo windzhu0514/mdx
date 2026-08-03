@@ -513,9 +513,7 @@ async function mountWithInactiveConflict() {
     cleanup = () => app.unmount();
     await vi.waitFor(() => expect(mocks.focusHandler).toBeTypeOf("function"));
     findButton(host, "打开文件...")?.click();
-    await vi.waitFor(() =>
-        expect(host.querySelectorAll('[role="tab"]')).toHaveLength(2),
-    );
+    await vi.waitFor(() => expect(host.querySelectorAll('[role="tab"]')).toHaveLength(2));
     documentTab(host, "a")?.click();
     await nextTick();
     mocks.editorUpdate?.("local a");
@@ -533,6 +531,36 @@ async function mountWithInactiveConflict() {
         ).not.toBeNull(),
     );
     return host;
+}
+
+function installCompactViewport(initial: boolean) {
+    const listeners = new Set<(event: MediaQueryListEvent) => void>();
+    const media = {
+        matches: initial,
+        media: "(max-width: 980px)",
+        onchange: null,
+        addEventListener: (
+            _type: string,
+            listener: (event: MediaQueryListEvent) => void,
+        ) => listeners.add(listener),
+        removeEventListener: (
+            _type: string,
+            listener: (event: MediaQueryListEvent) => void,
+        ) => listeners.delete(listener),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+    } as unknown as MediaQueryList;
+    window.matchMedia = vi.fn(() => media);
+    return {
+        setCompact(matches: boolean) {
+            Object.defineProperty(media, "matches", {
+                configurable: true,
+                value: matches,
+            });
+            listeners.forEach((listener) => listener({ matches } as MediaQueryListEvent));
+        },
+    };
 }
 
 beforeEach(() => {
@@ -579,16 +607,7 @@ beforeEach(() => {
         configurable: true,
         value: vi.fn(),
     });
-    window.matchMedia = vi.fn(() => ({
-        matches: false,
-        media: "(prefers-color-scheme: dark)",
-        onchange: null,
-        addEventListener: vi.fn(),
-        removeEventListener: vi.fn(),
-        addListener: vi.fn(),
-        removeListener: vi.fn(),
-        dispatchEvent: vi.fn(),
-    }));
+    installCompactViewport(false);
 });
 
 afterEach(() => {
@@ -712,6 +731,94 @@ describe("App Web 预览启动", () => {
 });
 
 describe("App 多文档工作区", () => {
+    it("opens the workspace after opening a folder and keeps edge controls in the status bar", async () => {
+        mocks.isTauri.mockReturnValue(true);
+        mocks.workspaceSession = {
+            version: 1,
+            documents: [],
+            folderPaths: [],
+            expandedPaths: [],
+            activeDocumentId: null,
+            sidebarCollapsed: true,
+            sidebarWidth: 260,
+        };
+        mocks.openDialog.mockResolvedValue("C:\\Root");
+        const host = document.createElement("div");
+        document.body.append(host);
+        const app = createApp(App);
+        app.mount(host);
+        cleanup = () => app.unmount();
+
+        findButton(host, "打开文件夹...")?.click();
+        await vi.waitFor(() =>
+            expect(host.querySelector(".workspace-sidebar")).not.toBeNull(),
+        );
+        const status = host.querySelector(".status-bar");
+        expect(status?.firstElementChild?.getAttribute("aria-label")).toBe("隐藏工作区");
+        expect(status?.lastElementChild?.getAttribute("aria-label")).toBe(
+            "当前文档没有目录",
+        );
+    });
+
+    it("uses mutually exclusive side overlays at 980px and preserves wide preferences", async () => {
+        const viewport = installCompactViewport(true);
+        mocks.isTauri.mockReturnValue(true);
+        mocks.diskContents.set("c:\\notes\\a.mdx", "# a");
+        mocks.workspaceFolderEntries.set("c:\\notes", [
+            {
+                path: "C:\\notes\\a.mdx",
+                name: "a.mdx",
+                kind: "mdx",
+                children: [],
+            },
+        ]);
+        mocks.workspaceSession = {
+            version: 1,
+            documents: [
+                {
+                    id: "compact-a",
+                    path: "C:\\notes\\a.mdx",
+                    sourceKind: "mdx",
+                    importSourcePath: null,
+                    draftKey: "compact-a-draft",
+                },
+            ],
+            folderPaths: ["C:\\notes"],
+            expandedPaths: ["C:\\notes"],
+            activeDocumentId: "compact-a",
+            sidebarCollapsed: false,
+            sidebarWidth: 260,
+        };
+        const host = document.createElement("div");
+        document.body.append(host);
+        const app = createApp(App);
+        app.mount(host);
+        cleanup = () => app.unmount();
+
+        await vi.waitFor(() =>
+            expect(host.querySelector('[aria-label="显示工作区"]')).not.toBeNull(),
+        );
+        host.querySelector<HTMLButtonElement>('[aria-label="显示工作区"]')?.click();
+        await nextTick();
+        expect(host.querySelector(".workspace-sidebar.is-compact")).not.toBeNull();
+        documentRow(host, "a.mdx")?.click();
+        await nextTick();
+        expect(host.querySelector(".workspace-sidebar")).toBeNull();
+
+        host.querySelector<HTMLButtonElement>('[aria-label="显示工作区"]')?.click();
+        await nextTick();
+        expect(host.querySelector(".workspace-sidebar.is-compact")).not.toBeNull();
+        host.querySelector<HTMLButtonElement>('[aria-label="显示目录"]')?.click();
+        await nextTick();
+        expect(host.querySelector(".workspace-sidebar")).toBeNull();
+        expect(host.querySelector(".toc-sidebar.is-compact")).not.toBeNull();
+
+        viewport.setCompact(false);
+        await nextTick();
+        expect(host.querySelector(".workspace-sidebar:not(.is-compact)")).not.toBeNull();
+        expect(host.querySelector(".toc-sidebar:not(.is-compact)")).not.toBeNull();
+    });
+
     it("桌面启动恢复精确草稿且不创建隐式未命名文档", async () => {
         mocks.isTauri.mockReturnValue(true);
         mocks.workspaceSession = {
@@ -866,7 +973,9 @@ describe("App 多文档工作区", () => {
         cleanup = () => app.unmount();
 
         findButton(host, "打开文件...")?.click();
-        await vi.waitFor(() => expect(host.querySelectorAll('[role="tab"]')).toHaveLength(2));
+        await vi.waitFor(() =>
+            expect(host.querySelectorAll('[role="tab"]')).toHaveLength(2),
+        );
         documentTab(host, "a")?.click();
         await vi.waitFor(() => expect(mocks.getMoraEditorMarkdown?.()).toBe("# a"));
         documentTab(host, "b")?.click();
@@ -1036,7 +1145,9 @@ describe("App 多文档工作区", () => {
         documentTab(host, "a")?.click();
         await nextTick();
         expect(
-            host.querySelector('[aria-labelledby="external-conflict-dialog-title"][open]'),
+            host.querySelector(
+                '[aria-labelledby="external-conflict-dialog-title"][open]',
+            ),
         ).toBeNull();
     });
 

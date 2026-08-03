@@ -56,9 +56,7 @@ watch(
     async (id) => {
         await nextTick();
         if (id) {
-            tabTargets
-                .get(id)
-                ?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+            tabTargets.get(id)?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
         }
     },
     { immediate: true, flush: "post" },
@@ -67,7 +65,12 @@ watch(
 
 <template>
     <nav v-if="documents.length" class="document-tabs" aria-label="打开的文档">
-        <div ref="scrollHost" class="document-tabs-scroll" role="tablist" @wheel="onWheel">
+        <div
+            ref="scrollHost"
+            class="document-tabs-scroll"
+            role="tablist"
+            @wheel="onWheel"
+        >
             <div
                 v-for="(document, index) in documents"
                 :key="document.id"
@@ -86,7 +89,11 @@ watch(
                     @click="emit('activate', document.id)"
                     @keydown="onKeydown($event, index)"
                 >
-                    <span v-if="document.dirty" class="document-tab-dirty" aria-hidden="true" />
+                    <span
+                        v-if="document.dirty"
+                        class="document-tab-dirty"
+                        aria-hidden="true"
+                    />
                     <span class="document-tab-name">{{ document.displayName }}</span>
                 </button>
                 <button

@@ -44,6 +44,7 @@
 ### Task 1: Add and integrate ordinary document tabs
 
 **Files:**
+
 - Create: `src/components/DocumentTabs.vue`
 - Create: `src/components/DocumentTabs.test.ts`
 - Modify: `src/App.vue:1-18,2023-2093`
@@ -51,6 +52,7 @@
 - Modify: `src/style.css:62-68`
 
 **Interfaces:**
+
 - Consumes: `OpenDocument[]` and `activeDocumentId: string | null` from `useDocumentSession`.
 - Produces: `activate(id: string)` and `close(id: string)` events; CSS classes `.document-tabs`, `.document-tabs-scroll`, `.document-tab`, `.document-tab-target`, `.document-tab-close`, `.workspace-center`.
 - Does not own: document content, order, duplicate detection, dirty mutation, save confirmation or editor state.
@@ -103,8 +105,10 @@ function mountTabs(activeDocumentId = "b") {
             h(DocumentTabs, {
                 documents: [documentItem("a", true), documentItem("b")],
                 activeDocumentId,
-                onActivate: (id: string) => emitted.set("activate", [...(emitted.get("activate") ?? []), id]),
-                onClose: (id: string) => emitted.set("close", [...(emitted.get("close") ?? []), id]),
+                onActivate: (id: string) =>
+                    emitted.set("activate", [...(emitted.get("activate") ?? []), id]),
+                onClose: (id: string) =>
+                    emitted.set("close", [...(emitted.get("close") ?? []), id]),
             }),
     });
     app.mount(host);
@@ -179,10 +183,7 @@ const emit = defineEmits<{
 const scrollHost = ref<HTMLElement | null>(null);
 const tabTargets = new Map<string, HTMLButtonElement>();
 
-function setTabTarget(
-    id: string,
-    element: Element | ComponentPublicInstance | null,
-) {
+function setTabTarget(id: string, element: Element | ComponentPublicInstance | null) {
     if (element instanceof HTMLButtonElement) tabTargets.set(id, element);
     else tabTargets.delete(id);
 }
@@ -222,7 +223,8 @@ watch(
     () => props.activeDocumentId,
     async (id) => {
         await nextTick();
-        if (id) tabTargets.get(id)?.scrollIntoView({ block: "nearest", inline: "nearest" });
+        if (id)
+            tabTargets.get(id)?.scrollIntoView({ block: "nearest", inline: "nearest" });
     },
     { immediate: true, flush: "post" },
 );
@@ -230,7 +232,12 @@ watch(
 
 <template>
     <nav v-if="documents.length" class="document-tabs" aria-label="打开的文档">
-        <div ref="scrollHost" class="document-tabs-scroll" role="tablist" @wheel="onWheel">
+        <div
+            ref="scrollHost"
+            class="document-tabs-scroll"
+            role="tablist"
+            @wheel="onWheel"
+        >
             <div
                 v-for="(document, index) in documents"
                 :key="document.id"
@@ -249,7 +256,11 @@ watch(
                     @click="emit('activate', document.id)"
                     @keydown="onKeydown($event, index)"
                 >
-                    <span v-if="document.dirty" class="document-tab-dirty" aria-hidden="true" />
+                    <span
+                        v-if="document.dirty"
+                        class="document-tab-dirty"
+                        aria-hidden="true"
+                    />
                     <span class="document-tab-name">{{ document.displayName }}</span>
                 </button>
                 <button
@@ -434,12 +445,14 @@ Before committing, verify `git diff --cached --name-only` does not include `READ
 ### Task 2: Make the workspace sidebar folder-only
 
 **Files:**
+
 - Modify: `src/components/WorkspaceSidebar.vue:20-176,343-478`
 - Modify: `src/components/WorkspaceSidebar.test.ts:20-232,282-392`
 - Modify: `src/App.vue:2023-2038`
 - Modify: `src/App.web.test.ts:406-409` and every independent-document selector in the `App 多文档工作区` suites
 
 **Interfaces:**
+
 - Keeps: `documents`, `folders`, `activeDocumentId`, `expandedPaths`, `collapsed`, `width`, `activate`, `open-path`, `close-folder`, `refresh-folder`, `toggle-expanded`, `update:collapsed`, `update:width` until Task 3 moves visibility control fully to App.
 - Adds: `open-folder` event for the empty workspace action.
 - Removes: rendered `打开的文件` section and document-close toolbar behavior; tabs become the sole primary UI for independent documents.
@@ -642,6 +655,7 @@ Verify the staged set excludes `README.md` and `TODO.md`.
 ### Task 3: Move the outline right and add edge-aligned status controls
 
 **Files:**
+
 - Modify: `src/components/TableOfContents.vue`
 - Create: `src/components/TableOfContents.test.ts`
 - Modify: `src/components/StatusBar.vue`
@@ -655,6 +669,7 @@ Verify the staged set excludes `README.md` and `TODO.md`.
 - Modify: `src/experience.css:580-584`
 
 **Interfaces:**
+
 - `TableOfContents`: consumes `items`, `visible`, `compact`; emits only `select(text)`.
 - `StatusBar`: additionally consumes `workspaceVisible`, `outlineVisible`, `outlineAvailable`; emits `toggle-workspace` and `toggle-outline`.
 - `WorkspaceSidebar`: consumes App-controlled `visible` and `compact`; no longer owns `matchMedia`, local compact-open state or floating edge toggle.
@@ -685,12 +700,13 @@ describe("TableOfContents", () => {
         const host = document.createElement("div");
         document.body.append(host);
         app = createApp({
-            render: () => h(TableOfContents, {
-                items: [{ level: 1, text: "标题", id: 0 }],
-                visible: true,
-                compact: true,
-                onSelect: (text: string) => selected.push(text),
-            }),
+            render: () =>
+                h(TableOfContents, {
+                    items: [{ level: 1, text: "标题", id: 0 }],
+                    visible: true,
+                    compact: true,
+                    onSelect: (text: string) => selected.push(text),
+                }),
         });
         app.mount(host);
         expect(host.querySelector(".toc-sidebar.is-compact")).not.toBeNull();
@@ -702,7 +718,10 @@ describe("TableOfContents", () => {
     it("does not render when hidden or empty", () => {
         const host = document.createElement("div");
         document.body.append(host);
-        app = createApp({ render: () => h(TableOfContents, { items: [], visible: true, compact: false }) });
+        app = createApp({
+            render: () =>
+                h(TableOfContents, { items: [], visible: true, compact: false }),
+        });
         app.mount(host);
         expect(host.querySelector(".toc-sidebar")).toBeNull();
     });
@@ -731,19 +750,20 @@ it("places workspace and outline controls at opposite status-bar edges", () => {
     const host = document.createElement("div");
     document.body.append(host);
     app = createApp({
-        render: () => h(StatusBar, {
-            errorMessage: "",
-            statusMessage: "准备就绪",
-            path: "C:\\note.mdx",
-            dirty: false,
-            modeLabel: "所见即所得",
-            wordCount: 10,
-            workspaceVisible: true,
-            outlineVisible: false,
-            outlineAvailable: false,
-            onToggleWorkspace: () => events.push("workspace"),
-            onToggleOutline: () => events.push("outline"),
-        }),
+        render: () =>
+            h(StatusBar, {
+                errorMessage: "",
+                statusMessage: "准备就绪",
+                path: "C:\\note.mdx",
+                dirty: false,
+                modeLabel: "所见即所得",
+                wordCount: 10,
+                workspaceVisible: true,
+                outlineVisible: false,
+                outlineAvailable: false,
+                onToggleWorkspace: () => events.push("workspace"),
+                onToggleOutline: () => events.push("outline"),
+            }),
     });
     app.mount(host);
 
@@ -903,7 +923,9 @@ const compactLayout = ref(false);
 const compactPanel = ref<"workspace" | "outline" | null>(null);
 let compactMedia: MediaQueryList | null = null;
 
-const outlineAvailable = computed(() => Boolean(activeDocument.value && toc.value.length));
+const outlineAvailable = computed(() =>
+    Boolean(activeDocument.value && toc.value.length),
+);
 const workspaceVisible = computed(() =>
     compactLayout.value ? compactPanel.value === "workspace" : !sidebarCollapsed.value,
 );
@@ -1098,8 +1120,14 @@ function installCompactViewport(initial: boolean) {
         matches: initial,
         media: "(max-width: 980px)",
         onchange: null,
-        addEventListener: (_type: string, listener: (event: MediaQueryListEvent) => void) => listeners.add(listener),
-        removeEventListener: (_type: string, listener: (event: MediaQueryListEvent) => void) => listeners.delete(listener),
+        addEventListener: (
+            _type: string,
+            listener: (event: MediaQueryListEvent) => void,
+        ) => listeners.add(listener),
+        removeEventListener: (
+            _type: string,
+            listener: (event: MediaQueryListEvent) => void,
+        ) => listeners.delete(listener),
         addListener: vi.fn(),
         removeListener: vi.fn(),
         dispatchEvent: vi.fn(),
@@ -1107,7 +1135,10 @@ function installCompactViewport(initial: boolean) {
     window.matchMedia = vi.fn(() => media);
     return {
         setCompact(matches: boolean) {
-            Object.defineProperty(media, "matches", { configurable: true, value: matches });
+            Object.defineProperty(media, "matches", {
+                configurable: true,
+                value: matches,
+            });
             listeners.forEach((listener) => listener({ matches } as MediaQueryListEvent));
         },
     };
@@ -1136,7 +1167,9 @@ it("opens the workspace after opening a folder and keeps edge controls in the st
     cleanup = () => app.unmount();
 
     findButton(host, "打开文件夹...")?.click();
-    await vi.waitFor(() => expect(host.querySelector(".workspace-sidebar")).not.toBeNull());
+    await vi.waitFor(() =>
+        expect(host.querySelector(".workspace-sidebar")).not.toBeNull(),
+    );
     const status = host.querySelector(".status-bar");
     expect(status?.firstElementChild?.getAttribute("aria-label")).toBe("隐藏工作区");
     expect(status?.lastElementChild?.getAttribute("aria-label")).toBe("当前文档没有目录");
@@ -1169,7 +1202,9 @@ it("uses mutually exclusive side overlays at 980px and preserves wide preference
     app.mount(host);
     cleanup = () => app.unmount();
 
-    await vi.waitFor(() => expect(host.querySelector('[aria-label="显示工作区"]')).not.toBeNull());
+    await vi.waitFor(() =>
+        expect(host.querySelector('[aria-label="显示工作区"]')).not.toBeNull(),
+    );
     host.querySelector<HTMLButtonElement>('[aria-label="显示工作区"]')?.click();
     expect(host.querySelector(".workspace-sidebar.is-compact")).not.toBeNull();
     host.querySelector<HTMLButtonElement>('[aria-label="显示目录"]')?.click();
@@ -1183,9 +1218,15 @@ In `src/App.markdown-layout.test.ts`, add static guards:
 
 ```ts
 it("orders workspace, tabbed editor and outline without moving the mode switch", () => {
-    expect(appSource.indexOf("<WorkspaceSidebar")).toBeLessThan(appSource.indexOf('class="workspace-center"'));
-    expect(appSource.indexOf('class="workspace-center"')).toBeLessThan(appSource.indexOf("<TableOfContents"));
-    expect(appSource.indexOf('class="mode-switch compact"')).toBeLessThan(appSource.indexOf('class="main-body"'));
+    expect(appSource.indexOf("<WorkspaceSidebar")).toBeLessThan(
+        appSource.indexOf('class="workspace-center"'),
+    );
+    expect(appSource.indexOf('class="workspace-center"')).toBeLessThan(
+        appSource.indexOf("<TableOfContents"),
+    );
+    expect(appSource.indexOf('class="mode-switch compact"')).toBeLessThan(
+        appSource.indexOf('class="main-body"'),
+    );
     expect(appSource).toContain('@toggle-workspace="toggleWorkspacePanel"');
     expect(appSource).toContain('@toggle-outline="toggleOutlinePanel"');
     const printBlock = appSource.slice(appSource.indexOf("@media print"));

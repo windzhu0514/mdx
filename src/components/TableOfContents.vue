@@ -8,27 +8,19 @@ export type TocItem = {
 const props = defineProps<{
     items: TocItem[];
     visible: boolean;
+    compact: boolean;
 }>();
-const emit = defineEmits<{
-    select: [text: string];
-    visibility: [visible: boolean];
-}>();
+const emit = defineEmits<{ select: [text: string] }>();
 </script>
 
 <template>
-    <aside v-if="props.visible && props.items.length" class="toc-sidebar">
-        <div class="toc-header">
-            <span>目录</span>
-            <button
-                class="icon-button small"
-                type="button"
-                title="隐藏目录"
-                aria-label="隐藏目录"
-                @click="emit('visibility', false)"
-            >
-                ×
-            </button>
-        </div>
+    <aside
+        v-if="props.visible && props.items.length"
+        class="toc-sidebar"
+        :class="{ 'is-compact': props.compact }"
+        aria-label="本文目录"
+    >
+        <div class="toc-header"><span>目录</span></div>
         <ul class="toc-list">
             <li
                 v-for="item in props.items"
@@ -45,15 +37,4 @@ const emit = defineEmits<{
             </li>
         </ul>
     </aside>
-
-    <button
-        v-else-if="props.items.length"
-        type="button"
-        class="toc-show-button"
-        title="显示目录"
-        aria-label="显示目录"
-        @click="emit('visibility', true)"
-    >
-        ›
-    </button>
 </template>

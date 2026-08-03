@@ -578,11 +578,6 @@ summary:focus-visible,
 }
 
 @media (max-width: 900px) {
-    .toc-sidebar,
-    .toc-show-button {
-        display: none;
-    }
-
     .library-search {
         grid-template-columns: 1fr 1fr;
     }

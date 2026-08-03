@@ -99,6 +99,9 @@ const editorMode = ref<EditorMode>("wysiwyg");
 const sourcePreview = ref(true);
 let printing = false;
 const showToc = ref(true);
+const compactLayout = ref(false);
+const compactPanel = ref<"workspace" | "outline" | null>(null);
+let compactMedia: MediaQueryList | null = null;
 const recentFiles = ref<RecentFileEntry[]>([]);
 const recentMenuItems = computed(() => recentFiles.value.slice(0, 10));
 const showRecentFiles = ref(false);
@@ -219,18 +222,48 @@ const modeLabel = computed(() => {
 const toc = computed(() => {
     return extractMarkdownHeadings(content.value);
 });
+const outlineAvailable = computed(() =>
+    Boolean(activeDocument.value && toc.value.length),
+);
+const workspaceVisible = computed(() =>
+    compactLayout.value ? compactPanel.value === "workspace" : !sidebarCollapsed.value,
+);
+const outlineVisible = computed(() =>
+    compactLayout.value
+        ? compactPanel.value === "outline" && outlineAvailable.value
+        : showToc.value && outlineAvailable.value,
+);
 
 function scrollToHeading(text: string) {
     editorRef.value?.scrollToHeading(text);
+    if (compactLayout.value) compactPanel.value = null;
 }
 
 function setTocVisibility(visible: boolean) {
     showToc.value = visible;
     updatePreferences({ showToc: visible });
-    statusMessage.value = visible ? "已显示侧边栏" : "已隐藏侧边栏";
+    statusMessage.value = visible ? "已显示目录" : "已隐藏目录";
 }
 
-function toggleToc() {
+function syncCompactLayout(event: MediaQueryListEvent | MediaQueryList) {
+    compactLayout.value = event.matches;
+    compactPanel.value = null;
+}
+
+function toggleWorkspacePanel() {
+    if (compactLayout.value) {
+        compactPanel.value = compactPanel.value === "workspace" ? null : "workspace";
+        return;
+    }
+    updateSidebarCollapsed(!sidebarCollapsed.value);
+}
+
+function toggleOutlinePanel() {
+    if (!outlineAvailable.value) return;
+    if (compactLayout.value) {
+        compactPanel.value = compactPanel.value === "outline" ? null : "outline";
+        return;
+    }
     setTocVisibility(!showToc.value);
 }
 
@@ -490,9 +523,9 @@ const viewMenu = computed<MarkdownCommand[]>(() => [
         disabled: !activeDocument.value,
     },
     {
-        label: showToc.value ? "隐藏侧边栏" : "显示侧边栏",
-        action: toggleToc,
-        disabled: !activeDocument.value,
+        label: outlineVisible.value ? "隐藏目录" : "显示目录",
+        action: toggleOutlinePanel,
+        disabled: !outlineAvailable.value,
     },
     { label: "历史版本...", action: openHistoryPanel, disabled: !activeDocument.value },
     { label: "偏好设置...", action: openSettingsPanel },
@@ -575,6 +608,10 @@ watch(
     { immediate: true },
 );
 
+watch(outlineAvailable, (available) => {
+    if (!available && compactPanel.value === "outline") compactPanel.value = null;
+});
+
 watch(activeDocumentId, (current, previous) => {
     if (current === previous) return;
     historyRequestId += 1;
@@ -649,6 +686,11 @@ async function deleteAiApiKey() {
 onMounted(async () => {
     window.addEventListener("pointerdown", handleWindowPointerDown, true);
     window.addEventListener("keydown", handleWindowKeyDown);
+    if (typeof window.matchMedia === "function") {
+        compactMedia = window.matchMedia("(max-width: 980px)");
+        syncCompactLayout(compactMedia);
+        compactMedia.addEventListener("change", syncCompactLayout);
+    }
 
     if (!tauriRuntime) return;
 
@@ -713,6 +755,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
     window.removeEventListener("pointerdown", handleWindowPointerDown, true);
     window.removeEventListener("keydown", handleWindowKeyDown);
+    compactMedia?.removeEventListener("change", syncCompactLayout);
     unlistenClose?.();
     unlistenDragDrop?.();
     unlistenFocus?.();
@@ -1033,6 +1076,7 @@ async function openFiles() {
 
 async function openWorkspacePath(path: string) {
     await runAction(() => openPath(path, false).then(() => undefined));
+    if (compactLayout.value) compactPanel.value = null;
 }
 
 async function openFolder() {
@@ -1043,8 +1087,15 @@ async function openFolder() {
     }
     await runAction(async () => {
         await session.openFolder(selected);
+        if (compactLayout.value) compactPanel.value = "workspace";
+        else updateSidebarCollapsed(false);
         statusMessage.value = "已打开文件夹";
     });
+}
+
+function activateWorkspaceDocument(id: string) {
+    if (compactLayout.value) compactPanel.value = null;
+    return activateDocument(id);
 }
 
 async function activateDocument(id: string) {
@@ -2027,22 +2078,15 @@ function stringifyError(error: unknown) {
                 :folders="folders"
                 :active-document-id="activeDocumentId"
                 :expanded-paths="expandedPaths"
-                :collapsed="sidebarCollapsed"
+                :visible="workspaceVisible"
+                :compact="compactLayout"
                 :width="sidebarWidth"
-                @activate="activateDocument"
+                @activate="activateWorkspaceDocument"
                 @open-path="openWorkspacePath"
                 @open-folder="openFolder"
                 @close-folder="closeFolder"
                 @toggle-expanded="toggleWorkspacePath"
-                @update:collapsed="updateSidebarCollapsed"
                 @update:width="updateSidebarWidth"
-            />
-            <TableOfContents
-                v-if="activeDocument"
-                :items="toc"
-                :visible="showToc"
-                @select="scrollToHeading"
-                @visibility="setTocVisibility"
             />
 
             <div class="workspace-center">
@@ -2106,6 +2150,14 @@ function stringifyError(error: unknown) {
                     </div>
                 </section>
             </div>
+
+            <TableOfContents
+                v-if="activeDocument"
+                :items="toc"
+                :visible="outlineVisible"
+                :compact="compactLayout"
+                @select="scrollToHeading"
+            />
         </div>
 
         <SettingsPanel
@@ -2168,6 +2220,11 @@ function stringifyError(error: unknown) {
             :dirty="dirty"
             :mode-label="modeLabel"
             :word-count="wordCount"
+            :workspace-visible="workspaceVisible"
+            :outline-visible="outlineVisible"
+            :outline-available="outlineAvailable"
+            @toggle-workspace="toggleWorkspacePanel"
+            @toggle-outline="toggleOutlinePanel"
         />
     </main>
 </template>
@@ -2234,8 +2291,9 @@ function stringifyError(error: unknown) {
 <style>
 @media print {
     .menu-bar,
+    .workspace-sidebar,
+    .document-tabs,
     .toc-sidebar,
-    .toc-show-button,
     .status-bar,
     .find-panel {
         display: none !important;

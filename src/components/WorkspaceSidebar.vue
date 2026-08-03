@@ -17,14 +17,16 @@ export function owningRoot(path: string, roots: string[]) {
         const identity = normalizePath(root);
         if (!rootsByIdentity.has(identity)) rootsByIdentity.set(identity, root);
     }
-    return [...rootsByIdentity]
-        .filter(([identity]) => isPathInside(path, identity))
-        .sort(([left], [right]) => right.length - left.length)[0]?.[1] ?? null;
+    return (
+        [...rootsByIdentity]
+            .filter(([identity]) => isPathInside(path, identity))
+            .sort(([left], [right]) => right.length - left.length)[0]?.[1] ?? null
+    );
 }
 </script>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, type ComponentPublicInstance } from "vue";
+import { computed, ref, type ComponentPublicInstance } from "vue";
 
 import type { OpenDocument } from "../composables/useDocumentSession";
 import type { WorkspaceFolder, WorkspaceTreeEntry } from "../types/workspace";
@@ -50,7 +52,8 @@ const props = defineProps<{
     folders: WorkspaceFolder[];
     activeDocumentId: string | null;
     expandedPaths: string[];
-    collapsed: boolean;
+    visible: boolean;
+    compact: boolean;
     width: number;
 }>();
 
@@ -61,16 +64,12 @@ const emit = defineEmits<{
     "close-folder": [path: string];
     "refresh-folder": [path: string];
     "toggle-expanded": [path: string];
-    "update:collapsed": [collapsed: boolean];
     "update:width": [width: number];
 }>();
 
 const rovingKey = ref<string | null>(null);
 const drag = ref<{ pointerId: number; startX: number; startWidth: number } | null>(null);
 const treeItems = new Map<string, HTMLElement>();
-const compact = ref(false);
-const compactOpen = ref(false);
-let compactMedia: MediaQueryList | null = null;
 
 function clampWidth(value: number) {
     return Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, value));
@@ -116,7 +115,11 @@ const documentsByPath = computed(() => {
     return result;
 });
 
-function entryRows(entries: WorkspaceTreeEntry[], depth: number, root: string): TreeRow[] {
+function entryRows(
+    entries: WorkspaceTreeEntry[],
+    depth: number,
+    root: string,
+): TreeRow[] {
     const rows: TreeRow[] = [];
     for (const entry of entries) {
         const owner = owningRoot(entry.path, roots.value);
@@ -136,7 +139,8 @@ function entryRows(entries: WorkspaceTreeEntry[], depth: number, root: string): 
             documentId: document?.id ?? null,
             folderPath: null,
         });
-        if (directory && expanded) rows.push(...entryRows(entry.children, depth + 1, root));
+        if (directory && expanded)
+            rows.push(...entryRows(entry.children, depth + 1, root));
     }
     return rows;
 }
@@ -163,11 +167,10 @@ const folderRows = computed<TreeRow[]>(() => {
 });
 
 const rows = computed(() => folderRows.value);
-const activeRovingKey = computed(
-    () =>
-        rows.value.some((row) => row.key === rovingKey.value)
-            ? rovingKey.value
-            : rows.value[0]?.key ?? null,
+const activeRovingKey = computed(() =>
+    rows.value.some((row) => row.key === rovingKey.value)
+        ? rovingKey.value
+        : (rows.value[0]?.key ?? null),
 );
 const currentActionRow = computed(
     () => rows.value.find((row) => row.key === activeRovingKey.value) ?? null,
@@ -266,40 +269,6 @@ function onTreeKeydown(event: KeyboardEvent) {
     }
 }
 
-function syncCompact(event: MediaQueryListEvent | MediaQueryList) {
-    compact.value = event.matches;
-    if (!event.matches) compactOpen.value = false;
-}
-
-onMounted(() => {
-    if (typeof window.matchMedia !== "function") return;
-    compactMedia = window.matchMedia("(max-width: 980px)");
-    syncCompact(compactMedia);
-    compactMedia.addEventListener("change", syncCompact);
-});
-
-onBeforeUnmount(() => {
-    compactMedia?.removeEventListener("change", syncCompact);
-});
-
-const sidebarVisible = computed(
-    () => !props.collapsed && (!compact.value || compactOpen.value),
-);
-const toggleVisible = computed(() => props.collapsed || compact.value);
-
-function collapseSidebar() {
-    if (compact.value) {
-        compactOpen.value = false;
-    } else {
-        emit("update:collapsed", true);
-    }
-}
-
-function expandSidebar() {
-    if (compact.value) compactOpen.value = true;
-    if (props.collapsed) emit("update:collapsed", false);
-}
-
 function onPointerDown(event: PointerEvent) {
     const handle = event.currentTarget;
     if (!(handle instanceof HTMLElement)) return;
@@ -330,23 +299,14 @@ function onPointerUp(event: PointerEvent) {
 
 <template>
     <aside
-        v-if="sidebarVisible"
+        v-if="props.visible"
         class="workspace-sidebar"
-        :class="{ 'is-compact': compact }"
+        :class="{ 'is-compact': props.compact }"
         :style="{ width: `${clampWidth(props.width)}px` }"
         aria-label="工作区侧栏"
     >
         <header class="workspace-sidebar-header">
             <span>工作区</span>
-            <button
-                type="button"
-                class="icon-button small"
-                aria-label="收起工作区侧栏"
-                title="收起工作区侧栏"
-                @click="collapseSidebar"
-            >
-                ‹
-            </button>
         </header>
         <div v-if="!folderRows.length" class="workspace-empty">
             <p>尚未打开文件夹</p>
@@ -354,8 +314,19 @@ function onPointerUp(event: PointerEvent) {
                 打开文件夹
             </button>
         </div>
-        <div v-else class="workspace-tree" role="tree" aria-label="工作区文件" @keydown="onTreeKeydown">
-            <div v-for="row in folderRows" :key="row.key" class="workspace-tree-row" role="none">
+        <div
+            v-else
+            class="workspace-tree"
+            role="tree"
+            aria-label="工作区文件"
+            @keydown="onTreeKeydown"
+        >
+            <div
+                v-for="row in folderRows"
+                :key="row.key"
+                class="workspace-tree-row"
+                role="none"
+            >
                 <div
                     :ref="(element) => setTreeItem(row.key, element)"
                     class="workspace-tree-item"
@@ -371,10 +342,14 @@ function onPointerUp(event: PointerEvent) {
                     @focus="rovingKey = row.key"
                 >
                     <span v-if="row.expanded !== null" class="workspace-disclosure">
-                        {{ row.expanded ? '⌄' : '›' }}
+                        {{ row.expanded ? "⌄" : "›" }}
                     </span>
                     <span class="workspace-name">{{ row.label }}</span>
-                    <span v-for="status in row.statuses" :key="status" class="workspace-status">
+                    <span
+                        v-for="status in row.statuses"
+                        :key="status"
+                        class="workspace-status"
+                    >
                         {{ status }}
                     </span>
                 </div>
@@ -393,7 +368,10 @@ function onPointerUp(event: PointerEvent) {
                     class="workspace-row-action"
                     :aria-label="`刷新 ${currentActionRow.label}`"
                     title="刷新文件夹"
-                    @click="currentActionRow.folderPath && emit('refresh-folder', currentActionRow.folderPath)"
+                    @click="
+                        currentActionRow.folderPath &&
+                        emit('refresh-folder', currentActionRow.folderPath)
+                    "
                 >
                     ↻
                 </button>
@@ -402,7 +380,10 @@ function onPointerUp(event: PointerEvent) {
                     class="workspace-row-action"
                     :aria-label="`关闭文件夹 ${currentActionRow.label}`"
                     title="关闭文件夹"
-                    @click="currentActionRow.folderPath && emit('close-folder', currentActionRow.folderPath)"
+                    @click="
+                        currentActionRow.folderPath &&
+                        emit('close-folder', currentActionRow.folderPath)
+                    "
                 >
                     ×
                 </button>
@@ -419,16 +400,4 @@ function onPointerUp(event: PointerEvent) {
             @pointercancel="onPointerUp"
         />
     </aside>
-
-    <button
-        type="button"
-        class="workspace-sidebar-toggle"
-        :class="{ 'is-visible': toggleVisible }"
-        :aria-label="sidebarVisible ? '收起工作区侧栏' : '展开工作区侧栏'"
-        :aria-expanded="sidebarVisible"
-        :title="sidebarVisible ? '收起工作区侧栏' : '展开工作区侧栏'"
-        @click="sidebarVisible ? collapseSidebar() : expandSidebar()"
-    >
-        {{ sidebarVisible ? '‹' : '›' }}
-    </button>
 </template>
