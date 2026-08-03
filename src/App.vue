@@ -5,6 +5,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import "./experience.css";
 import FindReplacePanel from "./components/FindReplacePanel.vue";
+import DocumentTabs from "./components/DocumentTabs.vue";
 import ExternalConflictDialog from "./components/ExternalConflictDialog.vue";
 import HistoryPanel from "./components/HistoryPanel.vue";
 import LeaveConfirmDialog from "./components/LeaveConfirmDialog.vue";
@@ -2044,52 +2045,67 @@ function stringifyError(error: unknown) {
                 @visibility="setTocVisibility"
             />
 
-            <section v-if="activeDocument" class="note-panel" :aria-busy="loading">
-                <div class="editor-card">
-                    <FindReplacePanel
-                        ref="findPanel"
-                        v-model:query="findQuery"
-                        v-model:replacement="replaceQuery"
-                        :open="showFindPanel"
-                        :replace-open="showReplacePanel"
-                        :match-count="findMatchCount"
-                        @previous="navigateFindResult(true)"
-                        @next="navigateFindResult(false)"
-                        @expand="expandReplacePanel"
-                        @close="closeFindPanel"
-                        @replace-current="replaceCurrentMatch"
-                        @replace-all="replaceAllMatches"
-                    />
-                    <div class="markdown-editor">
-                        <MoraEditor
-                            ref="editorRef"
-                            :document-id="activeDocument.id"
-                            :model-value="content"
-                            :display-value="displayContent"
-                            :mode="editorMode"
-                            :source-preview="sourcePreview"
-                            :upload-image="registerPastedImage"
-                            :ai-provider="tauriRuntime ? aiProvider : undefined"
-                            @update:model-value="handleEditorUpdate"
-                            @ai-error="handleAiError"
+            <div class="workspace-center">
+                <DocumentTabs
+                    :documents="documents"
+                    :active-document-id="activeDocumentId"
+                    @activate="activateDocument"
+                    @close="closeDocument"
+                />
+
+                <section
+                    v-if="activeDocument"
+                    id="document-editor-panel"
+                    class="note-panel"
+                    role="tabpanel"
+                    :aria-busy="loading"
+                >
+                    <div class="editor-card">
+                        <FindReplacePanel
+                            ref="findPanel"
+                            v-model:query="findQuery"
+                            v-model:replacement="replaceQuery"
+                            :open="showFindPanel"
+                            :replace-open="showReplacePanel"
+                            :match-count="findMatchCount"
+                            @previous="navigateFindResult(true)"
+                            @next="navigateFindResult(false)"
+                            @expand="expandReplacePanel"
+                            @close="closeFindPanel"
+                            @replace-current="replaceCurrentMatch"
+                            @replace-all="replaceAllMatches"
                         />
+                        <div class="markdown-editor">
+                            <MoraEditor
+                                ref="editorRef"
+                                :document-id="activeDocument.id"
+                                :model-value="content"
+                                :display-value="displayContent"
+                                :mode="editorMode"
+                                :source-preview="sourcePreview"
+                                :upload-image="registerPastedImage"
+                                :ai-provider="tauriRuntime ? aiProvider : undefined"
+                                @update:model-value="handleEditorUpdate"
+                                @ai-error="handleAiError"
+                            />
+                        </div>
                     </div>
-                </div>
-            </section>
-            <section v-else class="workspace-welcome" aria-label="开始使用 Mora">
-                <div class="workspace-welcome-card">
-                    <p class="workspace-welcome-eyebrow">Mora 墨笺</p>
-                    <h1>开始写作</h1>
-                    <p>新建一篇文档，或打开已有文件和工作区文件夹。</p>
-                    <div class="workspace-welcome-actions">
-                        <button type="button" class="primary" @click="createNewNote">
-                            新建文档
-                        </button>
-                        <button type="button" @click="openFiles">打开文件</button>
-                        <button type="button" @click="openFolder">打开文件夹</button>
+                </section>
+                <section v-else class="workspace-welcome" aria-label="开始使用 Mora">
+                    <div class="workspace-welcome-card">
+                        <p class="workspace-welcome-eyebrow">Mora 墨笺</p>
+                        <h1>开始写作</h1>
+                        <p>新建一篇文档，或打开已有文件和工作区文件夹。</p>
+                        <div class="workspace-welcome-actions">
+                            <button type="button" class="primary" @click="createNewNote">
+                                新建文档
+                            </button>
+                            <button type="button" @click="openFiles">打开文件</button>
+                            <button type="button" @click="openFolder">打开文件夹</button>
+                        </div>
                     </div>
-                </div>
-            </section>
+                </section>
+            </div>
         </div>
 
         <SettingsPanel

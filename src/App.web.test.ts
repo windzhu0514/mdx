@@ -409,6 +409,12 @@ function documentRow(host: HTMLElement, name: string) {
     );
 }
 
+function documentTab(host: HTMLElement, name: string) {
+    return Array.from(host.querySelectorAll<HTMLButtonElement>('[role="tab"]')).find(
+        (item) => item.textContent?.trim() === name,
+    );
+}
+
 function findButton(host: HTMLElement, label: string) {
     return Array.from(host.querySelectorAll<HTMLButtonElement>("button")).find(
         (button) =>
@@ -846,6 +852,23 @@ describe("App 多文档工作区", () => {
         ).toBeNull();
         expect(host.textContent).not.toContain("保存并继续");
         expect(mocks.cancelAi).toHaveBeenCalledTimes(4);
+    });
+
+    it("一次打开多个文件会生成普通标签并通过标签切换活动文档", async () => {
+        mocks.isTauri.mockReturnValue(true);
+        mocks.openDialog.mockResolvedValue(["C:\\notes\\a.mdx", "C:\\notes\\b.mdx"]);
+        const host = document.createElement("div");
+        document.body.append(host);
+        const app = createApp(App);
+        app.mount(host);
+        cleanup = () => app.unmount();
+
+        findButton(host, "打开文件...")?.click();
+        await vi.waitFor(() => expect(host.querySelectorAll('[role="tab"]')).toHaveLength(2));
+        documentTab(host, "a")?.click();
+        await vi.waitFor(() => expect(mocks.getMoraEditorMarkdown?.()).toBe("# a"));
+        documentTab(host, "b")?.click();
+        await vi.waitFor(() => expect(mocks.getMoraEditorMarkdown?.()).toBe("# b"));
     });
 
     it("关闭非活动脏文档时显示目标名称并保存目标文档", async () => {
