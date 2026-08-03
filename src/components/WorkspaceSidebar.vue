@@ -37,7 +37,7 @@ type TreeRow = {
     label: string;
     path: string;
     depth: number;
-    kind: "document" | "folder" | "directory" | "file";
+    kind: "folder" | "directory" | "file";
     expanded: boolean | null;
     active: boolean;
     statuses: string[];
@@ -57,7 +57,7 @@ const props = defineProps<{
 const emit = defineEmits<{
     activate: [id: string];
     "open-path": [path: string];
-    "close-document": [id: string];
+    "open-folder": [];
     "close-folder": [path: string];
     "refresh-folder": [path: string];
     "toggle-expanded": [path: string];
@@ -116,23 +116,6 @@ const documentsByPath = computed(() => {
     return result;
 });
 
-const independentRows = computed<TreeRow[]>(() =>
-    props.documents
-        .filter((document) => !document.path || !owningRoot(document.path, roots.value))
-        .map((document) => ({
-            key: `document:${document.id}`,
-            label: document.displayName,
-            path: document.path ?? document.id,
-            depth: 1,
-            kind: "document",
-            expanded: null,
-            active: document.id === props.activeDocumentId,
-            statuses: documentStatuses(document),
-            documentId: document.id,
-            folderPath: null,
-        })),
-);
-
 function entryRows(entries: WorkspaceTreeEntry[], depth: number, root: string): TreeRow[] {
     const rows: TreeRow[] = [];
     for (const entry of entries) {
@@ -179,7 +162,7 @@ const folderRows = computed<TreeRow[]>(() => {
     return rows;
 });
 
-const rows = computed(() => [...independentRows.value, ...folderRows.value]);
+const rows = computed(() => folderRows.value);
 const activeRovingKey = computed(
     () =>
         rows.value.some((row) => row.key === rovingKey.value)
@@ -365,72 +348,40 @@ function onPointerUp(event: PointerEvent) {
                 ‹
             </button>
         </header>
-        <div class="workspace-tree" role="tree" aria-label="工作区文件" @keydown="onTreeKeydown">
-            <section class="workspace-section">
-                <h2>打开的文件</h2>
-                <p v-if="!independentRows.length" class="workspace-empty">暂无独立打开的文件</p>
+        <div v-if="!folderRows.length" class="workspace-empty">
+            <p>尚未打开文件夹</p>
+            <button type="button" aria-label="打开文件夹" @click="emit('open-folder')">
+                打开文件夹
+            </button>
+        </div>
+        <div v-else class="workspace-tree" role="tree" aria-label="工作区文件" @keydown="onTreeKeydown">
+            <div v-for="row in folderRows" :key="row.key" class="workspace-tree-row" role="none">
                 <div
-                    v-for="row in independentRows"
-                    :key="row.key"
-                    class="workspace-tree-row"
-                    role="none"
+                    :ref="(element) => setTreeItem(row.key, element)"
+                    class="workspace-tree-item"
+                    :class="{ active: row.active }"
+                    role="treeitem"
+                    :data-tree-key="row.key"
+                    :aria-level="row.depth"
+                    :aria-expanded="row.expanded === null ? undefined : row.expanded"
+                    :aria-current="row.active ? 'page' : undefined"
+                    :tabindex="rowTabindex(row)"
+                    :style="{ paddingInlineStart: `${8 + (row.depth - 1) * 14}px` }"
+                    @click="selectRow(row)"
+                    @focus="rovingKey = row.key"
                 >
-                    <div
-                        :ref="(element) => setTreeItem(row.key, element)"
-                        class="workspace-tree-item"
-                        :class="{ active: row.active }"
-                        role="treeitem"
-                        :data-tree-key="row.key"
-                        :aria-level="row.depth"
-                        :aria-current="row.active ? 'page' : undefined"
-                        :tabindex="rowTabindex(row)"
-                        @click="selectRow(row)"
-                        @focus="rovingKey = row.key"
-                    >
-                        <span class="workspace-name">{{ row.label }}</span>
-                        <span v-for="status in row.statuses" :key="status" class="workspace-status">
-                            {{ status }}
-                        </span>
-                    </div>
+                    <span v-if="row.expanded !== null" class="workspace-disclosure">
+                        {{ row.expanded ? '⌄' : '›' }}
+                    </span>
+                    <span class="workspace-name">{{ row.label }}</span>
+                    <span v-for="status in row.statuses" :key="status" class="workspace-status">
+                        {{ status }}
+                    </span>
                 </div>
-            </section>
-
-            <section class="workspace-section">
-                <h2>打开的文件夹</h2>
-                <p v-if="!folderRows.length" class="workspace-empty">暂无打开的文件夹</p>
-                <div
-                    v-for="row in folderRows"
-                    :key="row.key"
-                    class="workspace-tree-row"
-                    role="none"
-                >
-                    <div
-                        :ref="(element) => setTreeItem(row.key, element)"
-                        class="workspace-tree-item"
-                        :class="{ active: row.active }"
-                        role="treeitem"
-                        :data-tree-key="row.key"
-                        :aria-level="row.depth"
-                        :aria-expanded="row.expanded === null ? undefined : row.expanded"
-                        :aria-current="row.active ? 'page' : undefined"
-                        :tabindex="rowTabindex(row)"
-                        :style="{ paddingInlineStart: `${8 + (row.depth - 1) * 14}px` }"
-                        @click="selectRow(row)"
-                        @focus="rovingKey = row.key"
-                    >
-                        <span v-if="row.expanded !== null" class="workspace-disclosure">
-                            {{ row.expanded ? '⌄' : '›' }}
-                        </span>
-                        <span class="workspace-name">{{ row.label }}</span>
-                        <span v-for="status in row.statuses" :key="status" class="workspace-status">
-                            {{ status }}
-                        </span>
-                    </div>
-                </div>
-            </section>
+            </div>
         </div>
         <div
-            v-if="currentActionRow?.kind === 'folder' || currentActionRow?.documentId"
+            v-if="currentActionRow?.kind === 'folder'"
             class="workspace-action-toolbar"
             role="group"
             :aria-label="`${currentActionRow?.label ?? '当前项'} 操作`"
@@ -456,16 +407,6 @@ function onPointerUp(event: PointerEvent) {
                     ×
                 </button>
             </template>
-            <button
-                v-else-if="currentActionRow?.documentId"
-                type="button"
-                class="workspace-row-action"
-                :aria-label="`关闭 ${currentActionRow.label}`"
-                title="关闭文件"
-                @click="emit('close-document', currentActionRow.documentId)"
-            >
-                ×
-            </button>
         </div>
         <div
             class="workspace-resize-handle"

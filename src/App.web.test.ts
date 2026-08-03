@@ -89,6 +89,15 @@ const mocks = vi.hoisted(() => ({
     >(),
     diskContents: new Map<string, string>(),
     diskRevisions: new Map<string, number>(),
+    workspaceFolderEntries: new Map<
+        string,
+        Array<{
+            path: string;
+            name: string;
+            kind: "directory" | "md" | "mdx";
+            children: [];
+        }>
+    >(),
     workspaceSession: null as null | {
         version: 1;
         documents: Array<{
@@ -314,7 +323,8 @@ const mocks = vi.hoisted(() => ({
         }
         if (command === "scan_workspace_folder") {
             const path = (args as { path: string }).path;
-            return { path, entries: [], entryCount: 0, truncated: false };
+            const entries = mocks.workspaceFolderEntries.get(path.toLowerCase()) ?? [];
+            return { path, entries, entryCount: entries.length, truncated: false };
         }
         if (command === "create_mdx") {
             return {
@@ -504,20 +514,17 @@ async function mountWithInactiveConflict() {
     await vi.waitFor(() => expect(mocks.focusHandler).toBeTypeOf("function"));
     findButton(host, "打开文件...")?.click();
     await vi.waitFor(() =>
-        expect(host.querySelectorAll('[role="treeitem"]')).toHaveLength(2),
+        expect(host.querySelectorAll('[role="tab"]')).toHaveLength(2),
     );
-    documentRow(host, "a")?.click();
+    documentTab(host, "a")?.click();
     await nextTick();
     mocks.editorUpdate?.("local a");
-    documentRow(host, "b")?.click();
+    documentTab(host, "b")?.click();
     await nextTick();
     mocks.diskContents.set("c:\\notes\\a.mdx", "disk a");
     mocks.diskRevisions.set("c:\\notes\\a.mdx", 2);
     await mocks.focusHandler?.({ payload: true });
-    await vi.waitFor(() =>
-        expect(documentRow(host, "a")?.textContent).toContain("外部更改"),
-    );
-    documentRow(host, "a")?.click();
+    documentTab(host, "a")?.click();
     await vi.waitFor(() =>
         expect(
             host.querySelector(
@@ -550,6 +557,7 @@ beforeEach(() => {
     mocks.drafts.clear();
     mocks.diskContents.clear();
     mocks.diskRevisions.clear();
+    mocks.workspaceFolderEntries.clear();
     mocks.workspaceSession = null;
     Object.defineProperty(HTMLDialogElement.prototype, "showModal", {
         configurable: true,
@@ -786,7 +794,7 @@ describe("App 多文档工作区", () => {
             expect(host.querySelector(".menu-document-name")?.textContent).toContain("a"),
         );
 
-        documentRow(host, "b")?.click();
+        documentTab(host, "b")?.click();
 
         await vi.waitFor(() =>
             expect(mocks.getMoraEditorMarkdown?.()).toBe(
@@ -817,11 +825,7 @@ describe("App 多文档工作区", () => {
             ?.click();
 
         await vi.waitFor(() => {
-            const names = Array.from(host.querySelectorAll('[role="treeitem"]')).map(
-                (item) => item.textContent?.trim(),
-            );
-            expect(names).toContain("a");
-            expect(names).toContain("b");
+            expect(host.querySelectorAll('[role="tab"]')).toHaveLength(2);
             expect(mocks.getMoraEditorMarkdown?.()).toBe("# b");
         });
         expect(mocks.openDialog).toHaveBeenCalledWith({
@@ -835,9 +839,7 @@ describe("App 多文档工作区", () => {
         });
 
         const activate = async (name: string) => {
-            Array.from(host.querySelectorAll('[role="treeitem"]'))
-                .find((item) => item.textContent?.includes(name))
-                ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+            documentTab(host, name)?.click();
             await nextTick();
         };
         await activate("a");
@@ -887,18 +889,13 @@ describe("App 多文档工作区", () => {
             )
             ?.click();
         await vi.waitFor(() =>
-            expect(host.querySelectorAll('[role="treeitem"]')).toHaveLength(2),
+            expect(host.querySelectorAll('[role="tab"]')).toHaveLength(2),
         );
-        const rows = Array.from(host.querySelectorAll<HTMLElement>('[role="treeitem"]'));
-        const aRow = rows.find((row) => row.textContent?.includes("a"));
-        const bRow = rows.find((row) => row.textContent?.includes("b"));
-        aRow?.click();
+        documentTab(host, "a")?.click();
         await nextTick();
         mocks.editorUpdate?.("dirty a");
         await nextTick();
-        bRow?.click();
-        await nextTick();
-        aRow?.dispatchEvent(new FocusEvent("focus"));
+        documentTab(host, "b")?.click();
         await nextTick();
 
         host.querySelector<HTMLButtonElement>('[aria-label="关闭 a"]')?.click();
@@ -944,11 +941,7 @@ describe("App 多文档工作区", () => {
             ?.click();
 
         await vi.waitFor(() => {
-            const names = Array.from(host.querySelectorAll('[role="treeitem"]')).map(
-                (item) => item.textContent?.trim(),
-            );
-            expect(names).toContain("good-a");
-            expect(names).toContain("good-b");
+            expect(host.querySelectorAll('[role="tab"]')).toHaveLength(2);
             expect(host.textContent).toContain("bad.mdx");
         });
     });
@@ -969,16 +962,12 @@ describe("App 多文档工作区", () => {
             )
             ?.click();
         await vi.waitFor(() =>
-            expect(host.querySelectorAll('[role="treeitem"]')).toHaveLength(2),
+            expect(host.querySelectorAll('[role="tab"]')).toHaveLength(2),
         );
-        const row = (name: string) =>
-            Array.from(host.querySelectorAll<HTMLElement>('[role="treeitem"]')).find(
-                (item) => item.querySelector(".workspace-name")?.textContent === name,
-            );
-        row("a")?.click();
+        documentTab(host, "a")?.click();
         await nextTick();
         mocks.editorUpdate?.("local a");
-        row("b")?.click();
+        documentTab(host, "b")?.click();
         await nextTick();
 
         mocks.diskContents.set("c:\\notes\\a.mdx", "disk a");
@@ -991,11 +980,10 @@ describe("App 多文档工作区", () => {
         await mocks.focusHandler?.({ payload: true });
         await vi.waitFor(() => {
             expect(mocks.getMoraEditorMarkdown?.()).toBe("disk b");
-            expect(row("a")?.textContent).toContain("外部更改");
         });
         expect(mocks.releaseDocument).toHaveBeenCalledWith("document-2");
 
-        row("a")?.click();
+        documentTab(host, "a")?.click();
         await vi.waitFor(() => {
             expect(
                 host.querySelector(
@@ -1008,7 +996,7 @@ describe("App 多文档工作区", () => {
 
     it("冲突覆盖的延迟决定始终保存发起文档而不是当前文档", async () => {
         const host = await mountWithInactiveConflict();
-        documentRow(host, "b")?.click();
+        documentTab(host, "b")?.click();
         await nextTick();
 
         findButton(host, "覆盖磁盘版本")?.click();
@@ -1029,7 +1017,7 @@ describe("App 多文档工作区", () => {
 
     it("冲突重新加载只丢弃目标草稿并释放目标编辑器状态", async () => {
         const host = await mountWithInactiveConflict();
-        documentRow(host, "b")?.click();
+        documentTab(host, "b")?.click();
         await nextTick();
 
         findButton(host, "重新加载磁盘版本")?.click();
@@ -1040,15 +1028,14 @@ describe("App 多文档工作区", () => {
             });
             expect(mocks.releaseDocument).toHaveBeenCalledWith("document-1");
         });
-        documentRow(host, "a")?.click();
+        documentTab(host, "a")?.click();
         await vi.waitFor(() => expect(mocks.getMoraEditorMarkdown?.()).toBe("disk a"));
-        expect(documentRow(host, "a")?.textContent).not.toContain("外部更改");
     });
 
     it("冲突另存为保存目标内容且不覆盖原路径", async () => {
         mocks.saveDialog.mockResolvedValue("C:\\notes\\a-copy.mdx");
         const host = await mountWithInactiveConflict();
-        documentRow(host, "b")?.click();
+        documentTab(host, "b")?.click();
         await nextTick();
 
         findButton(host, "另存为")?.click();
@@ -1084,7 +1071,6 @@ describe("App 多文档工作区", () => {
             ).toBeNull(),
         );
         expect(mocks.getMoraEditorMarkdown?.()).toBe("local a");
-        expect(documentRow(host, "a")?.textContent).toContain("外部更改");
         expect(mocks.invoke).not.toHaveBeenCalledWith("save_mdx", expect.anything());
         expect(mocks.invoke).not.toHaveBeenCalledWith("delete_draft", expect.anything());
     });
@@ -1343,8 +1329,8 @@ describe("App 多文档工作区", () => {
         cleanup = () => app.unmount();
         await vi.waitFor(() => expect(mocks.closeHandler).toBeTypeOf("function"));
         findButton(host, "打开文件...")?.click();
-        await vi.waitFor(() => expect(documentRow(host, "a.md")).not.toBeUndefined());
-        documentRow(host, "a.md")?.click();
+        await vi.waitFor(() => expect(documentTab(host, "a.md")).not.toBeUndefined());
+        documentTab(host, "a.md")?.click();
         await nextTick();
         findButton(host, "保存")?.click();
         await vi.waitFor(() => expect(host.textContent).toContain("继续导入"));
@@ -1360,12 +1346,12 @@ describe("App 多文档工作区", () => {
 
         host.querySelector<HTMLButtonElement>('[aria-label="关闭 a.md"]')?.click();
         await nextTick();
-        expect(documentRow(host, "a.md")).not.toBeUndefined();
+        expect(documentTab(host, "a.md")).not.toBeUndefined();
         expect(
             host.querySelector('[aria-labelledby="leave-dialog-title"][open]'),
         ).toBeNull();
 
-        documentRow(host, "b.md")?.click();
+        documentTab(host, "b.md")?.click();
         await vi.waitFor(() => expect(mocks.getMoraEditorMarkdown?.()).toBe(contentB));
         findButton(host, "继续导入（保留未解决链接）")?.click();
 
@@ -1478,6 +1464,14 @@ describe("App 多文档工作区", () => {
             markdownPlan("![照片](assets/photo.png)"),
         );
         mocks.saveDialog.mockResolvedValue("C:\\notes\\folder-save.mdx");
+        mocks.workspaceFolderEntries.set("c:\\notes", [
+            {
+                path: sourcePath,
+                name: "folder-save.md",
+                kind: "md",
+                children: [],
+            },
+        ]);
         const host = await mountMarkdownImport(sourcePath, sourceContent);
         mocks.openDialog.mockResolvedValue("C:\\notes");
         findButton(host, "打开文件夹...")?.click();
@@ -1510,12 +1504,12 @@ describe("App 桌面关闭", () => {
         await vi.waitFor(() => expect(mocks.closeHandler).toBeTypeOf("function"));
         findButton(host, "打开文件...")?.click();
         await vi.waitFor(() =>
-            expect(host.querySelectorAll('[role="treeitem"]')).toHaveLength(2),
+            expect(host.querySelectorAll('[role="tab"]')).toHaveLength(2),
         );
-        documentRow(host, "a")?.click();
+        documentTab(host, "a")?.click();
         await nextTick();
         mocks.editorUpdate?.("dirty a");
-        documentRow(host, "b")?.click();
+        documentTab(host, "b")?.click();
         await nextTick();
         mocks.editorUpdate?.("dirty b");
         await nextTick();
@@ -1536,7 +1530,7 @@ describe("App 桌面关闭", () => {
 
         expect(event.preventDefault).toHaveBeenCalledTimes(1);
         expect(mocks.windowClose).not.toHaveBeenCalled();
-        expect(host.querySelectorAll('[role="treeitem"]')).toHaveLength(2);
+        expect(host.querySelectorAll('[role="tab"]')).toHaveLength(2);
         expect(mocks.invoke).not.toHaveBeenCalledWith("delete_draft", expect.anything());
     });
 
@@ -1553,7 +1547,7 @@ describe("App 桌面关闭", () => {
         await closing;
 
         expect(mocks.windowClose).not.toHaveBeenCalled();
-        expect(host.querySelectorAll('[role="treeitem"]')).toHaveLength(2);
+        expect(host.querySelectorAll('[role="tab"]')).toHaveLength(2);
         expect(host.textContent).toContain("无法保存 C:\\notes\\b.mdx");
         expect(mocks.invoke).not.toHaveBeenCalledWith("delete_draft", expect.anything());
     });

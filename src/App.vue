@@ -2031,7 +2031,7 @@ function stringifyError(error: unknown) {
                 :width="sidebarWidth"
                 @activate="activateDocument"
                 @open-path="openWorkspacePath"
-                @close-document="closeDocument"
+                @open-folder="openFolder"
                 @close-folder="closeFolder"
                 @toggle-expanded="toggleWorkspacePath"
                 @update:collapsed="updateSidebarCollapsed"

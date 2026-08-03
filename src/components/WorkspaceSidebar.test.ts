@@ -103,7 +103,7 @@ function mountSidebar(overrides: Partial<SidebarProps> = {}) {
                 ...props,
                 onActivate: (value: string) => record("activate", value),
                 onOpenPath: (value: string) => record("open-path", value),
-                onCloseDocument: (value: string) => record("close-document", value),
+                onOpenFolder: () => record("open-folder"),
                 onCloseFolder: (value: string) => record("close-folder", value),
                 onRefreshFolder: (value: string) => record("refresh-folder", value),
                 onToggleExpanded: (value: string) => record("toggle-expanded", value),
@@ -111,8 +111,8 @@ function mountSidebar(overrides: Partial<SidebarProps> = {}) {
                 "onUpdate:width": (value: number) => record("update:width", value),
             }),
     });
-    const record = (event: string, value: unknown) => {
-        emitted.set(event, [...(emitted.get(event) ?? []), [value]]);
+    const record = (event: string, ...values: unknown[]) => {
+        emitted.set(event, [...(emitted.get(event) ?? []), values]);
     };
     app.mount(host);
     cleanup = () => app.unmount();
@@ -127,13 +127,6 @@ function mountSidebar(overrides: Partial<SidebarProps> = {}) {
             await nextTick();
         },
     };
-}
-
-function sectionText(sidebar: ReturnType<typeof mountSidebar>, title: string) {
-    const section = Array.from(sidebar.host.querySelectorAll<HTMLElement>("section")).find(
-        (item) => item.querySelector("h2")?.textContent === title,
-    );
-    return section?.textContent ?? "";
 }
 
 function pointerEvent(type: string, pointerId: number, clientX: number) {
@@ -180,7 +173,7 @@ function installMatchMedia(initialMatches: boolean) {
 }
 
 describe("WorkspaceSidebar", () => {
-    it("shows independent files separately and places folder-owned files only in the tree", () => {
+    it("renders only folder roots and never duplicates independent open documents", () => {
         const sidebar = mountSidebar({
             documents: [
                 documentItem("C:\\Root\\inside.mdx"),
@@ -191,10 +184,16 @@ describe("WorkspaceSidebar", () => {
             expandedPaths: ["C:\\Root"],
         });
 
-        expect(sectionText(sidebar, "打开的文件")).toContain("outside.mdx");
-        expect(sectionText(sidebar, "打开的文件")).toContain("未命名文档 1");
-        expect(sectionText(sidebar, "打开的文件")).not.toContain("inside.mdx");
-        expect(sectionText(sidebar, "打开的文件夹")).toContain("inside.mdx");
+        expect(sidebar.host.textContent).toContain("inside.mdx");
+        expect(sidebar.host.textContent).not.toContain("outside.mdx");
+        expect(sidebar.host.textContent).not.toContain("未命名文档 1");
+        expect(sidebar.host.textContent).not.toContain("打开的文件");
+    });
+
+    it("offers opening a folder when the workspace has no roots", () => {
+        const sidebar = mountSidebar();
+        sidebar.host.querySelector<HTMLButtonElement>('[aria-label="打开文件夹"]')?.click();
+        expect(sidebar.emitted("open-folder")).toEqual([[]]);
     });
 
     it("uses the longest folder root and supports arrows plus Enter", async () => {
@@ -225,12 +224,14 @@ describe("WorkspaceSidebar", () => {
     it("exposes document statuses and clamps pointer resizing", async () => {
         const sidebar = mountSidebar({
             documents: [
-                documentItem("C:\\Other\\state.mdx", {
+                documentItem("C:\\Root\\state.mdx", {
                     dirty: true,
                     conflict: true,
                     unavailable: true,
                 }),
             ],
+            folders: [folder("C:\\Root", [file("C:\\Root\\state.mdx")])],
+            expandedPaths: ["C:\\Root"],
         });
 
         expect(sidebar.host.textContent).toContain("未保存");
@@ -324,11 +325,9 @@ describe("WorkspaceSidebar", () => {
         expect(collapsedRoot.emitted("toggle-expanded")).toBeUndefined();
     });
 
-    it("keeps close and refresh actions outside the tree key handler", async () => {
-        const documentPath = "C:\\Other\\outside.mdx";
+    it("keeps folder refresh and close actions outside the tree key handler", async () => {
         const root = "C:\\Root";
         const sidebar = mountSidebar({
-            documents: [documentItem(documentPath)],
             folders: [folder(root)],
         });
         const tree = sidebar.host.querySelector<HTMLElement>("[role=tree]");
@@ -338,16 +337,6 @@ describe("WorkspaceSidebar", () => {
         expect(toolbar?.getAttribute("role")).toBe("group");
         expect(sidebar.host.querySelector('[role="toolbar"]')).toBeNull();
         expect(tree?.contains(toolbar)).toBe(false);
-        const close = toolbar?.querySelector<HTMLButtonElement>('[aria-label="关闭 outside.mdx"]');
-        if (!close) throw new Error("未找到文档关闭操作");
-
-        close.focus();
-        dispatchKey(close, "Enter");
-        await nextTick();
-        expect(document.activeElement).toBe(close);
-        expect(sidebar.emitted("activate")).toBeUndefined();
-        close.click();
-        expect(sidebar.emitted("close-document")).toEqual([[documentPath]]);
 
         treeItem(sidebar, "folder:c:\\root").focus();
         await nextTick();
