@@ -92,6 +92,7 @@ const loading = ref(false);
 const statusMessage = ref("准备就绪");
 const errorMessage = ref("");
 const editorRef = ref<MoraEditorHandle | null>(null);
+const documentTabsRef = ref<{ focusDocument: (id: string) => void } | null>(null);
 const lastSearchQuery = ref("");
 const findPanel = ref<InstanceType<typeof FindReplacePanel> | null>(null);
 
@@ -1337,11 +1338,17 @@ const closeActions = {
 async function closeDocument(id: string) {
     if (savingDocumentIds.has(id)) {
         statusMessage.value = "请先完成当前保存操作";
-        return;
+        await nextTick();
+        documentTabsRef.value?.focusDocument(id);
+        return false;
     }
     editorRef.value?.cancelAi();
     const closed = await session.closeDocument(id, closeActions);
     if (closed) editorRef.value?.releaseDocument(id);
+    await nextTick();
+    const focusId = closed ? activeDocumentId.value : id;
+    if (focusId) documentTabsRef.value?.focusDocument(focusId);
+    return closed;
 }
 
 async function closeActiveDocument() {
@@ -2091,6 +2098,7 @@ function stringifyError(error: unknown) {
 
             <div class="workspace-center">
                 <DocumentTabs
+                    ref="documentTabsRef"
                     :documents="documents"
                     :active-document-id="activeDocumentId"
                     @activate="activateDocument"

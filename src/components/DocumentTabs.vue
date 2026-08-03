@@ -15,6 +15,14 @@ const emit = defineEmits<{
 const scrollHost = ref<HTMLElement | null>(null);
 const tabTargets = new Map<string, HTMLButtonElement>();
 
+function documentStatus(document: OpenDocument) {
+    const statuses: string[] = [];
+    if (document.dirty) statuses.push("未保存");
+    if (document.conflict) statuses.push("外部更改冲突");
+    if (document.unavailable) statuses.push("路径不可用");
+    return statuses.length > 0 ? `，${statuses.join("，")}` : "";
+}
+
 function setTabTarget(id: string, element: Element | ComponentPublicInstance | null) {
     if (element instanceof HTMLButtonElement) tabTargets.set(id, element);
     else tabTargets.delete(id);
@@ -26,6 +34,12 @@ function activateAt(index: number) {
     emit("activate", document.id);
     tabTargets.get(document.id)?.focus();
 }
+
+function focusDocument(id: string) {
+    tabTargets.get(id)?.focus();
+}
+
+defineExpose({ focusDocument });
 
 function onKeydown(event: KeyboardEvent, index: number) {
     if (event.key === "ArrowRight") {
@@ -40,6 +54,10 @@ function onKeydown(event: KeyboardEvent, index: number) {
     } else if (event.key === "End") {
         event.preventDefault();
         activateAt(props.documents.length - 1);
+    } else if (event.key === "Delete") {
+        event.preventDefault();
+        const document = props.documents[index];
+        if (document) emit("close", document.id);
     }
 }
 
@@ -84,7 +102,8 @@ watch(
                     role="tab"
                     aria-controls="document-editor-panel"
                     :aria-selected="document.id === activeDocumentId"
-                    :aria-label="`切换到 ${document.displayName}${document.dirty ? '，未保存' : ''}`"
+                    :aria-label="`切换到 ${document.displayName}${documentStatus(document)}`"
+                    aria-keyshortcuts="Delete"
                     :tabindex="document.id === activeDocumentId ? 0 : -1"
                     @click="emit('activate', document.id)"
                     @keydown="onKeydown($event, index)"
@@ -95,11 +114,26 @@ watch(
                         aria-hidden="true"
                     />
                     <span class="document-tab-name">{{ document.displayName }}</span>
+                    <span
+                        v-if="document.conflict"
+                        class="document-tab-state conflict"
+                        aria-hidden="true"
+                    >
+                        冲突
+                    </span>
+                    <span
+                        v-if="document.unavailable"
+                        class="document-tab-state unavailable"
+                        aria-hidden="true"
+                    >
+                        不可用
+                    </span>
                 </button>
                 <button
                     type="button"
                     class="document-tab-close"
                     :aria-label="`关闭 ${document.displayName}`"
+                    tabindex="-1"
                     @click.stop="emit('close', document.id)"
                 >
                     ×

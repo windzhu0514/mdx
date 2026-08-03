@@ -89,6 +89,7 @@ const mocks = vi.hoisted(() => ({
     >(),
     diskContents: new Map<string, string>(),
     diskRevisions: new Map<string, number>(),
+    unavailableDiskPaths: new Set<string>(),
     workspaceFolderEntries: new Map<
         string,
         Array<{
@@ -190,13 +191,17 @@ const mocks = vi.hoisted(() => ({
         if (command === "get_disk_revisions") {
             return (args as { paths: string[] }).paths.map((path) => ({
                 path,
-                available: true,
-                revision: {
-                    path,
-                    modifiedAtMs: mocks.diskRevisions.get(path.toLowerCase()) ?? 1,
-                    size: 1,
-                },
-                error: null,
+                available: !mocks.unavailableDiskPaths.has(path.toLowerCase()),
+                revision: mocks.unavailableDiskPaths.has(path.toLowerCase())
+                    ? null
+                    : {
+                          path,
+                          modifiedAtMs: mocks.diskRevisions.get(path.toLowerCase()) ?? 1,
+                          size: 1,
+                      },
+                error: mocks.unavailableDiskPaths.has(path.toLowerCase())
+                    ? "unavailable"
+                    : null,
             }));
         }
         if (command === "import_markdown") {
@@ -421,7 +426,7 @@ function documentRow(host: HTMLElement, name: string) {
 
 function documentTab(host: HTMLElement, name: string) {
     return Array.from(host.querySelectorAll<HTMLButtonElement>('[role="tab"]')).find(
-        (item) => item.textContent?.trim() === name,
+        (item) => item.querySelector(".document-tab-name")?.textContent === name,
     );
 }
 
@@ -585,6 +590,7 @@ beforeEach(() => {
     mocks.drafts.clear();
     mocks.diskContents.clear();
     mocks.diskRevisions.clear();
+    mocks.unavailableDiskPaths.clear();
     mocks.workspaceFolderEntries.clear();
     mocks.workspaceSession = null;
     Object.defineProperty(HTMLDialogElement.prototype, "showModal", {
@@ -1027,6 +1033,64 @@ describe("App 多文档工作区", () => {
         expect(host.querySelector(".menu-document-name")?.textContent?.trim()).toBe("b");
     });
 
+    it("键盘关闭成功后把焦点移到新的活动标签", async () => {
+        mocks.isTauri.mockReturnValue(true);
+        mocks.openDialog.mockResolvedValue(["C:\\notes\\a.mdx", "C:\\notes\\b.mdx"]);
+        const host = document.createElement("div");
+        document.body.append(host);
+        const app = createApp(App);
+        app.mount(host);
+        cleanup = () => app.unmount();
+
+        findButton(host, "打开文件...")?.click();
+        await vi.waitFor(() => expect(documentTab(host, "b")).not.toBeUndefined());
+        const activeTab = documentTab(host, "b");
+        activeTab?.focus();
+        activeTab?.dispatchEvent(
+            new KeyboardEvent("keydown", { bubbles: true, key: "Delete" }),
+        );
+
+        await vi.waitFor(() => expect(documentTab(host, "b")).toBeUndefined());
+        expect(document.activeElement).toBe(documentTab(host, "a"));
+    });
+
+    it("取消键盘关闭后把焦点还给原标签", async () => {
+        mocks.isTauri.mockReturnValue(true);
+        mocks.openDialog.mockResolvedValue(["C:\\notes\\a.mdx", "C:\\notes\\b.mdx"]);
+        const host = document.createElement("div");
+        document.body.append(host);
+        const app = createApp(App);
+        app.mount(host);
+        cleanup = () => app.unmount();
+
+        findButton(host, "打开文件...")?.click();
+        await vi.waitFor(() => expect(documentTab(host, "a")).not.toBeUndefined());
+        documentTab(host, "a")?.click();
+        await nextTick();
+        mocks.editorUpdate?.("dirty a");
+        await nextTick();
+        const originalTab = documentTab(host, "a");
+        originalTab?.focus();
+        originalTab?.dispatchEvent(
+            new KeyboardEvent("keydown", { bubbles: true, key: "Delete" }),
+        );
+        await vi.waitFor(() =>
+            expect(
+                host.querySelector('[aria-labelledby="leave-dialog-title"][open]'),
+            ).not.toBeNull(),
+        );
+        const cancel = findButton(host, "取消");
+        cancel?.focus();
+        cancel?.click();
+
+        await vi.waitFor(() =>
+            expect(
+                host.querySelector('[aria-labelledby="leave-dialog-title"][open]'),
+            ).toBeNull(),
+        );
+        expect(document.activeElement).toBe(originalTab);
+    });
+
     it("批量打开时隔离单文件失败并继续处理后续路径", async () => {
         mocks.isTauri.mockReturnValue(true);
         const badPath = "C:\\notes\\bad.mdx";
@@ -1052,6 +1116,31 @@ describe("App 多文档工作区", () => {
         await vi.waitFor(() => {
             expect(host.querySelectorAll('[role="tab"]')).toHaveLength(2);
             expect(host.textContent).toContain("bad.mdx");
+            expect(documentTab(host, "good-a")).not.toBeUndefined();
+            expect(documentTab(host, "good-b")).not.toBeUndefined();
+            expect(documentTab(host, "bad")).toBeUndefined();
+        });
+    });
+
+    it("独立文档被外部删除后在标签上显示不可用状态", async () => {
+        mocks.isTauri.mockReturnValue(true);
+        mocks.openDialog.mockResolvedValue(["C:\\notes\\a.mdx"]);
+        const host = document.createElement("div");
+        document.body.append(host);
+        const app = createApp(App);
+        app.mount(host);
+        cleanup = () => app.unmount();
+
+        findButton(host, "打开文件...")?.click();
+        await vi.waitFor(() => expect(documentTab(host, "a")).not.toBeUndefined());
+        mocks.unavailableDiskPaths.add("c:\\notes\\a.mdx");
+        await mocks.focusHandler?.({ payload: true });
+
+        await vi.waitFor(() => {
+            expect(documentTab(host, "a")?.textContent).toContain("不可用");
+            expect(documentTab(host, "a")?.getAttribute("aria-label")).toContain(
+                "路径不可用",
+            );
         });
     });
 
@@ -1090,6 +1179,10 @@ describe("App 多文档工作区", () => {
         await vi.waitFor(() => {
             expect(mocks.getMoraEditorMarkdown?.()).toBe("disk b");
         });
+        expect(documentTab(host, "a")?.textContent).toContain("冲突");
+        expect(documentTab(host, "a")?.getAttribute("aria-label")).toContain(
+            "外部更改冲突",
+        );
         expect(mocks.releaseDocument).toHaveBeenCalledWith("document-2");
 
         documentTab(host, "a")?.click();

@@ -124,6 +124,21 @@ summary {
     white-space: nowrap;
 }
 
+.document-tab-state {
+    flex: 0 0 auto;
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 1;
+}
+
+.document-tab-state.conflict {
+    color: var(--color-danger);
+}
+
+.document-tab-state.unavailable {
+    color: var(--color-text-muted);
+}
+
 .document-tab-dirty {
     width: 6px;
     height: 6px;

@@ -22,7 +22,11 @@ afterEach(() => {
     vi.restoreAllMocks();
 });
 
-function documentItem(id: string, dirty = false): OpenDocument {
+function documentItem(
+    id: string,
+    dirty = false,
+    state: Partial<Pick<OpenDocument, "conflict" | "unavailable">> = {},
+): OpenDocument {
     return {
         id,
         path: `C:\\notes\\${id}.mdx`,
@@ -34,19 +38,22 @@ function documentItem(id: string, dirty = false): OpenDocument {
         meta: null,
         dirty,
         diskRevision: null,
-        conflict: false,
-        unavailable: false,
+        conflict: state.conflict ?? false,
+        unavailable: state.unavailable ?? false,
     };
 }
 
-function mountTabs(activeDocumentId = "b") {
+function mountTabs(
+    activeDocumentId = "b",
+    documents = [documentItem("a", true), documentItem("b")],
+) {
     const emitted = new Map<string, string[]>();
     const host = document.createElement("div");
     document.body.append(host);
     app = createApp({
         render: () =>
             h(DocumentTabs, {
-                documents: [documentItem("a", true), documentItem("b")],
+                documents,
                 activeDocumentId,
                 onActivate: (id: string) =>
                     emitted.set("activate", [...(emitted.get("activate") ?? []), id]),
@@ -66,6 +73,22 @@ describe("DocumentTabs", () => {
         expect(tabs[0].getAttribute("aria-label")).toContain("未保存");
         expect(tabs[1].getAttribute("aria-selected")).toBe("true");
         expect(tabs[1].getAttribute("tabindex")).toBe("0");
+    });
+
+    it("renders conflict and unavailable states visibly and in accessible names", () => {
+        const { host } = mountTabs("b", [
+            documentItem("a", false, { conflict: true }),
+            documentItem("b", false, { unavailable: true }),
+        ]);
+        const conflictTab = host.querySelector<HTMLElement>('[aria-label^="切换到 a"]');
+        const unavailableTab = host.querySelector<HTMLElement>(
+            '[aria-label^="切换到 b"]',
+        );
+
+        expect(conflictTab?.textContent).toContain("冲突");
+        expect(conflictTab?.getAttribute("aria-label")).toContain("外部更改冲突");
+        expect(unavailableTab?.textContent).toContain("不可用");
+        expect(unavailableTab?.getAttribute("aria-label")).toContain("路径不可用");
     });
 
     it("emits activate and close without owning document state", async () => {
@@ -90,5 +113,25 @@ describe("DocumentTabs", () => {
         await nextTick();
         expect(emitted.get("activate")).toEqual(["b"]);
         expect(scrollIntoView).toHaveBeenCalled();
+    });
+
+    it("keeps close buttons out of the sequential tab order", () => {
+        const { host } = mountTabs();
+        const closeButtons =
+            host.querySelectorAll<HTMLButtonElement>(".document-tab-close");
+
+        expect(Array.from(closeButtons).map((button) => button.tabIndex)).toEqual([
+            -1, -1,
+        ]);
+    });
+
+    it("emits close from Delete on the focused tab", async () => {
+        const { host, emitted } = mountTabs();
+        host.querySelector<HTMLButtonElement>('[aria-label^="切换到 b"]')?.dispatchEvent(
+            new KeyboardEvent("keydown", { bubbles: true, key: "Delete" }),
+        );
+        await nextTick();
+
+        expect(emitted.get("close")).toEqual(["b"]);
     });
 });
