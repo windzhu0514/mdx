@@ -1030,6 +1030,14 @@ describe("App 多文档工作区", () => {
         });
         documentTab(host, "a")?.click();
         await vi.waitFor(() => expect(mocks.getMoraEditorMarkdown?.()).toBe("disk a"));
+
+        documentTab(host, "b")?.click();
+        await nextTick();
+        documentTab(host, "a")?.click();
+        await nextTick();
+        expect(
+            host.querySelector('[aria-labelledby="external-conflict-dialog-title"][open]'),
+        ).toBeNull();
     });
 
     it("冲突另存为保存目标内容且不覆盖原路径", async () => {
@@ -1073,6 +1081,17 @@ describe("App 多文档工作区", () => {
         expect(mocks.getMoraEditorMarkdown?.()).toBe("local a");
         expect(mocks.invoke).not.toHaveBeenCalledWith("save_mdx", expect.anything());
         expect(mocks.invoke).not.toHaveBeenCalledWith("delete_draft", expect.anything());
+
+        documentTab(host, "b")?.click();
+        await nextTick();
+        documentTab(host, "a")?.click();
+        await vi.waitFor(() =>
+            expect(
+                host.querySelector(
+                    '[aria-labelledby="external-conflict-dialog-title"][open]',
+                ),
+            ).not.toBeNull(),
+        );
     });
 
     it("最近打开菜单只显示十条并通过查看全部打开完整历史", async () => {

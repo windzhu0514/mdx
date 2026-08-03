@@ -579,8 +579,6 @@ Expected: PASS; the longest-root, keyboard, resize, compact and folder-action ca
 
 - [ ] **Step 4: Wire the empty action and move independent-document App tests to tabs**
 
-In `src/App.vue`, declare `compactLayout`, `compactPanel` and `compactMedia` near the existing sidebar/TOC preferences. Declare the computed values below immediately after the existing `const toc = computed(...)` so every dependency is initialized before use:
-
 ```vue
 @open-folder="openFolder"
 ```
