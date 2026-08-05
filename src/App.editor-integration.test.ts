@@ -207,10 +207,12 @@ function findButton(host: HTMLElement, label: string): HTMLButtonElement {
     return button;
 }
 
-function documentTab(host: HTMLElement, name: string) {
-    return Array.from(host.querySelectorAll<HTMLButtonElement>('[role="tab"]')).find(
-        (item) => item.textContent?.trim() === name,
-    );
+function openDocumentRow(host: HTMLElement, name: string) {
+    return Array.from(
+        host.querySelectorAll<HTMLElement>(
+            '[role="treeitem"][data-tree-key^="document:"]',
+        ),
+    ).find((item) => item.querySelector(".workspace-name")?.textContent === name);
 }
 
 async function mountApp(): Promise<HTMLElement> {
@@ -379,12 +381,12 @@ describe("App 编辑器状态集成", () => {
             await nextTick();
             findButton(host, "新建").click();
             await vi.waitFor(() =>
-                expect(documentTab(host, "未命名文档 2")).not.toBeUndefined(),
+                expect(openDocumentRow(host, "未命名文档 2")).not.toBeUndefined(),
             );
             mocks[editorKind]?.emitUpdate("B edit");
             await nextTick();
 
-            documentTab(host, "未命名文档 1")?.click();
+            openDocumentRow(host, "未命名文档 1")?.click();
             await vi.waitFor(() => expect(editorValue(host, editorKind)).toBe("A edit"));
             expect(editableMilkdown?.cancelAi).toHaveBeenCalled();
 
@@ -398,7 +400,7 @@ describe("App 编辑器状态集成", () => {
                 ).toBe("A edit");
             });
 
-            documentTab(host, "未命名文档 2")?.click();
+            openDocumentRow(host, "未命名文档 2")?.click();
             await vi.waitFor(() => expect(editorValue(host, editorKind)).toBe("B edit"));
         },
     );
@@ -415,8 +417,8 @@ describe("App 编辑器状态集成", () => {
         window.dispatchEvent(event);
         await nextTick();
 
-        expect(documentTab(host, "未命名文档 1")).not.toBeUndefined();
-        expect(documentTab(host, "未命名文档 2")).toBeUndefined();
+        expect(openDocumentRow(host, "未命名文档 1")).not.toBeUndefined();
+        expect(openDocumentRow(host, "未命名文档 2")).toBeUndefined();
     });
 
     it("资源 Blob URL 跨文档切换存活并在关闭所属文档时撤销", async () => {
@@ -428,11 +430,11 @@ describe("App 编辑器状态集成", () => {
 
         findButton(host, "新建").click();
         await vi.waitFor(() =>
-            expect(documentTab(host, "未命名文档 2")).not.toBeUndefined(),
+            expect(openDocumentRow(host, "未命名文档 2")).not.toBeUndefined(),
         );
         expect(URL.revokeObjectURL).not.toHaveBeenCalledWith(mocks.objectUrl);
 
-        documentTab(host, "未命名文档 1")?.click();
+        openDocumentRow(host, "未命名文档 1")?.click();
         await vi.waitFor(() =>
             expect(editorValue(host, "milkdown")).toBe(`![图](${mocks.objectUrl})`),
         );
@@ -440,14 +442,16 @@ describe("App 编辑器状态集成", () => {
         await nextTick();
         expect(editorValue(host, "source")).toBe("![图](assets/image-resource-id.png)");
 
-        documentTab(host, "未命名文档 1")?.click();
+        openDocumentRow(host, "未命名文档 1")?.click();
         await nextTick();
         host.querySelector<HTMLButtonElement>(
             '[aria-label="关闭 未命名文档 1"]',
         )?.click();
         await vi.waitFor(() => expect(host.textContent).toContain("放弃修改"));
         findButton(host, "放弃修改").click();
-        await vi.waitFor(() => expect(documentTab(host, "未命名文档 1")).toBeUndefined());
+        await vi.waitFor(() =>
+            expect(openDocumentRow(host, "未命名文档 1")).toBeUndefined(),
+        );
 
         expect(URL.revokeObjectURL).toHaveBeenCalledWith(mocks.objectUrl);
     });
@@ -685,7 +689,7 @@ describe("App 编辑器状态集成", () => {
                 mocks.invoke.mock.calls.filter(([command]) => command === "save_mdx_as"),
             ).toHaveLength(1),
         );
-        documentTab(host, "未命名文档 1")?.click();
+        openDocumentRow(host, "未命名文档 1")?.click();
         await nextTick();
         expect(editorValue(host, "milkdown")).toBe("");
         findButton(host, "另存为...").click();
@@ -716,7 +720,7 @@ describe("App PDF 打印视图", () => {
         await vi.waitFor(() =>
             expect(host.querySelector(".menu-document-name")?.textContent).toContain("b"),
         );
-        documentTab(host, "a")?.click();
+        openDocumentRow(host, "a")?.click();
         await nextTick();
         mocks.milkdown?.emitUpdate("# A changed");
         await nextTick();
@@ -729,7 +733,7 @@ describe("App PDF 打印视图", () => {
                 true,
             ),
         );
-        documentTab(host, "b")?.click();
+        openDocumentRow(host, "b")?.click();
         await nextTick();
         pendingSave.resolve(createNote("# A changed", pathA));
 
@@ -754,7 +758,7 @@ describe("App PDF 打印视图", () => {
                 "pdf-b",
             ),
         );
-        documentTab(host, "pdf-a")?.click();
+        openDocumentRow(host, "pdf-a")?.click();
         await nextTick();
         const targetEditor = mocks.milkdown;
         const readiness = createDeferred<void>();
@@ -762,7 +766,7 @@ describe("App PDF 打印视图", () => {
 
         findButton(host, "导出 PDF / 打印...").click();
         await vi.waitFor(() => expect(targetEditor?.whenReadyCalls).toBe(1));
-        documentTab(host, "pdf-b")?.click();
+        openDocumentRow(host, "pdf-b")?.click();
         await nextTick();
         readiness.resolve();
         await new Promise((resolve) => window.setTimeout(resolve, 0));
@@ -897,14 +901,14 @@ describe("App 历史版本文档作用域", () => {
                 "history-b",
             ),
         );
-        documentTab(host, "history-a")?.click();
+        openDocumentRow(host, "history-a")?.click();
         await nextTick();
         findButton(host, "历史版本...").click();
         await vi.waitFor(() =>
             expect(mocks.invoke).toHaveBeenCalledWith("list_history", { path: pathA }),
         );
 
-        documentTab(host, "history-b")?.click();
+        openDocumentRow(host, "history-b")?.click();
         await nextTick();
         pendingItems.resolve([
             {
@@ -942,7 +946,7 @@ describe("App 历史版本文档作用域", () => {
                 "restore-b",
             ),
         );
-        const rowA = documentTab(host, "restore-a");
+        const rowA = openDocumentRow(host, "restore-a");
         expect(rowA).toBeDefined();
         rowA?.click();
         await nextTick();
@@ -956,7 +960,7 @@ describe("App 历史版本文档作用域", () => {
             }),
         );
 
-        const rowB = documentTab(host, "restore-b");
+        const rowB = openDocumentRow(host, "restore-b");
         expect(rowB).toBeDefined();
         rowB?.click();
         await vi.waitFor(() =>
@@ -972,7 +976,7 @@ describe("App 历史版本文档作用域", () => {
             createdAt: "2026-08-02T00:00:00Z",
         });
         await new Promise((resolve) => window.setTimeout(resolve, 0));
-        documentTab(host, "restore-a")?.click();
+        openDocumentRow(host, "restore-a")?.click();
         await vi.waitFor(() =>
             expect(host.querySelector(".menu-document-name")?.textContent).toContain(
                 "restore-a",

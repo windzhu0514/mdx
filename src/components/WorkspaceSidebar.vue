@@ -26,7 +26,7 @@ export function owningRoot(path: string, roots: string[]) {
 </script>
 
 <script setup lang="ts">
-import { computed, ref, type ComponentPublicInstance } from "vue";
+import { computed, nextTick, ref, type ComponentPublicInstance } from "vue";
 
 import type { OpenDocument } from "../composables/useDocumentSession";
 import type { WorkspaceFolder, WorkspaceTreeEntry } from "../types/workspace";
@@ -39,7 +39,7 @@ type TreeRow = {
     label: string;
     path: string;
     depth: number;
-    kind: "folder" | "directory" | "file";
+    kind: "document" | "folder" | "directory" | "file";
     expanded: boolean | null;
     active: boolean;
     statuses: string[];
@@ -61,6 +61,7 @@ const emit = defineEmits<{
     activate: [id: string];
     "open-path": [path: string];
     "open-folder": [];
+    "close-document": [id: string];
     "close-folder": [path: string];
     "refresh-folder": [path: string];
     "toggle-expanded": [path: string];
@@ -70,6 +71,7 @@ const emit = defineEmits<{
 const rovingKey = ref<string | null>(null);
 const drag = ref<{ pointerId: number; startX: number; startWidth: number } | null>(null);
 const treeItems = new Map<string, HTMLElement>();
+const openFolderButton = ref<HTMLButtonElement | null>(null);
 
 function clampWidth(value: number) {
     return Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, value));
@@ -110,7 +112,8 @@ const roots = computed(() => visibleFolders.value.map((folder) => folder.path));
 const documentsByPath = computed(() => {
     const result = new Map<string, OpenDocument>();
     for (const document of props.documents) {
-        if (document.path) result.set(normalizePath(document.path), document);
+        const path = document.path ?? document.importSourcePath;
+        if (path) result.set(normalizePath(path), document);
     }
     return result;
 });
@@ -166,18 +169,42 @@ const folderRows = computed<TreeRow[]>(() => {
     return rows;
 });
 
-const rows = computed(() => folderRows.value);
+const documentRows = computed<TreeRow[]>(() =>
+    props.documents.map((document) => ({
+        key: `document:${document.id.toLowerCase()}`,
+        label: document.displayName,
+        path: document.path ?? document.importSourcePath ?? document.id,
+        depth: 1,
+        kind: "document",
+        expanded: null,
+        active: document.id === props.activeDocumentId,
+        statuses: documentStatuses(document),
+        documentId: document.id,
+        folderPath: null,
+    })),
+);
+
+const rows = computed(() => [...documentRows.value, ...folderRows.value]);
+const workspaceSections = computed(() => [
+    { id: "open-documents", title: "已打开文件", rows: documentRows.value },
+    { id: "workspace-folders", title: "文件夹", rows: folderRows.value },
+]);
+const nonEmptyWorkspaceSections = computed(() =>
+    workspaceSections.value.filter((section) => section.rows.length > 0),
+);
 const activeRovingKey = computed(() =>
     rows.value.some((row) => row.key === rovingKey.value)
         ? rovingKey.value
         : (rows.value[0]?.key ?? null),
 );
-const currentActionRow = computed(
-    () => rows.value.find((row) => row.key === activeRovingKey.value) ?? null,
-);
-
 function rowTabindex(row: TreeRow) {
     return row.key === activeRovingKey.value ? 0 : -1;
+}
+
+function rowAriaLabel(row: TreeRow) {
+    return row.statuses.length > 0
+        ? `${row.label}，${row.statuses.join("，")}`
+        : row.label;
 }
 
 function activateRow(row: TreeRow) {
@@ -197,6 +224,18 @@ function selectRow(row: TreeRow) {
     activateRow(row);
 }
 
+function refreshFolder(path: string | null) {
+    if (path) emit("refresh-folder", path);
+}
+
+function closeFolder(path: string | null) {
+    if (path) emit("close-folder", path);
+}
+
+function closeDocument(id: string | null) {
+    if (id) emit("close-document", id);
+}
+
 function focusRow(index: number) {
     const row = rows.value[index];
     if (!row) return;
@@ -204,12 +243,37 @@ function focusRow(index: number) {
     treeItems.get(row.key)?.focus();
 }
 
+async function focusDocument(id: string) {
+    const key = `document:${id.toLowerCase()}`;
+    rovingKey.value = key;
+    await nextTick();
+    treeItems.get(key)?.focus();
+}
+
+async function focusFirstAvailable() {
+    const first = rows.value[0];
+    if (first) {
+        rovingKey.value = first.key;
+        await nextTick();
+        treeItems.get(first.key)?.focus();
+        return;
+    }
+    await nextTick();
+    openFolderButton.value?.focus();
+}
+
+defineExpose({ focusDocument, focusFirstAvailable });
+
 function setTreeItem(key: string, element: Element | ComponentPublicInstance | null) {
     if (element instanceof HTMLElement) {
         treeItems.set(key, element);
     } else {
         treeItems.delete(key);
     }
+}
+
+function setOpenFolderButton(element: Element | ComponentPublicInstance | null) {
+    openFolderButton.value = element instanceof HTMLButtonElement ? element : null;
 }
 
 function rowIndex(event: KeyboardEvent) {
@@ -225,6 +289,8 @@ function rowIndex(event: KeyboardEvent) {
 }
 
 function onTreeKeydown(event: KeyboardEvent) {
+    const source = event.target;
+    if (source instanceof Element && source.closest(".workspace-row-action")) return;
     const index = rowIndex(event);
     const row = rows.value[index];
     if (!row) return;
@@ -263,6 +329,9 @@ function onTreeKeydown(event: KeyboardEvent) {
     } else if (event.key === "End") {
         event.preventDefault();
         focusRow(rows.value.length - 1);
+    } else if (event.key === "Delete" && row.kind === "document" && row.documentId) {
+        event.preventDefault();
+        emit("close-document", row.documentId);
     } else if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
         activateRow(row);
@@ -308,86 +377,116 @@ function onPointerUp(event: PointerEvent) {
         <header class="workspace-sidebar-header">
             <span>工作区</span>
         </header>
-        <div v-if="!folderRows.length" class="workspace-empty">
-            <p>尚未打开文件夹</p>
-            <button type="button" aria-label="打开文件夹" @click="emit('open-folder')">
-                打开文件夹
-            </button>
-        </div>
-        <div
-            v-else
-            class="workspace-tree"
-            role="tree"
-            aria-label="工作区文件"
-            @keydown="onTreeKeydown"
-        >
-            <div
-                v-for="row in folderRows"
-                :key="row.key"
-                class="workspace-tree-row"
-                role="none"
+        <div class="workspace-tree">
+            <section
+                v-if="!documentRows.length"
+                class="workspace-section"
+                aria-labelledby="open-documents-heading"
             >
-                <div
-                    :ref="(element) => setTreeItem(row.key, element)"
-                    class="workspace-tree-item"
-                    :class="{ active: row.active }"
-                    role="treeitem"
-                    :data-tree-key="row.key"
-                    :aria-level="row.depth"
-                    :aria-expanded="row.expanded === null ? undefined : row.expanded"
-                    :aria-current="row.active ? 'page' : undefined"
-                    :tabindex="rowTabindex(row)"
-                    :style="{ paddingInlineStart: `${8 + (row.depth - 1) * 14}px` }"
-                    @click="selectRow(row)"
-                    @focus="rovingKey = row.key"
+                <h2 id="open-documents-heading">已打开文件</h2>
+                <p class="workspace-empty">没有打开文件</p>
+            </section>
+            <div
+                v-if="rows.length"
+                class="workspace-tree-composite"
+                role="tree"
+                aria-label="工作区文件"
+                @keydown="onTreeKeydown"
+            >
+                <section
+                    v-for="section in nonEmptyWorkspaceSections"
+                    :key="section.id"
+                    class="workspace-section"
+                    role="group"
+                    :aria-labelledby="`${section.id}-heading`"
                 >
-                    <span v-if="row.expanded !== null" class="workspace-disclosure">
-                        {{ row.expanded ? "⌄" : "›" }}
-                    </span>
-                    <span class="workspace-name">{{ row.label }}</span>
-                    <span
-                        v-for="status in row.statuses"
-                        :key="status"
-                        class="workspace-status"
-                    >
-                        {{ status }}
-                    </span>
-                </div>
+                    <h2 :id="`${section.id}-heading`" role="presentation">
+                        {{ section.title }}
+                    </h2>
+                    <template v-for="row in section.rows" :key="row.key">
+                        <div
+                            :ref="(element) => setTreeItem(row.key, element)"
+                            class="workspace-tree-row"
+                            role="treeitem"
+                            :data-tree-key="row.key"
+                            :aria-label="rowAriaLabel(row)"
+                            :aria-level="row.depth"
+                            :aria-expanded="row.expanded === null ? undefined : row.expanded"
+                            :aria-current="row.active ? 'page' : undefined"
+                            :tabindex="rowTabindex(row)"
+                            @click="selectRow(row)"
+                            @focus="rovingKey = row.key"
+                        >
+                            <div
+                                class="workspace-tree-item"
+                                :class="{ active: row.active }"
+                                :style="{ paddingInlineStart: `${8 + (row.depth - 1) * 14}px` }"
+                            >
+                                <span v-if="row.expanded !== null" class="workspace-disclosure">
+                                    {{ row.expanded ? "⌄" : "›" }}
+                                </span>
+                                <span class="workspace-name">{{ row.label }}</span>
+                                <span
+                                    v-for="status in row.statuses"
+                                    :key="status"
+                                    class="workspace-status"
+                                >
+                                    {{ status }}
+                                </span>
+                            </div>
+                            <span v-if="row.kind === 'document'" class="workspace-row-actions">
+                                <button
+                                    type="button"
+                                    class="workspace-row-action"
+                                    :aria-label="`关闭 ${row.label}`"
+                                    title="关闭文档"
+                                    @click.stop="closeDocument(row.documentId)"
+                                >
+                                    ×
+                                </button>
+                            </span>
+                            <span v-else-if="row.kind === 'folder'" class="workspace-row-actions">
+                                <button
+                                    type="button"
+                                    class="workspace-row-action"
+                                    :aria-label="`刷新 ${row.label}`"
+                                    title="刷新文件夹"
+                                    @click.stop="refreshFolder(row.folderPath)"
+                                >
+                                    ↻
+                                </button>
+                                <button
+                                    type="button"
+                                    class="workspace-row-action"
+                                    :aria-label="`关闭文件夹 ${row.label}`"
+                                    title="关闭文件夹"
+                                    @click.stop="closeFolder(row.folderPath)"
+                                >
+                                    ×
+                                </button>
+                            </span>
+                        </div>
+                    </template>
+                </section>
             </div>
-        </div>
-        <div
-            v-if="currentActionRow?.kind === 'folder'"
-            class="workspace-action-toolbar"
-            role="group"
-            :aria-label="`${currentActionRow?.label ?? '当前项'} 操作`"
-        >
-            <span class="workspace-action-label">{{ currentActionRow?.label }}</span>
-            <template v-if="currentActionRow?.kind === 'folder'">
-                <button
-                    type="button"
-                    class="workspace-row-action"
-                    :aria-label="`刷新 ${currentActionRow.label}`"
-                    title="刷新文件夹"
-                    @click="
-                        currentActionRow.folderPath &&
-                        emit('refresh-folder', currentActionRow.folderPath)
-                    "
-                >
-                    ↻
-                </button>
-                <button
-                    type="button"
-                    class="workspace-row-action"
-                    :aria-label="`关闭文件夹 ${currentActionRow.label}`"
-                    title="关闭文件夹"
-                    @click="
-                        currentActionRow.folderPath &&
-                        emit('close-folder', currentActionRow.folderPath)
-                    "
-                >
-                    ×
-                </button>
-            </template>
+            <section
+                v-if="!folderRows.length"
+                class="workspace-section"
+                aria-labelledby="workspace-folders-heading"
+            >
+                <h2 id="workspace-folders-heading">文件夹</h2>
+                <div class="workspace-empty">
+                    <p>尚未打开文件夹</p>
+                    <button
+                        :ref="setOpenFolderButton"
+                        type="button"
+                        aria-label="打开文件夹"
+                        @click="emit('open-folder')"
+                    >
+                        打开文件夹
+                    </button>
+                </div>
+            </section>
         </div>
         <div
             class="workspace-resize-handle"

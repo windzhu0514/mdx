@@ -67,7 +67,9 @@ const mocks = vi.hoisted(() => ({
     >(),
     markdownResourceFailures: new Set<string>(),
     saveAsFailures: new Set<string>(),
+    nextSave: undefined as Promise<unknown> | undefined,
     nextSaveAs: undefined as Promise<unknown> | undefined,
+    nextResolvePathError: undefined as Error | undefined,
     recentFiles: [] as Array<{
         path: string;
         title: string;
@@ -185,6 +187,11 @@ const mocks = vi.hoisted(() => ({
             return undefined;
         }
         if (command === "resolve_path") {
+            if (mocks.nextResolvePathError) {
+                const error = mocks.nextResolvePathError;
+                mocks.nextResolvePathError = undefined;
+                throw error;
+            }
             const path = (args as { path: string }).path;
             return { path, identity: path.toLowerCase(), available: true };
         }
@@ -276,6 +283,11 @@ const mocks = vi.hoisted(() => ({
                     };
                 }
             ).request;
+            if (mocks.nextSave) {
+                const pending = mocks.nextSave;
+                mocks.nextSave = undefined;
+                return pending;
+            }
             if (mocks.saveFailures.has(request.path.toLowerCase())) {
                 throw new Error(`无法保存 ${request.path}`);
             }
@@ -418,16 +430,20 @@ function deferred<T>() {
     return { promise, resolve, reject };
 }
 
-function documentRow(host: HTMLElement, name: string) {
-    return Array.from(host.querySelectorAll<HTMLElement>('[role="treeitem"]')).find(
-        (item) => item.querySelector(".workspace-name")?.textContent === name,
-    );
+function openDocumentRow(host: HTMLElement, name: string) {
+    return Array.from(
+        host.querySelectorAll<HTMLElement>(
+            '[role="treeitem"][data-tree-key^="document:"]',
+        ),
+    ).find((item) => item.querySelector(".workspace-name")?.textContent === name);
 }
 
-function documentTab(host: HTMLElement, name: string) {
-    return Array.from(host.querySelectorAll<HTMLButtonElement>('[role="tab"]')).find(
-        (item) => item.querySelector(".document-tab-name")?.textContent === name,
-    );
+function folderDocumentRow(host: HTMLElement, name: string) {
+    return Array.from(
+        host.querySelectorAll<HTMLElement>(
+            '[role="treeitem"][data-tree-key^="file:"]',
+        ),
+    ).find((item) => item.querySelector(".workspace-name")?.textContent === name);
 }
 
 function findButton(host: HTMLElement, label: string) {
@@ -508,6 +524,37 @@ async function mountMarkdownImport(path: string, content: string) {
     return host;
 }
 
+async function mountDirtyMdxInFolder() {
+    const path = "C:\\notes\\a.mdx";
+    const root = "C:\\notes";
+    mocks.isTauri.mockReturnValue(true);
+    mocks.workspaceFolderEntries.set(root.toLowerCase(), [
+        {
+            path,
+            name: "a.mdx",
+            kind: "mdx",
+            children: [],
+        },
+    ]);
+    mocks.openDialog.mockResolvedValueOnce([path]).mockResolvedValueOnce(root);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const app = createApp(App);
+    app.mount(host);
+    cleanup = () => app.unmount();
+    await vi.waitFor(() => expect(mocks.closeHandler).toBeTypeOf("function"));
+
+    findButton(host, "打开文件...")?.click();
+    await vi.waitFor(() => expect(openDocumentRow(host, "a")).not.toBeUndefined());
+    mocks.editorUpdate?.("dirty a");
+    await nextTick();
+    findButton(host, "打开文件夹...")?.click();
+    await vi.waitFor(() =>
+        expect(host.querySelector('[aria-label="关闭文件夹 notes"]')).not.toBeNull(),
+    );
+    return { host, path };
+}
+
 async function mountWithInactiveConflict() {
     mocks.isTauri.mockReturnValue(true);
     mocks.openDialog.mockResolvedValue(["C:\\notes\\a.mdx", "C:\\notes\\b.mdx"]);
@@ -518,16 +565,22 @@ async function mountWithInactiveConflict() {
     cleanup = () => app.unmount();
     await vi.waitFor(() => expect(mocks.focusHandler).toBeTypeOf("function"));
     findButton(host, "打开文件...")?.click();
-    await vi.waitFor(() => expect(host.querySelectorAll('[role="tab"]')).toHaveLength(2));
-    documentTab(host, "a")?.click();
+    await vi.waitFor(() =>
+        expect(
+            host.querySelectorAll(
+                '[role="treeitem"][data-tree-key^="document:"]',
+            ),
+        ).toHaveLength(2),
+    );
+    openDocumentRow(host, "a")?.click();
     await nextTick();
     mocks.editorUpdate?.("local a");
-    documentTab(host, "b")?.click();
+    openDocumentRow(host, "b")?.click();
     await nextTick();
     mocks.diskContents.set("c:\\notes\\a.mdx", "disk a");
     mocks.diskRevisions.set("c:\\notes\\a.mdx", 2);
     await mocks.focusHandler?.({ payload: true });
-    documentTab(host, "a")?.click();
+    openDocumentRow(host, "a")?.click();
     await vi.waitFor(() =>
         expect(
             host.querySelector(
@@ -583,7 +636,9 @@ beforeEach(() => {
     mocks.markdownResourcePlans.clear();
     mocks.markdownResourceFailures.clear();
     mocks.saveAsFailures.clear();
+    mocks.nextSave = undefined;
     mocks.nextSaveAs = undefined;
+    mocks.nextResolvePathError = undefined;
     mocks.recentFiles = [];
     mocks.openMdxFailures.clear();
     mocks.saveFailures.clear();
@@ -766,6 +821,63 @@ describe("App 多文档工作区", () => {
         );
     });
 
+    it("关闭文件夹后清空工作树并反馈结果", async () => {
+        mocks.isTauri.mockReturnValue(true);
+        mocks.workspaceSession = {
+            version: 1,
+            documents: [],
+            folderPaths: [],
+            expandedPaths: [],
+            activeDocumentId: null,
+            sidebarCollapsed: false,
+            sidebarWidth: 260,
+        };
+        mocks.openDialog.mockResolvedValue("C:\\Root");
+        const host = document.createElement("div");
+        document.body.append(host);
+        const app = createApp(App);
+        app.mount(host);
+        cleanup = () => app.unmount();
+
+        findButton(host, "打开文件夹...")?.click();
+        await vi.waitFor(() =>
+            expect(host.querySelector('[aria-label="关闭文件夹 Root"]')).not.toBeNull(),
+        );
+        host.querySelector<HTMLButtonElement>('[aria-label="关闭文件夹 Root"]')?.click();
+
+        await vi.waitFor(() => expect(host.textContent).toContain("尚未打开文件夹"));
+        expect(host.textContent).toContain("已关闭文件夹");
+    });
+
+    it("关闭文件夹不会因路径二次解析失败而中断", async () => {
+        mocks.isTauri.mockReturnValue(true);
+        mocks.workspaceSession = {
+            version: 1,
+            documents: [],
+            folderPaths: [],
+            expandedPaths: [],
+            activeDocumentId: null,
+            sidebarCollapsed: false,
+            sidebarWidth: 260,
+        };
+        mocks.openDialog.mockResolvedValue("C:\\Root");
+        const host = document.createElement("div");
+        document.body.append(host);
+        const app = createApp(App);
+        app.mount(host);
+        cleanup = () => app.unmount();
+
+        findButton(host, "打开文件夹...")?.click();
+        await vi.waitFor(() =>
+            expect(host.querySelector('[aria-label="关闭文件夹 Root"]')).not.toBeNull(),
+        );
+        mocks.nextResolvePathError = new Error("关闭路径解析失败");
+        host.querySelector<HTMLButtonElement>('[aria-label="关闭文件夹 Root"]')?.click();
+
+        await vi.waitFor(() => expect(host.textContent).toContain("已关闭文件夹"));
+        expect(host.querySelector('[aria-label="关闭文件夹 Root"]')).toBeNull();
+    });
+
     it("uses mutually exclusive side overlays at 980px and preserves wide preferences", async () => {
         const viewport = installCompactViewport(true);
         mocks.isTauri.mockReturnValue(true);
@@ -807,7 +919,7 @@ describe("App 多文档工作区", () => {
         host.querySelector<HTMLButtonElement>('[aria-label="显示工作区"]')?.click();
         await nextTick();
         expect(host.querySelector(".workspace-sidebar.is-compact")).not.toBeNull();
-        documentRow(host, "a.mdx")?.click();
+        folderDocumentRow(host, "a.mdx")?.click();
         await nextTick();
         expect(host.querySelector(".workspace-sidebar")).toBeNull();
 
@@ -907,7 +1019,7 @@ describe("App 多文档工作区", () => {
             expect(host.querySelector(".menu-document-name")?.textContent).toContain("a"),
         );
 
-        documentTab(host, "b")?.click();
+        openDocumentRow(host, "b")?.click();
 
         await vi.waitFor(() =>
             expect(mocks.getMoraEditorMarkdown?.()).toBe(
@@ -938,7 +1050,11 @@ describe("App 多文档工作区", () => {
             ?.click();
 
         await vi.waitFor(() => {
-            expect(host.querySelectorAll('[role="tab"]')).toHaveLength(2);
+            expect(
+                host.querySelectorAll(
+                    '[role="treeitem"][data-tree-key^="document:"]',
+                ),
+            ).toHaveLength(2);
             expect(mocks.getMoraEditorMarkdown?.()).toBe("# b");
         });
         expect(mocks.openDialog).toHaveBeenCalledWith({
@@ -952,7 +1068,7 @@ describe("App 多文档工作区", () => {
         });
 
         const activate = async (name: string) => {
-            documentTab(host, name)?.click();
+            openDocumentRow(host, name)?.click();
             await nextTick();
         };
         await activate("a");
@@ -969,7 +1085,7 @@ describe("App 多文档工作区", () => {
         expect(mocks.cancelAi).toHaveBeenCalledTimes(4);
     });
 
-    it("一次打开多个文件会生成普通标签并通过标签切换活动文档", async () => {
+    it("一次打开多个文件会生成工作区文档行并通过文档行切换活动文档", async () => {
         mocks.isTauri.mockReturnValue(true);
         mocks.openDialog.mockResolvedValue(["C:\\notes\\a.mdx", "C:\\notes\\b.mdx"]);
         const host = document.createElement("div");
@@ -980,12 +1096,26 @@ describe("App 多文档工作区", () => {
 
         findButton(host, "打开文件...")?.click();
         await vi.waitFor(() =>
-            expect(host.querySelectorAll('[role="tab"]')).toHaveLength(2),
+            expect(
+                host.querySelectorAll(
+                    '[role="treeitem"][data-tree-key^="document:"]',
+                ),
+            ).toHaveLength(2),
         );
-        documentTab(host, "a")?.click();
+        expect(host.querySelector('[role="tablist"]')).toBeNull();
+        expect(host.querySelector(".document-tabs")).toBeNull();
+        const editorRegion = host.querySelector("#document-editor-panel");
+        expect(editorRegion?.getAttribute("role")).toBe("region");
+        expect(editorRegion?.getAttribute("aria-label")).toBe("文档编辑区");
+        expect(host.querySelector('section[role="tabpanel"]')).toBeNull();
+        openDocumentRow(host, "a")?.click();
         await vi.waitFor(() => expect(mocks.getMoraEditorMarkdown?.()).toBe("# a"));
-        documentTab(host, "b")?.click();
+        expect(openDocumentRow(host, "a")?.getAttribute("aria-current")).toBe("page");
+        expect(openDocumentRow(host, "b")?.getAttribute("aria-current")).toBeNull();
+        openDocumentRow(host, "b")?.click();
         await vi.waitFor(() => expect(mocks.getMoraEditorMarkdown?.()).toBe("# b"));
+        expect(openDocumentRow(host, "a")?.getAttribute("aria-current")).toBeNull();
+        expect(openDocumentRow(host, "b")?.getAttribute("aria-current")).toBe("page");
     });
 
     it("关闭非活动脏文档时显示目标名称并保存目标文档", async () => {
@@ -1004,13 +1134,17 @@ describe("App 多文档工作区", () => {
             )
             ?.click();
         await vi.waitFor(() =>
-            expect(host.querySelectorAll('[role="tab"]')).toHaveLength(2),
+            expect(
+                host.querySelectorAll(
+                    '[role="treeitem"][data-tree-key^="document:"]',
+                ),
+            ).toHaveLength(2),
         );
-        documentTab(host, "a")?.click();
+        openDocumentRow(host, "a")?.click();
         await nextTick();
         mocks.editorUpdate?.("dirty a");
         await nextTick();
-        documentTab(host, "b")?.click();
+        openDocumentRow(host, "b")?.click();
         await nextTick();
 
         host.querySelector<HTMLButtonElement>('[aria-label="关闭 a"]')?.click();
@@ -1033,7 +1167,7 @@ describe("App 多文档工作区", () => {
         expect(host.querySelector(".menu-document-name")?.textContent?.trim()).toBe("b");
     });
 
-    it("键盘关闭成功后把焦点移到新的活动标签", async () => {
+    it("键盘关闭成功后把焦点移到新的活动文档行", async () => {
         mocks.isTauri.mockReturnValue(true);
         mocks.openDialog.mockResolvedValue(["C:\\notes\\a.mdx", "C:\\notes\\b.mdx"]);
         const host = document.createElement("div");
@@ -1043,18 +1177,20 @@ describe("App 多文档工作区", () => {
         cleanup = () => app.unmount();
 
         findButton(host, "打开文件...")?.click();
-        await vi.waitFor(() => expect(documentTab(host, "b")).not.toBeUndefined());
-        const activeTab = documentTab(host, "b");
-        activeTab?.focus();
-        activeTab?.dispatchEvent(
+        await vi.waitFor(() =>
+            expect(openDocumentRow(host, "b")).not.toBeUndefined(),
+        );
+        const activeRow = openDocumentRow(host, "b");
+        activeRow?.focus();
+        activeRow?.dispatchEvent(
             new KeyboardEvent("keydown", { bubbles: true, key: "Delete" }),
         );
 
-        await vi.waitFor(() => expect(documentTab(host, "b")).toBeUndefined());
-        expect(document.activeElement).toBe(documentTab(host, "a"));
+        await vi.waitFor(() => expect(openDocumentRow(host, "b")).toBeUndefined());
+        expect(document.activeElement).toBe(openDocumentRow(host, "a"));
     });
 
-    it("取消键盘关闭后把焦点还给原标签", async () => {
+    it("取消键盘关闭后把焦点还给原文档行", async () => {
         mocks.isTauri.mockReturnValue(true);
         mocks.openDialog.mockResolvedValue(["C:\\notes\\a.mdx", "C:\\notes\\b.mdx"]);
         const host = document.createElement("div");
@@ -1064,14 +1200,16 @@ describe("App 多文档工作区", () => {
         cleanup = () => app.unmount();
 
         findButton(host, "打开文件...")?.click();
-        await vi.waitFor(() => expect(documentTab(host, "a")).not.toBeUndefined());
-        documentTab(host, "a")?.click();
+        await vi.waitFor(() =>
+            expect(openDocumentRow(host, "a")).not.toBeUndefined(),
+        );
+        openDocumentRow(host, "a")?.click();
         await nextTick();
         mocks.editorUpdate?.("dirty a");
         await nextTick();
-        const originalTab = documentTab(host, "a");
-        originalTab?.focus();
-        originalTab?.dispatchEvent(
+        const originalRow = openDocumentRow(host, "a");
+        originalRow?.focus();
+        originalRow?.dispatchEvent(
             new KeyboardEvent("keydown", { bubbles: true, key: "Delete" }),
         );
         await vi.waitFor(() =>
@@ -1088,7 +1226,125 @@ describe("App 多文档工作区", () => {
                 host.querySelector('[aria-labelledby="leave-dialog-title"][open]'),
             ).toBeNull(),
         );
-        expect(document.activeElement).toBe(originalTab);
+        expect(document.activeElement).toBe(originalRow);
+    });
+
+    it("桌面工作区折叠时取消 Ctrl+W 会显示工作区并聚焦原文档行", async () => {
+        mocks.isTauri.mockReturnValue(true);
+        mocks.workspaceSession = {
+            version: 1,
+            documents: [
+                {
+                    id: "collapsed-a",
+                    path: "C:\\notes\\a.mdx",
+                    sourceKind: "mdx",
+                    importSourcePath: null,
+                    draftKey: "collapsed-a-draft",
+                },
+            ],
+            folderPaths: [],
+            expandedPaths: [],
+            activeDocumentId: "collapsed-a",
+            sidebarCollapsed: true,
+            sidebarWidth: 260,
+        };
+        const host = document.createElement("div");
+        document.body.append(host);
+        const app = createApp(App);
+        app.mount(host);
+        cleanup = () => app.unmount();
+
+        await vi.waitFor(() =>
+            expect(host.querySelector(".menu-document-name")?.textContent).toContain("a"),
+        );
+        expect(host.querySelector(".workspace-sidebar")).toBeNull();
+        mocks.editorUpdate?.("dirty a");
+        await nextTick();
+        window.dispatchEvent(
+            new KeyboardEvent("keydown", { bubbles: true, ctrlKey: true, key: "w" }),
+        );
+        await vi.waitFor(() =>
+            expect(
+                host.querySelector('[aria-labelledby="leave-dialog-title"][open]'),
+            ).not.toBeNull(),
+        );
+        findButton(host, "取消")?.click();
+
+        await vi.waitFor(() =>
+            expect(host.querySelector(".workspace-sidebar")).not.toBeNull(),
+        );
+        expect(document.activeElement).toBe(openDocumentRow(host, "a"));
+    });
+
+    it("关闭最后一个文档后把焦点移到打开文件夹入口", async () => {
+        mocks.isTauri.mockReturnValue(true);
+        mocks.openDialog.mockResolvedValue(["C:\\notes\\a.mdx"]);
+        const host = document.createElement("div");
+        document.body.append(host);
+        const app = createApp(App);
+        app.mount(host);
+        cleanup = () => app.unmount();
+
+        findButton(host, "打开文件...")?.click();
+        await vi.waitFor(() =>
+            expect(openDocumentRow(host, "a")).not.toBeUndefined(),
+        );
+        const onlyRow = openDocumentRow(host, "a");
+        onlyRow?.focus();
+        onlyRow?.dispatchEvent(
+            new KeyboardEvent("keydown", { bubbles: true, key: "Delete" }),
+        );
+
+        await vi.waitFor(() => expect(openDocumentRow(host, "a")).toBeUndefined());
+        expect(document.activeElement).toBe(
+            host.querySelector<HTMLButtonElement>('[aria-label="打开文件夹"]'),
+        );
+    });
+
+    it("compact 工作区隐藏时 Ctrl+W 关闭最后文档会显示工作区并聚焦打开文件夹", async () => {
+        installCompactViewport(true);
+        mocks.isTauri.mockReturnValue(true);
+        mocks.workspaceSession = {
+            version: 1,
+            documents: [
+                {
+                    id: "compact-last",
+                    path: "C:\\notes\\last.mdx",
+                    sourceKind: "mdx",
+                    importSourcePath: null,
+                    draftKey: "compact-last-draft",
+                },
+            ],
+            folderPaths: [],
+            expandedPaths: [],
+            activeDocumentId: "compact-last",
+            sidebarCollapsed: false,
+            sidebarWidth: 260,
+        };
+        const host = document.createElement("div");
+        document.body.append(host);
+        const app = createApp(App);
+        app.mount(host);
+        cleanup = () => app.unmount();
+
+        await vi.waitFor(() =>
+            expect(host.querySelector(".menu-document-name")?.textContent).toContain(
+                "last",
+            ),
+        );
+        expect(host.querySelector(".workspace-sidebar")).toBeNull();
+        window.dispatchEvent(
+            new KeyboardEvent("keydown", { bubbles: true, ctrlKey: true, key: "w" }),
+        );
+
+        await vi.waitFor(() =>
+            expect(host.querySelector(".workspace-sidebar.is-compact")).not.toBeNull(),
+        );
+        expect(openDocumentRow(host, "last")).toBeUndefined();
+        expect(document.activeElement).toBe(
+            host.querySelector<HTMLButtonElement>('[aria-label="打开文件夹"]'),
+        );
+        expect(host.querySelector(".toc-sidebar.is-compact")).toBeNull();
     });
 
     it("批量打开时隔离单文件失败并继续处理后续路径", async () => {
@@ -1114,15 +1370,19 @@ describe("App 多文档工作区", () => {
             ?.click();
 
         await vi.waitFor(() => {
-            expect(host.querySelectorAll('[role="tab"]')).toHaveLength(2);
+            expect(
+                host.querySelectorAll(
+                    '[role="treeitem"][data-tree-key^="document:"]',
+                ),
+            ).toHaveLength(2);
             expect(host.textContent).toContain("bad.mdx");
-            expect(documentTab(host, "good-a")).not.toBeUndefined();
-            expect(documentTab(host, "good-b")).not.toBeUndefined();
-            expect(documentTab(host, "bad")).toBeUndefined();
+            expect(openDocumentRow(host, "good-a")).not.toBeUndefined();
+            expect(openDocumentRow(host, "good-b")).not.toBeUndefined();
+            expect(openDocumentRow(host, "bad")).toBeUndefined();
         });
     });
 
-    it("独立文档被外部删除后在标签上显示不可用状态", async () => {
+    it("独立文档被外部删除后在文档行显示不可用状态", async () => {
         mocks.isTauri.mockReturnValue(true);
         mocks.openDialog.mockResolvedValue(["C:\\notes\\a.mdx"]);
         const host = document.createElement("div");
@@ -1132,14 +1392,19 @@ describe("App 多文档工作区", () => {
         cleanup = () => app.unmount();
 
         findButton(host, "打开文件...")?.click();
-        await vi.waitFor(() => expect(documentTab(host, "a")).not.toBeUndefined());
+        await vi.waitFor(() =>
+            expect(openDocumentRow(host, "a")).not.toBeUndefined(),
+        );
         mocks.unavailableDiskPaths.add("c:\\notes\\a.mdx");
         await mocks.focusHandler?.({ payload: true });
 
         await vi.waitFor(() => {
-            expect(documentTab(host, "a")?.textContent).toContain("不可用");
-            expect(documentTab(host, "a")?.getAttribute("aria-label")).toContain(
-                "路径不可用",
+            expect(
+                openDocumentRow(host, "a")?.querySelector(".workspace-status")
+                    ?.textContent,
+            ).toContain("不可用");
+            expect(openDocumentRow(host, "a")?.getAttribute("aria-label")).toContain(
+                "不可用",
             );
         });
     });
@@ -1160,12 +1425,16 @@ describe("App 多文档工作区", () => {
             )
             ?.click();
         await vi.waitFor(() =>
-            expect(host.querySelectorAll('[role="tab"]')).toHaveLength(2),
+            expect(
+                host.querySelectorAll(
+                    '[role="treeitem"][data-tree-key^="document:"]',
+                ),
+            ).toHaveLength(2),
         );
-        documentTab(host, "a")?.click();
+        openDocumentRow(host, "a")?.click();
         await nextTick();
         mocks.editorUpdate?.("local a");
-        documentTab(host, "b")?.click();
+        openDocumentRow(host, "b")?.click();
         await nextTick();
 
         mocks.diskContents.set("c:\\notes\\a.mdx", "disk a");
@@ -1179,13 +1448,18 @@ describe("App 多文档工作区", () => {
         await vi.waitFor(() => {
             expect(mocks.getMoraEditorMarkdown?.()).toBe("disk b");
         });
-        expect(documentTab(host, "a")?.textContent).toContain("冲突");
-        expect(documentTab(host, "a")?.getAttribute("aria-label")).toContain(
-            "外部更改冲突",
+        expect(
+            Array.from(
+                openDocumentRow(host, "a")?.querySelectorAll(".workspace-status") ?? [],
+                (status) => status.textContent,
+            ),
+        ).toContain("外部更改");
+        expect(openDocumentRow(host, "a")?.getAttribute("aria-label")).toContain(
+            "外部更改",
         );
         expect(mocks.releaseDocument).toHaveBeenCalledWith("document-2");
 
-        documentTab(host, "a")?.click();
+        openDocumentRow(host, "a")?.click();
         await vi.waitFor(() => {
             expect(
                 host.querySelector(
@@ -1198,7 +1472,7 @@ describe("App 多文档工作区", () => {
 
     it("冲突覆盖的延迟决定始终保存发起文档而不是当前文档", async () => {
         const host = await mountWithInactiveConflict();
-        documentTab(host, "b")?.click();
+        openDocumentRow(host, "b")?.click();
         await nextTick();
 
         findButton(host, "覆盖磁盘版本")?.click();
@@ -1219,7 +1493,7 @@ describe("App 多文档工作区", () => {
 
     it("冲突重新加载只丢弃目标草稿并释放目标编辑器状态", async () => {
         const host = await mountWithInactiveConflict();
-        documentTab(host, "b")?.click();
+        openDocumentRow(host, "b")?.click();
         await nextTick();
 
         findButton(host, "重新加载磁盘版本")?.click();
@@ -1230,12 +1504,12 @@ describe("App 多文档工作区", () => {
             });
             expect(mocks.releaseDocument).toHaveBeenCalledWith("document-1");
         });
-        documentTab(host, "a")?.click();
+        openDocumentRow(host, "a")?.click();
         await vi.waitFor(() => expect(mocks.getMoraEditorMarkdown?.()).toBe("disk a"));
 
-        documentTab(host, "b")?.click();
+        openDocumentRow(host, "b")?.click();
         await nextTick();
-        documentTab(host, "a")?.click();
+        openDocumentRow(host, "a")?.click();
         await nextTick();
         expect(
             host.querySelector(
@@ -1247,7 +1521,7 @@ describe("App 多文档工作区", () => {
     it("冲突另存为保存目标内容且不覆盖原路径", async () => {
         mocks.saveDialog.mockResolvedValue("C:\\notes\\a-copy.mdx");
         const host = await mountWithInactiveConflict();
-        documentTab(host, "b")?.click();
+        openDocumentRow(host, "b")?.click();
         await nextTick();
 
         findButton(host, "另存为")?.click();
@@ -1286,9 +1560,9 @@ describe("App 多文档工作区", () => {
         expect(mocks.invoke).not.toHaveBeenCalledWith("save_mdx", expect.anything());
         expect(mocks.invoke).not.toHaveBeenCalledWith("delete_draft", expect.anything());
 
-        documentTab(host, "b")?.click();
+        openDocumentRow(host, "b")?.click();
         await nextTick();
-        documentTab(host, "a")?.click();
+        openDocumentRow(host, "a")?.click();
         await vi.waitFor(() =>
             expect(
                 host.querySelector(
@@ -1373,6 +1647,111 @@ describe("App 多文档工作区", () => {
             expect(mocks.invoke).toHaveBeenCalledWith("clear_recent_files");
             expect(host.querySelectorAll("[data-recent-path]")).toHaveLength(0);
         });
+    });
+
+    it("普通保存进行中拒绝重复保存和 Ctrl+W，并在完成后保留已保存文档", async () => {
+        const pendingSave = deferred<unknown>();
+        mocks.nextSave = pendingSave.promise;
+        const { host, path } = await mountDirtyMdxInFolder();
+
+        findButton(host, "保存")?.click();
+        await vi.waitFor(() =>
+            expect(
+                mocks.invoke.mock.calls.filter(([command]) => command === "save_mdx"),
+            ).toHaveLength(1),
+        );
+        window.dispatchEvent(
+            new KeyboardEvent("keydown", { bubbles: true, ctrlKey: true, key: "s" }),
+        );
+        window.dispatchEvent(
+            new KeyboardEvent("keydown", { bubbles: true, ctrlKey: true, key: "w" }),
+        );
+
+        await vi.waitFor(() => {
+            expect(host.textContent).toContain("请先完成当前保存操作");
+            expect(document.activeElement).toBe(openDocumentRow(host, "a"));
+        });
+        expect(
+            mocks.invoke.mock.calls.filter(([command]) => command === "save_mdx"),
+        ).toHaveLength(1);
+        expect(
+            host.querySelector('[aria-labelledby="leave-dialog-title"][open]'),
+        ).toBeNull();
+        expect(openDocumentRow(host, "a")).not.toBeUndefined();
+
+        pendingSave.resolve({
+            path,
+            title: "a",
+            content: "dirty a",
+            meta: null,
+        });
+        await vi.waitFor(() => expect(host.textContent).toContain("保存成功"));
+        expect(openDocumentRow(host, "a")).not.toBeUndefined();
+        expect(openDocumentRow(host, "a")?.textContent).not.toContain("未保存");
+    });
+
+    it("普通保存进行中拒绝关闭所属文件夹", async () => {
+        const pendingSave = deferred<unknown>();
+        mocks.nextSave = pendingSave.promise;
+        const { host, path } = await mountDirtyMdxInFolder();
+
+        findButton(host, "保存")?.click();
+        await vi.waitFor(() =>
+            expect(
+                mocks.invoke.mock.calls.filter(([command]) => command === "save_mdx"),
+            ).toHaveLength(1),
+        );
+        host.querySelector<HTMLButtonElement>('[aria-label="关闭文件夹 notes"]')?.click();
+
+        await vi.waitFor(() =>
+            expect(host.textContent).toContain("请先完成当前保存操作"),
+        );
+        expect(host.querySelector('[aria-label="关闭文件夹 notes"]')).not.toBeNull();
+        expect(openDocumentRow(host, "a")).not.toBeUndefined();
+        expect(
+            host.querySelector('[aria-labelledby="leave-dialog-title"][open]'),
+        ).toBeNull();
+
+        pendingSave.resolve({
+            path,
+            title: "a",
+            content: "dirty a",
+            meta: null,
+        });
+        await vi.waitFor(() => expect(host.textContent).toContain("保存成功"));
+    });
+
+    it("普通保存进行中由现有窗口 guard 拒绝关闭且不打开离开提示", async () => {
+        const pendingSave = deferred<unknown>();
+        mocks.nextSave = pendingSave.promise;
+        const { host, path } = await mountDirtyMdxInFolder();
+
+        findButton(host, "保存")?.click();
+        await vi.waitFor(() =>
+            expect(
+                mocks.invoke.mock.calls.filter(([command]) => command === "save_mdx"),
+            ).toHaveLength(1),
+        );
+        const closeEvent = { preventDefault: vi.fn() };
+        const closing = mocks.closeHandler?.(closeEvent);
+        await nextTick();
+
+        expect(closeEvent.preventDefault).toHaveBeenCalledTimes(1);
+        expect(host.textContent).toContain("请先完成当前保存操作");
+        expect(
+            host.querySelector('[aria-labelledby="leave-dialog-title"][open]'),
+        ).toBeNull();
+        expect(mocks.windowClose).not.toHaveBeenCalled();
+        expect(openDocumentRow(host, "a")).not.toBeUndefined();
+
+        pendingSave.resolve({
+            path,
+            title: "a",
+            content: "dirty a",
+            meta: null,
+        });
+        await vi.waitFor(() => expect(host.textContent).toContain("保存成功"));
+        await closing;
     });
 
     it("Markdown 导入记录源文件并在确认资源后另存为同目录 mdx", async () => {
@@ -1552,8 +1931,10 @@ describe("App 多文档工作区", () => {
         cleanup = () => app.unmount();
         await vi.waitFor(() => expect(mocks.closeHandler).toBeTypeOf("function"));
         findButton(host, "打开文件...")?.click();
-        await vi.waitFor(() => expect(documentTab(host, "a.md")).not.toBeUndefined());
-        documentTab(host, "a.md")?.click();
+        await vi.waitFor(() =>
+            expect(openDocumentRow(host, "a.md")).not.toBeUndefined(),
+        );
+        openDocumentRow(host, "a.md")?.click();
         await nextTick();
         findButton(host, "保存")?.click();
         await vi.waitFor(() => expect(host.textContent).toContain("继续导入"));
@@ -1567,14 +1948,20 @@ describe("App 多文档工作区", () => {
         ).toBeNull();
         await closeRequest;
 
-        host.querySelector<HTMLButtonElement>('[aria-label="关闭 a.md"]')?.click();
-        await nextTick();
-        expect(documentTab(host, "a.md")).not.toBeUndefined();
+        const closeButton = openDocumentRow(host, "a.md")
+            ?.closest(".workspace-tree-row")
+            ?.querySelector<HTMLButtonElement>('[aria-label="关闭 a.md"]');
+        closeButton?.focus();
+        closeButton?.click();
+        await vi.waitFor(() =>
+            expect(document.activeElement).toBe(openDocumentRow(host, "a.md")),
+        );
+        expect(openDocumentRow(host, "a.md")).not.toBeUndefined();
         expect(
             host.querySelector('[aria-labelledby="leave-dialog-title"][open]'),
         ).toBeNull();
 
-        documentTab(host, "b.md")?.click();
+        openDocumentRow(host, "b.md")?.click();
         await vi.waitFor(() => expect(mocks.getMoraEditorMarkdown?.()).toBe(contentB));
         findButton(host, "继续导入（保留未解决链接）")?.click();
 
@@ -1698,20 +2085,22 @@ describe("App 多文档工作区", () => {
         const host = await mountMarkdownImport(sourcePath, sourceContent);
         mocks.openDialog.mockResolvedValue("C:\\notes");
         findButton(host, "打开文件夹...")?.click();
-        await vi.waitFor(() => expect(documentRow(host, "notes")).not.toBeUndefined());
+        await vi.waitFor(() =>
+            expect(folderDocumentRow(host, "folder-save.md")).not.toBeUndefined(),
+        );
 
         findButton(host, "保存")?.click();
         await vi.waitFor(() => expect(host.textContent).toContain("继续导入"));
-        documentRow(host, "notes")?.click();
-        await nextTick();
         host.querySelector<HTMLButtonElement>('[aria-label="关闭文件夹 notes"]')?.click();
         await nextTick();
 
-        expect(host.textContent).toContain("请先完成当前保存操作");
+        await vi.waitFor(() =>
+            expect(host.textContent).toContain("请先完成当前保存操作"),
+        );
         expect(
             host.querySelector('[aria-labelledby="leave-dialog-title"][open]'),
         ).toBeNull();
-        expect(documentRow(host, "folder-save.md")).not.toBeUndefined();
+        expect(openDocumentRow(host, "folder-save.md")).not.toBeUndefined();
     });
 });
 
@@ -1727,12 +2116,16 @@ describe("App 桌面关闭", () => {
         await vi.waitFor(() => expect(mocks.closeHandler).toBeTypeOf("function"));
         findButton(host, "打开文件...")?.click();
         await vi.waitFor(() =>
-            expect(host.querySelectorAll('[role="tab"]')).toHaveLength(2),
+            expect(
+                host.querySelectorAll(
+                    '[role="treeitem"][data-tree-key^="document:"]',
+                ),
+            ).toHaveLength(2),
         );
-        documentTab(host, "a")?.click();
+        openDocumentRow(host, "a")?.click();
         await nextTick();
         mocks.editorUpdate?.("dirty a");
-        documentTab(host, "b")?.click();
+        openDocumentRow(host, "b")?.click();
         await nextTick();
         mocks.editorUpdate?.("dirty b");
         await nextTick();
@@ -1753,7 +2146,11 @@ describe("App 桌面关闭", () => {
 
         expect(event.preventDefault).toHaveBeenCalledTimes(1);
         expect(mocks.windowClose).not.toHaveBeenCalled();
-        expect(host.querySelectorAll('[role="tab"]')).toHaveLength(2);
+        expect(
+            host.querySelectorAll(
+                '[role="treeitem"][data-tree-key^="document:"]',
+            ),
+        ).toHaveLength(2);
         expect(mocks.invoke).not.toHaveBeenCalledWith("delete_draft", expect.anything());
     });
 
@@ -1770,7 +2167,11 @@ describe("App 桌面关闭", () => {
         await closing;
 
         expect(mocks.windowClose).not.toHaveBeenCalled();
-        expect(host.querySelectorAll('[role="tab"]')).toHaveLength(2);
+        expect(
+            host.querySelectorAll(
+                '[role="treeitem"][data-tree-key^="document:"]',
+            ),
+        ).toHaveLength(2);
         expect(host.textContent).toContain("无法保存 C:\\notes\\b.mdx");
         expect(mocks.invoke).not.toHaveBeenCalledWith("delete_draft", expect.anything());
     });

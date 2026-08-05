@@ -4,7 +4,7 @@ import appSource from "./App.vue?raw";
 import moraEditorSource from "./components/editor/MoraEditor.vue?raw";
 
 describe("App 编辑器视图", () => {
-    it("orders workspace, tabbed editor and outline without moving the mode switch", () => {
+    it("orders workspace, editor and outline without moving the mode switch", () => {
         expect(appSource.indexOf("<WorkspaceSidebar")).toBeLessThan(
             appSource.indexOf('class="workspace-center"'),
         );
@@ -18,7 +18,7 @@ describe("App 编辑器视图", () => {
         expect(appSource).toContain('@toggle-outline="toggleOutlinePanel"');
         const printBlock = appSource.slice(appSource.indexOf("@media print"));
         expect(printBlock).toContain(".workspace-sidebar");
-        expect(printBlock).toContain(".document-tabs");
+        expect(appSource).not.toContain(".document-tabs");
     });
 
     it("只提供所见即所得、仅源码和垂直双栏", () => {

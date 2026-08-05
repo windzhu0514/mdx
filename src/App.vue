@@ -5,7 +5,6 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import "./experience.css";
 import FindReplacePanel from "./components/FindReplacePanel.vue";
-import DocumentTabs from "./components/DocumentTabs.vue";
 import ExternalConflictDialog from "./components/ExternalConflictDialog.vue";
 import HistoryPanel from "./components/HistoryPanel.vue";
 import LeaveConfirmDialog from "./components/LeaveConfirmDialog.vue";
@@ -51,6 +50,11 @@ type MarkdownCommand = {
     shortcut?: string;
 };
 
+type WorkspaceSidebarHandle = {
+    focusDocument: (id: string) => Promise<void>;
+    focusFirstAvailable: () => Promise<void>;
+};
+
 const APP_NAME = "Mora";
 const APP_CN_NAME = "墨笺";
 const APP_TAGLINE = "Mora 墨笺，一款所见即所得的 MDX 扩展笔记编辑器";
@@ -92,7 +96,7 @@ const loading = ref(false);
 const statusMessage = ref("准备就绪");
 const errorMessage = ref("");
 const editorRef = ref<MoraEditorHandle | null>(null);
-const documentTabsRef = ref<{ focusDocument: (id: string) => void } | null>(null);
+const workspaceSidebarRef = ref<WorkspaceSidebarHandle | null>(null);
 const lastSearchQuery = ref("");
 const findPanel = ref<InstanceType<typeof FindReplacePanel> | null>(null);
 
@@ -1220,13 +1224,19 @@ async function saveDocument(id: string, overwrite = false): Promise<boolean> {
         return saveDocumentAs(id);
     }
     if (runtime.conflict && !overwrite) return resolveDocumentConflict(id);
+    if (savingDocumentIds.has(id)) return false;
     let saved = false;
-    await runAction(async () => {
-        const note = await session.save(id, { overwrite });
-        if (note.path) await pushRecentFile(note.path, note.displayName);
-        saved = !note.dirty;
-        statusMessage.value = saved ? "保存成功" : "保存期间文档已再次修改";
-    });
+    savingDocumentIds.add(id);
+    try {
+        await runAction(async () => {
+            const note = await session.save(id, { overwrite });
+            if (note.path) await pushRecentFile(note.path, note.displayName);
+            saved = !note.dirty;
+            statusMessage.value = saved ? "保存成功" : "保存期间文档已再次修改";
+        });
+    } finally {
+        savingDocumentIds.delete(id);
+    }
     if (!saved && !overwrite && session.document(id).conflict) {
         return resolveDocumentConflict(id);
     }
@@ -1335,19 +1345,25 @@ const closeActions = {
     save: saveDocument,
 };
 
+async function focusWorkspaceTarget(id: string | null) {
+    if (compactLayout.value) compactPanel.value = "workspace";
+    else if (sidebarCollapsed.value) updateSidebarCollapsed(false);
+    await nextTick();
+    if (id) await workspaceSidebarRef.value?.focusDocument(id);
+    else await workspaceSidebarRef.value?.focusFirstAvailable();
+}
+
 async function closeDocument(id: string) {
     if (savingDocumentIds.has(id)) {
         statusMessage.value = "请先完成当前保存操作";
-        await nextTick();
-        documentTabsRef.value?.focusDocument(id);
+        await focusWorkspaceTarget(id);
         return false;
     }
     editorRef.value?.cancelAi();
     const closed = await session.closeDocument(id, closeActions);
     if (closed) editorRef.value?.releaseDocument(id);
-    await nextTick();
     const focusId = closed ? activeDocumentId.value : id;
-    if (focusId) documentTabsRef.value?.focusDocument(focusId);
+    await focusWorkspaceTarget(focusId);
     return closed;
 }
 
@@ -1364,14 +1380,18 @@ async function closeFolder(path: string) {
         statusMessage.value = "请先完成当前保存操作";
         return;
     }
-    editorRef.value?.cancelAi();
-    const before = new Set(documents.value.map((document) => document.id));
-    const closed = await session.closeFolder(path, closeActions);
-    if (!closed) return;
-    const remaining = new Set(documents.value.map((document) => document.id));
-    for (const id of before) {
-        if (!remaining.has(id)) editorRef.value?.releaseDocument(id);
-    }
+
+    await runAction(async () => {
+        editorRef.value?.cancelAi();
+        const before = new Set(documents.value.map((document) => document.id));
+        const closed = await session.closeFolder(path, closeActions);
+        if (!closed) return;
+        const remaining = new Set(documents.value.map((document) => document.id));
+        for (const id of before) {
+            if (!remaining.has(id)) editorRef.value?.releaseDocument(id);
+        }
+        statusMessage.value = "已关闭文件夹";
+    });
 }
 
 async function setEditorMode(mode: EditorMode) {
@@ -2081,6 +2101,7 @@ function stringifyError(error: unknown) {
 
         <div class="main-body">
             <WorkspaceSidebar
+                ref="workspaceSidebarRef"
                 :documents="documents"
                 :folders="folders"
                 :active-document-id="activeDocumentId"
@@ -2091,25 +2112,19 @@ function stringifyError(error: unknown) {
                 @activate="activateWorkspaceDocument"
                 @open-path="openWorkspacePath"
                 @open-folder="openFolder"
+                @close-document="closeDocument"
                 @close-folder="closeFolder"
                 @toggle-expanded="toggleWorkspacePath"
                 @update:width="updateSidebarWidth"
             />
 
             <div class="workspace-center">
-                <DocumentTabs
-                    ref="documentTabsRef"
-                    :documents="documents"
-                    :active-document-id="activeDocumentId"
-                    @activate="activateDocument"
-                    @close="closeDocument"
-                />
-
                 <section
                     v-if="activeDocument"
                     id="document-editor-panel"
                     class="note-panel"
-                    role="tabpanel"
+                    role="region"
+                    aria-label="文档编辑区"
                     :aria-busy="loading"
                 >
                     <div class="editor-card">
@@ -2300,7 +2315,6 @@ function stringifyError(error: unknown) {
 @media print {
     .menu-bar,
     .workspace-sidebar,
-    .document-tabs,
     .toc-sidebar,
     .status-bar,
     .find-panel {
