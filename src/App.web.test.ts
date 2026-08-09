@@ -454,6 +454,33 @@ function findButton(host: HTMLElement, label: string) {
     );
 }
 
+async function mountApp() {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const app = createApp(App);
+    app.mount(host);
+    cleanup = () => app.unmount();
+    await nextTick();
+    return host;
+}
+
+async function mountAppWithRecentFiles(paths: string[]) {
+    mocks.isTauri.mockReturnValue(true);
+    mocks.recentFiles = paths.map((path) => ({
+        path,
+        title:
+            path
+                .split(/[\\/]/)
+                .pop()
+                ?.replace(/\.mdx$/iu, "") ?? "笔记",
+        lastOpenedAt: "2026-08-02T08:00:00Z",
+        available: true,
+    }));
+    const host = await mountApp();
+    await vi.waitFor(() => expect(mocks.closeHandler).toBeTypeOf("function"));
+    return host;
+}
+
 function recentEntries(count: number) {
     return Array.from({ length: count }, (_, index) => ({
         path: `C:\\notes\\recent-${index + 1}.mdx`,
@@ -679,6 +706,48 @@ afterEach(() => {
 });
 
 describe("App Web 预览启动", () => {
+    it("opens the command palette and runs the existing file-menu new action", async () => {
+        const host = await mountApp();
+        window.dispatchEvent(
+            new KeyboardEvent("keydown", {
+                bubbles: true,
+                ctrlKey: true,
+                shiftKey: true,
+                key: "p",
+            }),
+        );
+        await vi.waitFor(() =>
+            expect(host.querySelector("input[aria-label='搜索命令']")).not.toBeNull(),
+        );
+
+        const input = host.querySelector<HTMLInputElement>(
+            "input[aria-label='搜索命令']",
+        );
+        if (input) input.value = "新建";
+        input?.dispatchEvent(new InputEvent("input", { bubbles: true, data: "新建" }));
+        input?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" }));
+
+        await vi.waitFor(() => expect(host.textContent).toContain("未命名文档 1"));
+    });
+
+    it("lists disabled document commands without running them when no document is open", async () => {
+        const host = await mountApp();
+        window.dispatchEvent(
+            new KeyboardEvent("keydown", {
+                bubbles: true,
+                ctrlKey: true,
+                shiftKey: true,
+                key: "p",
+            }),
+        );
+        await vi.waitFor(() => expect(host.textContent).toContain("保存"));
+        expect(
+            host
+                .querySelector("[data-command-id='file.save']")
+                ?.getAttribute("aria-disabled"),
+        ).toBe("true");
+    });
+
     it("以空欢迎页启动，并只在请求后创建未命名文档", async () => {
         const host = document.createElement("div");
         document.body.append(host);
@@ -788,6 +857,30 @@ describe("App Web 预览启动", () => {
         expect(host.querySelector('[aria-labelledby="settings-title"]')).not.toBeNull();
         expect(host.textContent).toContain("未配置");
         expect(mocks.invoke).not.toHaveBeenCalled();
+    });
+
+    it("includes the existing recent-file submenu actions", async () => {
+        const host = await mountAppWithRecentFiles(["C:\\Notes\\today.mdx"]);
+        window.dispatchEvent(
+            new KeyboardEvent("keydown", {
+                bubbles: true,
+                ctrlKey: true,
+                shiftKey: true,
+                key: "p",
+            }),
+        );
+        await vi.waitFor(() => expect(host.textContent).toContain("today.mdx"));
+        expect(
+            Array.from(host.querySelectorAll("[data-command-id]")).some(
+                (element) =>
+                    element.getAttribute("data-command-id") ===
+                    "recent.open.C:\\Notes\\today.mdx",
+            ),
+        ).toBe(true);
+        expect(host.querySelector("[data-command-id='recent.show-all']")).not.toBeNull();
+        expect(host.querySelector("[data-command-id='recent.clear']")).not.toBeNull();
+        expect(host.textContent).toContain("查看全部……");
+        expect(host.textContent).toContain("清空最近打开");
     });
 });
 

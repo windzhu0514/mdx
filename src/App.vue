@@ -4,6 +4,9 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import "./experience.css";
+import CommandPalette, {
+    type CommandPaletteCommand,
+} from "./components/CommandPalette.vue";
 import FindReplacePanel from "./components/FindReplacePanel.vue";
 import ExternalConflictDialog from "./components/ExternalConflictDialog.vue";
 import HistoryPanel from "./components/HistoryPanel.vue";
@@ -44,6 +47,7 @@ import {
 } from "./utils/text";
 
 type MarkdownCommand = {
+    id: string;
     label: string;
     action: () => void | Promise<void>;
     disabled?: boolean;
@@ -110,6 +114,7 @@ let compactMedia: MediaQueryList | null = null;
 const recentFiles = ref<RecentFileEntry[]>([]);
 const recentMenuItems = computed(() => recentFiles.value.slice(0, 10));
 const showRecentFiles = ref(false);
+const showCommandPalette = ref(false);
 const showFindPanel = ref(false);
 const showReplacePanel = ref(false);
 const findQuery = ref("");
@@ -313,38 +318,44 @@ function countOccurrences(source: string, query: string) {
 }
 
 const fileMenu = computed<MarkdownCommand[]>(() => [
-    { label: "新建", shortcut: "Ctrl+N", action: createNewNote },
-    { label: "打开文件...", shortcut: "Ctrl+O", action: openFiles },
-    { label: "打开文件夹...", action: openFolder },
+    { id: "file.new", label: "新建", shortcut: "Ctrl+N", action: createNewNote },
+    { id: "file.open", label: "打开文件...", shortcut: "Ctrl+O", action: openFiles },
+    { id: "file.open-folder", label: "打开文件夹...", action: openFolder },
     {
+        id: "file.close",
         label: "关闭当前文档",
         shortcut: "Ctrl+W",
         action: closeActiveDocument,
         disabled: !activeDocument.value,
     },
     {
+        id: "file.library",
         label: "笔记库与全文搜索...",
         shortcut: "Ctrl+Shift+F",
         action: openLibrary,
     },
     {
+        id: "file.save",
         label: "保存",
         shortcut: "Ctrl+S",
         action: saveNote,
         disabled: loading.value || !activeDocument.value,
     },
     {
+        id: "file.save-as",
         label: "另存为...",
         shortcut: "Ctrl+Shift+S",
         action: saveNoteAs,
         disabled: loading.value || !activeDocument.value,
     },
     {
+        id: "file.export-markdown",
         label: "导出 Markdown...",
         action: exportMarkdown,
         disabled: !activeDocument.value,
     },
     {
+        id: "file.export-pdf",
         label: "导出 PDF / 打印...",
         action: exportPdf,
         disabled: !activeDocument.value,
@@ -353,48 +364,56 @@ const fileMenu = computed<MarkdownCommand[]>(() => [
 
 const editMenu = computed<MarkdownCommand[]>(() => [
     {
+        id: "edit.undo",
         label: "撤销",
         shortcut: "Ctrl+Z",
         action: undoEdit,
         disabled: !activeDocument.value,
     },
     {
+        id: "edit.redo",
         label: "重做",
         shortcut: "Ctrl+Y",
         action: redoEdit,
         disabled: !activeDocument.value,
     },
     {
+        id: "edit.cut",
         label: "剪切",
         shortcut: "Ctrl+X",
         action: cutSelection,
         disabled: !activeDocument.value,
     },
     {
+        id: "edit.copy",
         label: "复制",
         shortcut: "Ctrl+C",
         action: copySelection,
         disabled: !activeDocument.value,
     },
     {
+        id: "edit.paste",
         label: "粘贴",
         shortcut: "Ctrl+V",
         action: pasteClipboard,
         disabled: !activeDocument.value,
     },
     {
+        id: "edit.select-all",
         label: "全选",
         shortcut: "Ctrl+A",
         action: selectAllContent,
         disabled: !activeDocument.value,
     },
     {
+        id: "edit.find",
         label: "查找",
         shortcut: "Ctrl+F",
         action: findInDocument,
         disabled: !activeDocument.value,
     },
     {
+        id: "edit.replace",
         label: "替换",
         shortcut: "Ctrl+H",
         action: replaceInDocument,
@@ -404,56 +423,67 @@ const editMenu = computed<MarkdownCommand[]>(() => [
 
 const formatMenu = computed<MarkdownCommand[]>(() => [
     {
+        id: "format.paragraph",
         label: "段落",
         shortcut: "Ctrl+0",
         action: () => runEditorCommand("heading", { level: 0 }),
     },
     {
+        id: "format.heading-1",
         label: "一级标题",
         shortcut: "Ctrl+1",
         action: () => runEditorCommand("heading", { level: 1 }),
     },
     {
+        id: "format.heading-2",
         label: "二级标题",
         shortcut: "Ctrl+2",
         action: () => runEditorCommand("heading", { level: 2 }),
     },
     {
+        id: "format.heading-3",
         label: "三级标题",
         shortcut: "Ctrl+3",
         action: () => runEditorCommand("heading", { level: 3 }),
     },
     {
+        id: "format.heading-4",
         label: "四级标题",
         shortcut: "Ctrl+4",
         action: () => runEditorCommand("heading", { level: 4 }),
     },
     {
+        id: "format.heading-5",
         label: "五级标题",
         shortcut: "Ctrl+5",
         action: () => runEditorCommand("heading", { level: 5 }),
     },
     {
+        id: "format.heading-6",
         label: "六级标题",
         shortcut: "Ctrl+6",
         action: () => runEditorCommand("heading", { level: 6 }),
     },
     {
+        id: "format.bold",
         label: "加粗",
         shortcut: "Ctrl+B",
         action: () => runEditorCommand("bold"),
     },
     {
+        id: "format.italic",
         label: "斜体",
         shortcut: "Ctrl+I",
         action: () => runEditorCommand("italic"),
     },
     {
+        id: "format.strike",
         label: "删除线",
         shortcut: "Ctrl+Shift+X",
         action: () => runEditorCommand("strike"),
     },
     {
+        id: "format.code",
         label: "行内代码",
         shortcut: "Ctrl+`",
         action: () => runEditorCommand("code"),
@@ -462,85 +492,105 @@ const formatMenu = computed<MarkdownCommand[]>(() => [
 
 const insertMenu = computed<MarkdownCommand[]>(() => [
     {
+        id: "insert.block-quote",
         label: "引用块",
         action: () => runEditorCommand("blockQuote"),
     },
     {
+        id: "insert.bullet-list",
         label: "无序列表",
         shortcut: "Ctrl+Shift+8",
         action: () => runEditorCommand("bulletList"),
     },
     {
+        id: "insert.ordered-list",
         label: "有序列表",
         shortcut: "Ctrl+Shift+7",
         action: () => runEditorCommand("orderedList"),
     },
     {
+        id: "insert.task-list",
         label: "任务列表",
         shortcut: "Ctrl+Shift+T",
         action: () => runEditorCommand("taskList"),
     },
     {
+        id: "insert.indent",
         label: "增加缩进",
         shortcut: "Tab",
         action: () => runEditorCommand("indent"),
     },
     {
+        id: "insert.outdent",
         label: "减少缩进",
         shortcut: "Shift+Tab",
         action: () => runEditorCommand("outdent"),
     },
     {
+        id: "insert.hr",
         label: "分割线",
         action: () => runEditorCommand("hr"),
     },
     {
+        id: "insert.code-block",
         label: "代码块",
         action: () => runEditorCommand("codeBlock"),
     },
-    { label: "链接", shortcut: "Ctrl+K", action: insertLink },
+    { id: "insert.link", label: "链接", shortcut: "Ctrl+K", action: insertLink },
     {
+        id: "insert.image-reference",
         label: "图片引用",
         shortcut: "Ctrl+Shift+I",
         action: insertImageReference,
     },
-    { label: "导入图片或附件...", action: chooseResources },
-    { label: "表格", action: insertTable },
+    { id: "insert.resource", label: "导入图片或附件...", action: chooseResources },
+    { id: "insert.table", label: "表格", action: insertTable },
 ]);
 
 const viewMenu = computed<MarkdownCommand[]>(() => [
     {
+        id: "view.wysiwyg",
         label: "所见即所得编辑",
         shortcut: "Alt+1",
         action: () => setEditorMode("wysiwyg"),
         disabled: !activeDocument.value,
     },
     {
+        id: "view.split",
         label: "垂直双栏",
         shortcut: "Alt+2",
         action: () => setSourcePreview(true),
         disabled: !activeDocument.value,
     },
     {
+        id: "view.source",
         label: "仅源码",
         shortcut: "Alt+3",
         action: () => setSourcePreview(false),
         disabled: !activeDocument.value,
     },
     {
+        id: "view.toggle-outline",
         label: outlineVisible.value ? "隐藏目录" : "显示目录",
         action: toggleOutlinePanel,
         disabled: !outlineAvailable.value,
     },
-    { label: "历史版本...", action: openHistoryPanel, disabled: !activeDocument.value },
-    { label: "偏好设置...", action: openSettingsPanel },
     {
+        id: "view.history",
+        label: "历史版本...",
+        action: openHistoryPanel,
+        disabled: !activeDocument.value,
+    },
+    { id: "view.settings", label: "偏好设置...", action: openSettingsPanel },
+    {
+        id: "view.cursor-start",
         label: "光标移到文首",
         shortcut: "Ctrl+Home",
         action: () => editorRef.value?.moveCursor("start"),
         disabled: !activeDocument.value,
     },
     {
+        id: "view.cursor-end",
         label: "光标移到文末",
         shortcut: "Ctrl+End",
         action: () => editorRef.value?.moveCursor("end"),
@@ -549,8 +599,95 @@ const viewMenu = computed<MarkdownCommand[]>(() => [
 ]);
 
 const aboutMenu = computed<MarkdownCommand[]>(() => [
-    { label: `关于 ${APP_NAME} ${APP_CN_NAME}`, action: showAbout },
+    { id: "about.app", label: `关于 ${APP_NAME} ${APP_CN_NAME}`, action: showAbout },
 ]);
+
+type MenuGroupId = "file" | "edit" | "format" | "insert" | "view" | "about";
+type PaletteEntry = CommandPaletteCommand & { action: MarkdownCommand["action"] };
+type RecentOpenPaletteEntry = PaletteEntry & { path: string };
+
+function isMenuCommandDisabled(
+    groupId: MenuGroupId,
+    command: MarkdownCommand,
+): boolean {
+    return (
+        Boolean(command.disabled) ||
+        ((groupId === "format" || groupId === "insert") && !activeDocument.value)
+    );
+}
+
+const paletteEntries = computed<PaletteEntry[]>(() =>
+    ([
+        ["file", "文件", fileMenu.value],
+        ["edit", "编辑", editMenu.value],
+        ["format", "格式", formatMenu.value],
+        ["insert", "插入", insertMenu.value],
+        ["view", "视图", viewMenu.value],
+        ["about", "关于", aboutMenu.value],
+    ] as const).flatMap(([groupId, category, commands]) =>
+        commands.map((command) => ({
+            id: command.id,
+            category,
+            label: command.label,
+            shortcut: command.shortcut,
+            disabled: isMenuCommandDisabled(groupId, command),
+            action: command.action,
+        })),
+    ),
+);
+
+const recentOpenPaletteEntries = computed<RecentOpenPaletteEntry[]>(() =>
+    recentMenuItems.value.map((item) => ({
+        id: `recent.open.${item.path}`,
+        category: "最近打开",
+        label: formatRecentFileLabel(item),
+        shortcut: item.path,
+        disabled: false,
+        path: item.path,
+        action: () => openRecentFile(item.path),
+    })),
+);
+
+const recentUtilityPaletteEntries = computed<PaletteEntry[]>(() => [
+    {
+        id: "recent.show-all",
+        category: "最近打开",
+        label: "查看全部……",
+        disabled: recentFiles.value.length === 0,
+        action: showAllRecentFiles,
+    },
+    {
+        id: "recent.clear",
+        category: "最近打开",
+        label: "清空最近打开",
+        disabled: recentFiles.value.length === 0,
+        action: clearRecentFiles,
+    },
+]);
+
+const recentPaletteEntries = computed<PaletteEntry[]>(() => [
+    ...recentOpenPaletteEntries.value,
+    ...recentUtilityPaletteEntries.value,
+]);
+
+const paletteCommands = computed<CommandPaletteCommand[]>(() =>
+    [...paletteEntries.value, ...recentPaletteEntries.value].map(
+        ({ action: _action, ...command }) => command,
+    ),
+);
+
+function runPaletteCommand(id: string): void {
+    const command = [...paletteEntries.value, ...recentPaletteEntries.value].find(
+        (item) => item.id === id,
+    );
+    if (!command || command.disabled) return;
+    showCommandPalette.value = false;
+    void command.action();
+}
+
+function showAllRecentFiles(): void {
+    showRecentFiles.value = true;
+}
 
 function requestLeaveDecision(documentName: string) {
     leavePromptDocumentName.value = documentName;
@@ -1555,6 +1692,13 @@ function handleWindowPointerDown(event: PointerEvent) {
 }
 
 function handleWindowKeyDown(event: KeyboardEvent) {
+    const key = event.key.toLowerCase();
+    if ((event.ctrlKey || event.metaKey) && event.shiftKey && key === "p") {
+        event.preventDefault();
+        showCommandPalette.value = true;
+        return;
+    }
+
     if (event.isComposing) return;
 
     if (event.key === "F3") {
@@ -1579,7 +1723,6 @@ function handleWindowKeyDown(event: KeyboardEvent) {
     }
 
     if (event.ctrlKey || event.metaKey) {
-        const key = event.key.toLowerCase();
         const isApplicationShortcut =
             key === "s" ||
             key === "n" ||
@@ -1912,9 +2055,9 @@ function stringifyError(error: unknown) {
                 <div class="menu-popup">
                     <button
                         v-for="item in fileMenu"
-                        :key="item.label"
+                        :key="item.id"
                         type="button"
-                        :disabled="item.disabled"
+                        :disabled="isMenuCommandDisabled('file', item)"
                         @click="runMenuAction(item.action)"
                     >
                         <span>{{ item.label }}</span>
@@ -1942,31 +2085,25 @@ function stringifyError(error: unknown) {
                             class="menu-popup menu-popup-submenu"
                         >
                             <button
-                                v-for="item in recentMenuItems"
-                                :key="item.path"
+                                v-for="item in recentOpenPaletteEntries"
+                                :key="item.id"
                                 type="button"
                                 :data-recent-menu-path="item.path"
-                                @click="runMenuAction(() => openRecentFile(item.path))"
+                                :disabled="item.disabled"
+                                @click="runMenuAction(item.action)"
                             >
-                                <span>{{ formatRecentFileLabel(item) }}</span>
-                                <span class="shortcut">{{ item.path }}</span>
+                                <span>{{ item.label }}</span>
+                                <span class="shortcut">{{ item.shortcut }}</span>
                             </button>
                             <div class="menu-divider" />
                             <button
+                                v-for="item in recentUtilityPaletteEntries"
+                                :key="item.id"
                                 type="button"
-                                @click="
-                                    runMenuAction(() => {
-                                        showRecentFiles = true;
-                                    })
-                                "
+                                :disabled="item.disabled"
+                                @click="runMenuAction(item.action)"
                             >
-                                <span>查看全部……</span>
-                            </button>
-                            <button
-                                type="button"
-                                @click="runMenuAction(clearRecentFiles)"
-                            >
-                                <span>清空最近打开</span>
+                                <span>{{ item.label }}</span>
                             </button>
                         </div>
                     </div>
@@ -1978,9 +2115,9 @@ function stringifyError(error: unknown) {
                 <div class="menu-popup">
                     <button
                         v-for="item in editMenu"
-                        :key="item.label"
+                        :key="item.id"
                         type="button"
-                        :disabled="item.disabled"
+                        :disabled="isMenuCommandDisabled('edit', item)"
                         @click="runMenuAction(item.action)"
                     >
                         <span>{{ item.label }}</span>
@@ -1996,9 +2133,9 @@ function stringifyError(error: unknown) {
                 <div class="menu-popup">
                     <button
                         v-for="item in formatMenu"
-                        :key="item.label"
+                        :key="item.id"
                         type="button"
-                        :disabled="item.disabled || !activeDocument"
+                        :disabled="isMenuCommandDisabled('format', item)"
                         @click="runMenuAction(item.action)"
                     >
                         <span>{{ item.label }}</span>
@@ -2014,9 +2151,9 @@ function stringifyError(error: unknown) {
                 <div class="menu-popup">
                     <button
                         v-for="item in insertMenu"
-                        :key="item.label"
+                        :key="item.id"
                         type="button"
-                        :disabled="item.disabled || !activeDocument"
+                        :disabled="isMenuCommandDisabled('insert', item)"
                         @click="runMenuAction(item.action)"
                     >
                         <span>{{ item.label }}</span>
@@ -2032,9 +2169,9 @@ function stringifyError(error: unknown) {
                 <div class="menu-popup">
                     <button
                         v-for="item in viewMenu"
-                        :key="item.label"
+                        :key="item.id"
                         type="button"
-                        :disabled="item.disabled"
+                        :disabled="isMenuCommandDisabled('view', item)"
                         @click="runMenuAction(item.action)"
                     >
                         <span>{{ item.label }}</span>
@@ -2054,8 +2191,9 @@ function stringifyError(error: unknown) {
                     </div>
                     <button
                         v-for="item in aboutMenu"
-                        :key="item.label"
+                        :key="item.id"
                         type="button"
+                        :disabled="isMenuCommandDisabled('about', item)"
                         @click="runMenuAction(item.action)"
                     >
                         {{ item.label }}
@@ -2192,6 +2330,12 @@ function stringifyError(error: unknown) {
             @update="updatePreferences"
             @save-ai-key="saveAiApiKey"
             @delete-ai-key="deleteAiApiKey"
+        />
+        <CommandPalette
+            :open="showCommandPalette"
+            :commands="paletteCommands"
+            @close="showCommandPalette = false"
+            @run="runPaletteCommand"
         />
         <HistoryPanel
             :open="showHistory"

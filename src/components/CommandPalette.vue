@@ -128,6 +128,7 @@ function handleKeydown(event: KeyboardEvent): void {
                     v-for="(command, index) in filteredCommands"
                     :id="`command-palette-option-${index}`"
                     :key="command.id"
+                    :data-command-id="command.id"
                     class="command-palette-item"
                     :class="{ 'is-active': index === activeIndex, 'is-disabled': command.disabled }"
                     role="option"
