@@ -88,7 +88,7 @@ const mocks = vi.hoisted(() => {
 
 vi.mock("@milkdown/crepe", () => {
     class Crepe {
-        static Feature = { AI: "ai", ImageBlock: "image-block" };
+        static Feature = { AI: "ai", CodeMirror: "code-mirror", ImageBlock: "image-block" };
         readonly create = vi.fn(() => mocks.createEditor());
         readonly destroy = vi.fn(() => mocks.destroyEditor());
         readonly setReadonly = vi.fn(() => this);
@@ -305,6 +305,26 @@ afterEach(() => {
 });
 
 describe("MilkdownEditor", () => {
+    it.each([false, true])(
+        "configures the public CodeMirror preview hook for Mermaid blocks in readonly=%s",
+        async (readonly) => {
+            const editor = mountEditor("```mermaid\nflowchart LR\nA --> B\n```", readonly);
+            cleanup = editor.unmount;
+            await nextTick();
+
+            const options = mocks.instances[0].options as {
+                featureConfigs: Record<
+                    string,
+                    { previewOnlyByDefault?: boolean; renderPreview?: unknown }
+                >;
+            };
+            expect(options.featureConfigs["code-mirror"].previewOnlyByDefault).toBe(true);
+            expect(options.featureConfigs["code-mirror"].renderPreview).toEqual(
+                expect.any(Function),
+            );
+        },
+    );
+
     it("enables Crepe AI with diff review and forwards provider errors", async () => {
         const provider: MoraAIProvider = async function* () {
             yield "结果";

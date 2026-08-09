@@ -577,6 +577,25 @@ summary:focus-visible,
     background: var(--color-bg-surface);
 }
 
+.mermaid-preview {
+    display: grid;
+    place-items: center;
+    min-height: 96px;
+    overflow-x: auto;
+    padding: 16px;
+    color: var(--color-text-main);
+}
+
+.mermaid-preview svg {
+    max-width: 100%;
+    height: auto;
+}
+
+.mermaid-preview-error {
+    color: var(--color-danger);
+    font-family: var(--font-mono);
+}
+
 @media (max-width: 900px) {
     .library-search {
         grid-template-columns: 1fr 1fr;

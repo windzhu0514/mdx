@@ -5,6 +5,7 @@
 <script setup lang="ts">
 import { Crepe } from "@milkdown/crepe";
 import type { AIProvider } from "@milkdown/crepe/feature/ai";
+import mermaid from "mermaid";
 import "@milkdown/crepe/theme/common/style.css";
 import "@milkdown/crepe/theme/frame.css";
 import { commandsCtx, editorViewCtx, parserCtx } from "@milkdown/kit/core";
@@ -30,7 +31,10 @@ import { EditorState, Selection, TextSelection } from "@milkdown/kit/prose/state
 import { getMarkdown, replaceAll, replaceRange } from "@milkdown/kit/utils";
 import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { EditorCommand, ImageUploadHandler, MoraEditorHandle } from "./editorTypes";
+import { createMermaidPreview } from "./mermaidPreview";
 import { normalizeMarkdownHeadingText } from "../../utils/text";
+
+const renderMermaidPreview = createMermaidPreview(mermaid);
 
 const props = defineProps<{
     documentId: string;
@@ -150,6 +154,10 @@ onMounted(() => {
         [Crepe.Feature.AI]: props.aiProvider ? true : false,
     };
     const featureConfigs = {
+        [Crepe.Feature.CodeMirror]: {
+            renderPreview: renderMermaidPreview,
+            previewOnlyByDefault: true,
+        },
         [Crepe.Feature.ImageBlock]: {
             onUpload: async (file: File) => {
                 if (!props.uploadImage) throw new Error("图片上传不可用");
