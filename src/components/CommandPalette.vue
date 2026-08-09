@@ -115,7 +115,11 @@ function handleKeydown(event: KeyboardEvent): void {
                 v-model="query"
                 aria-label="搜索命令"
                 aria-controls="command-palette-list"
-                :aria-activedescendant="`command-palette-option-${activeIndex}`"
+                :aria-activedescendant="
+                    filteredCommands.length > 0
+                        ? `command-palette-option-${activeIndex}`
+                        : undefined
+                "
                 autocomplete="off"
                 @keydown="handleKeydown"
             />

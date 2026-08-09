@@ -78,6 +78,15 @@ describe("CommandPalette", () => {
         expect(run).not.toHaveBeenCalled();
     });
 
+    it("omits aria-activedescendant when search has no results", async () => {
+        const { input } = mountPalette();
+        input.value = "不存在的命令";
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        await nextTick();
+
+        expect(input.hasAttribute("aria-activedescendant")).toBe(false);
+    });
+
     it("moves with arrows and restores the invoking focus after Escape", async () => {
         const trigger = document.createElement("button");
         document.body.append(trigger);
