@@ -36,6 +36,7 @@ function mountPalette(open = true) {
     const run = vi.fn();
     const close = vi.fn();
     const isOpen = ref(open);
+    const restoreFocusOnClose = ref(true);
     const host = document.createElement("div");
     document.body.append(host);
     app = createApp({
@@ -43,6 +44,7 @@ function mountPalette(open = true) {
             h(CommandPalette, {
                 open: isOpen.value,
                 commands,
+                restoreFocusOnClose: restoreFocusOnClose.value,
                 onRun: run,
                 onClose: close,
             }),
@@ -57,6 +59,10 @@ function mountPalette(open = true) {
         host,
         input,
         run,
+        setRestoreFocus: async (value: boolean) => {
+            restoreFocusOnClose.value = value;
+            await nextTick();
+        },
         setOpen: async (value: boolean) => {
             isOpen.value = value;
             await nextTick();
@@ -162,16 +168,31 @@ describe("CommandPalette", () => {
         targetDialog.tabIndex = -1;
         document.body.append(trigger, targetDialog);
         trigger.focus();
-        const { input, setOpen } = mountPalette();
+        const { input, setOpen, setRestoreFocus } = mountPalette();
         input.value = "偏好";
         input.dispatchEvent(new Event("input", { bubbles: true }));
         await nextTick();
         await keydown(input, "Enter");
         targetDialog.focus();
 
+        await setRestoreFocus(false);
         await setOpen(false);
         await nextTick();
         expect(document.activeElement).toBe(targetDialog);
+    });
+
+    it("restores the invoking focus after executing an ordinary command", async () => {
+        const trigger = document.createElement("button");
+        document.body.append(trigger);
+        trigger.focus();
+        const { input, setOpen } = mountPalette();
+        input.value = "新建";
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        await nextTick();
+        await keydown(input, "Enter");
+
+        await setOpen(false);
+        await vi.waitFor(() => expect(document.activeElement).toBe(trigger));
     });
 
     it("scrolls the keyboard-active option into view", async () => {

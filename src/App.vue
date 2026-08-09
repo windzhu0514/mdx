@@ -115,6 +115,7 @@ const recentFiles = ref<RecentFileEntry[]>([]);
 const recentMenuItems = computed(() => recentFiles.value.slice(0, 10));
 const showRecentFiles = ref(false);
 const showCommandPalette = ref(false);
+const restorePaletteFocus = ref(true);
 const showFindPanel = ref(false);
 const showReplacePanel = ref(false);
 const findQuery = ref("");
@@ -690,13 +691,22 @@ function runPaletteCommand(id: string): void {
         (item) => item.id === id,
     );
     if (!command || command.disabled) return;
+    restorePaletteFocus.value = true;
     showCommandPalette.value = false;
-    void command.action();
+    const action = command.action();
+    restorePaletteFocus.value = !blockingModalOpen.value;
+    void action;
 }
 
 function openCommandPalette(): void {
     if (blockingModalOpen.value) return;
+    restorePaletteFocus.value = true;
     showCommandPalette.value = true;
+}
+
+function closeCommandPalette(): void {
+    restorePaletteFocus.value = true;
+    showCommandPalette.value = false;
 }
 
 function showAllRecentFiles(): void {
@@ -2349,7 +2359,8 @@ function stringifyError(error: unknown) {
         <CommandPalette
             :open="showCommandPalette"
             :commands="paletteCommands"
-            @close="showCommandPalette = false"
+            :restore-focus-on-close="restorePaletteFocus"
+            @close="closeCommandPalette"
             @run="runPaletteCommand"
         />
         <HistoryPanel

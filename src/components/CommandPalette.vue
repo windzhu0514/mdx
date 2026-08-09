@@ -9,10 +9,14 @@ export type CommandPaletteCommand = {
     disabled: boolean;
 };
 
-const props = defineProps<{
-    open: boolean;
-    commands: CommandPaletteCommand[];
-}>();
+const props = withDefaults(
+    defineProps<{
+        open: boolean;
+        commands: CommandPaletteCommand[];
+        restoreFocusOnClose?: boolean;
+    }>(),
+    { restoreFocusOnClose: true },
+);
 const emit = defineEmits<{
     close: [];
     run: [id: string];
@@ -25,7 +29,6 @@ const closeButton = ref<HTMLButtonElement | null>(null);
 const dialog = ref<HTMLElement | null>(null);
 const optionElements = ref<HTMLElement[]>([]);
 let returnFocus: HTMLElement | null = null;
-let restoreFocusOnClose = true;
 
 const filteredCommands = computed(() => {
     const needle = query.value.trim().toLocaleLowerCase("zh-CN");
@@ -49,7 +52,6 @@ watch(
                 document.activeElement instanceof HTMLElement
                     ? document.activeElement
                     : null;
-            restoreFocusOnClose = true;
             void nextTick(() => input.value?.focus());
             return;
         }
@@ -57,9 +59,10 @@ watch(
         query.value = "";
         activeIndex.value = 0;
         void nextTick(() => {
-            if (restoreFocusOnClose && returnFocus?.isConnected) returnFocus.focus();
+            if (props.restoreFocusOnClose && returnFocus?.isConnected) {
+                returnFocus.focus();
+            }
             returnFocus = null;
-            restoreFocusOnClose = true;
         });
     },
     { immediate: true },
@@ -68,7 +71,6 @@ watch(
 function executeActive(): void {
     const command = filteredCommands.value[activeIndex.value];
     if (command && !command.disabled) {
-        restoreFocusOnClose = false;
         emit("run", command.id);
     }
 }
@@ -93,7 +95,6 @@ function setOptionElement(
 }
 
 function requestClose(): void {
-    restoreFocusOnClose = true;
     emit("close");
 }
 

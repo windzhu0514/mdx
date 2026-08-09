@@ -809,6 +809,44 @@ describe("App Web 预览启动", () => {
         expect(host.querySelector("input[aria-label='搜索命令']")).toBeNull();
     });
 
+    it("restores palette focus when unsaved history exits without opening a modal", async () => {
+        const host = await mountApp();
+        findButton(host, "新建文档")?.click();
+        await vi.waitFor(() => expect(host.textContent).toContain("未命名文档 1"));
+        const trigger = findButton(host, "偏好设置...");
+        if (!trigger) throw new Error("未找到命令面板启动焦点");
+        trigger.focus();
+
+        window.dispatchEvent(
+            new KeyboardEvent("keydown", {
+                bubbles: true,
+                ctrlKey: true,
+                shiftKey: true,
+                key: "p",
+            }),
+        );
+        const input = await vi.waitFor(() => {
+            const element = host.querySelector<HTMLInputElement>(
+                "input[aria-label='搜索命令']",
+            );
+            expect(element).not.toBeNull();
+            return element;
+        });
+        if (!input) throw new Error("未找到命令搜索框");
+        input.value = "历史版本";
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        await nextTick();
+        input.dispatchEvent(
+            new KeyboardEvent("keydown", { bubbles: true, key: "Enter" }),
+        );
+
+        await vi.waitFor(() => {
+            expect(host.textContent).toContain("请先保存笔记，再查看历史版本");
+            expect(host.querySelector("input[aria-label='搜索命令']")).toBeNull();
+            expect(document.activeElement).toBe(trigger);
+        });
+    });
+
     it("以空欢迎页启动，并只在请求后创建未命名文档", async () => {
         const host = document.createElement("div");
         document.body.append(host);
