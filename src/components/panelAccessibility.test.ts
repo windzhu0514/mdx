@@ -64,6 +64,31 @@ describe("模态面板关闭按钮", () => {
 
         expect(closeButton?.getAttribute("aria-label")).toBe(label);
     });
+
+    it.each([
+        {
+            name: "偏好设置",
+            component: SettingsPanel,
+            props: {
+                open: true,
+                preferences: DEFAULT_PREFERENCES,
+                aiKeyConfigured: false,
+                aiKeySaving: false,
+            },
+        },
+        {
+            name: "历史版本",
+            component: HistoryPanel,
+            props: { open: true, items: [], loading: false },
+        },
+    ])("$name 打开后接管模态焦点", async ({ component, props }) => {
+        const host = mountPanel(component, props);
+        await nextTick();
+        const dialog = host.querySelector<HTMLElement>('[role="dialog"]');
+
+        expect(dialog).not.toBeNull();
+        expect(document.activeElement).toBe(dialog);
+    });
 });
 
 describe("AI 设置", () => {

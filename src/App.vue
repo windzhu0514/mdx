@@ -162,6 +162,16 @@ const markdownResourcesPlan = ref<MarkdownResourcePlan>({
 });
 let markdownResourcesResolver: ((decision: MarkdownResourceDecision) => void) | null =
     null;
+const blockingModalOpen = computed(
+    () =>
+        showRecentFiles.value ||
+        showLibrary.value ||
+        showHistory.value ||
+        showSettings.value ||
+        showLeavePrompt.value ||
+        showConflictPrompt.value ||
+        showMarkdownResourcesPrompt.value,
+);
 const savingDocumentIds = new Set<string>();
 let unlistenClose: (() => void) | null = null;
 let unlistenDragDrop: (() => void) | null = null;
@@ -606,10 +616,7 @@ type MenuGroupId = "file" | "edit" | "format" | "insert" | "view" | "about";
 type PaletteEntry = CommandPaletteCommand & { action: MarkdownCommand["action"] };
 type RecentOpenPaletteEntry = PaletteEntry & { path: string };
 
-function isMenuCommandDisabled(
-    groupId: MenuGroupId,
-    command: MarkdownCommand,
-): boolean {
+function isMenuCommandDisabled(groupId: MenuGroupId, command: MarkdownCommand): boolean {
     return (
         Boolean(command.disabled) ||
         ((groupId === "format" || groupId === "insert") && !activeDocument.value)
@@ -617,14 +624,16 @@ function isMenuCommandDisabled(
 }
 
 const paletteEntries = computed<PaletteEntry[]>(() =>
-    ([
-        ["file", "文件", fileMenu.value],
-        ["edit", "编辑", editMenu.value],
-        ["format", "格式", formatMenu.value],
-        ["insert", "插入", insertMenu.value],
-        ["view", "视图", viewMenu.value],
-        ["about", "关于", aboutMenu.value],
-    ] as const).flatMap(([groupId, category, commands]) =>
+    (
+        [
+            ["file", "文件", fileMenu.value],
+            ["edit", "编辑", editMenu.value],
+            ["format", "格式", formatMenu.value],
+            ["insert", "插入", insertMenu.value],
+            ["view", "视图", viewMenu.value],
+            ["about", "关于", aboutMenu.value],
+        ] as const
+    ).flatMap(([groupId, category, commands]) =>
         commands.map((command) => ({
             id: command.id,
             category,
@@ -683,6 +692,11 @@ function runPaletteCommand(id: string): void {
     if (!command || command.disabled) return;
     showCommandPalette.value = false;
     void command.action();
+}
+
+function openCommandPalette(): void {
+    if (blockingModalOpen.value) return;
+    showCommandPalette.value = true;
 }
 
 function showAllRecentFiles(): void {
@@ -1306,6 +1320,7 @@ async function exportPdf() {
         editorMode.value = "wysiwyg";
         await nextTick();
         await (editorRef.value?.whenReady() ?? Promise.resolve());
+        await (editorRef.value?.whenSettled() ?? Promise.resolve());
         if (activeDocumentId.value !== targetId) {
             statusMessage.value = "PDF 导出已取消：活动文档已切换";
             return;
@@ -1695,7 +1710,7 @@ function handleWindowKeyDown(event: KeyboardEvent) {
     const key = event.key.toLowerCase();
     if ((event.ctrlKey || event.metaKey) && event.shiftKey && key === "p") {
         event.preventDefault();
-        showCommandPalette.value = true;
+        openCommandPalette();
         return;
     }
 

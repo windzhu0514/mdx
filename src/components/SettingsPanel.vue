@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { nextTick, ref, watch } from "vue";
 import type {
     EditorPreferences,
     FontPreference,
     ThemePreference,
 } from "../composables/usePreferences";
 
-defineProps<{
+const props = defineProps<{
     open: boolean;
     preferences: EditorPreferences;
     aiKeyConfigured: boolean;
@@ -20,6 +20,14 @@ const emit = defineEmits<{
 }>();
 
 const apiKey = ref("");
+const panel = ref<HTMLElement | null>(null);
+
+watch(
+    () => props.open,
+    (open) => {
+        if (open) void nextTick(() => panel.value?.focus());
+    },
+);
 
 function numberValue(event: Event) {
     return Number((event.target as HTMLInputElement).value);
@@ -34,8 +42,10 @@ function saveAiKey() {
 <template>
     <div v-if="open" class="panel-backdrop" @click.self="emit('close')">
         <section
+            ref="panel"
             class="settings-panel"
             role="dialog"
+            tabindex="-1"
             aria-modal="true"
             aria-labelledby="settings-title"
         >

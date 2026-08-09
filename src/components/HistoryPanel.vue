@@ -1,11 +1,13 @@
 <script setup lang="ts">
+import { nextTick, ref, watch } from "vue";
 import type { HistoryListItem } from "../types/history";
 
-defineProps<{
+const props = defineProps<{
     open: boolean;
     items: HistoryListItem[];
     loading: boolean;
 }>();
+const panel = ref<HTMLElement | null>(null);
 const emit = defineEmits<{
     close: [];
     refresh: [];
@@ -16,13 +18,22 @@ function formatTime(value: string) {
     const date = new Date(value);
     return Number.isNaN(date.valueOf()) ? value : date.toLocaleString();
 }
+
+watch(
+    () => props.open,
+    (open) => {
+        if (open) void nextTick(() => panel.value?.focus());
+    },
+);
 </script>
 
 <template>
     <div v-if="open" class="panel-backdrop" @click.self="emit('close')">
         <section
+            ref="panel"
             class="history-panel"
             role="dialog"
+            tabindex="-1"
             aria-modal="true"
             aria-labelledby="history-title"
         >

@@ -8,6 +8,22 @@
     --color-primary-light: #eff6ff;
     --color-danger: #ef4444;
     --color-success: #10b981;
+    --color-primary-soft: color-mix(in srgb, var(--color-primary) 10%, transparent);
+    --color-primary-strong: color-mix(in srgb, var(--color-primary) 32%, transparent);
+    --color-focus-border: color-mix(in srgb, var(--color-primary) 35%, transparent);
+    --color-focus-shadow: color-mix(in srgb, var(--color-primary) 12%, transparent);
+    --color-hover-border: color-mix(in srgb, var(--color-primary) 18%, transparent);
+    --editor-selection-background: color-mix(
+        in srgb,
+        var(--color-primary) 18%,
+        transparent
+    );
+    --editor-active-line-background: color-mix(
+        in srgb,
+        var(--color-primary) 6%,
+        transparent
+    );
+    --about-title-background: linear-gradient(135deg, #3b82f6, #8b5cf6, #ec4899);
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
     --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.05), 0 1px 3px rgba(0, 0, 0, 0.03);
     --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.08), 0 4px 12px rgba(0, 0, 0, 0.04);
@@ -171,7 +187,7 @@ summary {
 
 .workspace-tree-item.active {
     color: var(--color-primary);
-    background: rgba(59, 130, 246, 0.1);
+    background: var(--color-primary-soft);
 }
 
 .workspace-disclosure {
@@ -244,7 +260,7 @@ summary {
 
 .workspace-resize-handle:hover,
 .workspace-resize-handle:focus-visible {
-    background: rgba(59, 130, 246, 0.32);
+    background: var(--color-primary-strong);
 }
 
 /* Sidebar TOC */
@@ -430,7 +446,7 @@ summary {
     display: block;
     font-size: 18px;
     margin-bottom: 6px;
-    background: linear-gradient(135deg, #3b82f6, #8b5cf6, #ec4899);
+    background: var(--about-title-background);
     -webkit-background-clip: text;
     color: transparent;
     font-weight: 700;
@@ -683,8 +699,8 @@ summary {
 }
 
 .find-input:focus {
-    border-color: rgba(59, 130, 246, 0.35);
-    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12);
+    border-color: var(--color-focus-border);
+    box-shadow: 0 0 0 3px var(--color-focus-shadow);
 }
 
 .find-meta {
@@ -707,7 +723,18 @@ summary {
 .find-button:hover {
     background: var(--color-primary-light);
     color: var(--color-primary);
-    border-color: rgba(59, 130, 246, 0.18);
+    border-color: var(--color-hover-border);
+}
+
+.markdown-editor .cm-editor.cm-focused .cm-selectionBackground,
+.markdown-editor .cm-selectionBackground,
+.markdown-editor .cm-content ::selection {
+    background: var(--editor-selection-background) !important;
+}
+
+.markdown-editor .cm-activeLine,
+.markdown-editor .cm-activeLineGutter {
+    background: var(--editor-active-line-background);
 }
 
 .find-button.secondary {

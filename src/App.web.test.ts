@@ -440,9 +440,7 @@ function openDocumentRow(host: HTMLElement, name: string) {
 
 function folderDocumentRow(host: HTMLElement, name: string) {
     return Array.from(
-        host.querySelectorAll<HTMLElement>(
-            '[role="treeitem"][data-tree-key^="file:"]',
-        ),
+        host.querySelectorAll<HTMLElement>('[role="treeitem"][data-tree-key^="file:"]'),
     ).find((item) => item.querySelector(".workspace-name")?.textContent === name);
 }
 
@@ -594,9 +592,7 @@ async function mountWithInactiveConflict() {
     findButton(host, "打开文件...")?.click();
     await vi.waitFor(() =>
         expect(
-            host.querySelectorAll(
-                '[role="treeitem"][data-tree-key^="document:"]',
-            ),
+            host.querySelectorAll('[role="treeitem"][data-tree-key^="document:"]'),
         ).toHaveLength(2),
     );
     openDocumentRow(host, "a")?.click();
@@ -725,7 +721,9 @@ describe("App Web 预览启动", () => {
         );
         if (input) input.value = "新建";
         input?.dispatchEvent(new InputEvent("input", { bubbles: true, data: "新建" }));
-        input?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" }));
+        input?.dispatchEvent(
+            new KeyboardEvent("keydown", { bubbles: true, key: "Enter" }),
+        );
 
         await vi.waitFor(() => expect(host.textContent).toContain("未命名文档 1"));
     });
@@ -746,6 +744,65 @@ describe("App Web 预览启动", () => {
                 .querySelector("[data-command-id='file.save']")
                 ?.getAttribute("aria-disabled"),
         ).toBe("true");
+    });
+
+    it("blocks the command palette shortcut while another modal owns focus", async () => {
+        const host = await mountApp();
+        findButton(host, "偏好设置...")?.click();
+        await vi.waitFor(() =>
+            expect(
+                host.querySelector('[aria-labelledby="settings-title"]'),
+            ).not.toBeNull(),
+        );
+
+        window.dispatchEvent(
+            new KeyboardEvent("keydown", {
+                bubbles: true,
+                ctrlKey: true,
+                shiftKey: true,
+                key: "p",
+            }),
+        );
+        await nextTick();
+
+        expect(host.querySelector("input[aria-label='搜索命令']")).toBeNull();
+        expect(host.querySelectorAll('[aria-modal="true"]')).toHaveLength(1);
+    });
+
+    it("hands focus to a modal opened by a palette command", async () => {
+        const host = await mountApp();
+        window.dispatchEvent(
+            new KeyboardEvent("keydown", {
+                bubbles: true,
+                ctrlKey: true,
+                shiftKey: true,
+                key: "p",
+            }),
+        );
+        const input = await vi.waitFor(() => {
+            const element = host.querySelector<HTMLInputElement>(
+                "input[aria-label='搜索命令']",
+            );
+            expect(element).not.toBeNull();
+            return element;
+        });
+        if (!input) throw new Error("未找到命令搜索框");
+        input.value = "偏好设置";
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        await nextTick();
+        input.dispatchEvent(
+            new KeyboardEvent("keydown", { bubbles: true, key: "Enter" }),
+        );
+
+        const settings = await vi.waitFor(() => {
+            const element = host.querySelector<HTMLElement>(
+                '[aria-labelledby="settings-title"]',
+            );
+            expect(element).not.toBeNull();
+            return element;
+        });
+        expect(settings?.contains(document.activeElement)).toBe(true);
+        expect(host.querySelector("input[aria-label='搜索命令']")).toBeNull();
     });
 
     it("以空欢迎页启动，并只在请求后创建未命名文档", async () => {
@@ -1144,9 +1201,7 @@ describe("App 多文档工作区", () => {
 
         await vi.waitFor(() => {
             expect(
-                host.querySelectorAll(
-                    '[role="treeitem"][data-tree-key^="document:"]',
-                ),
+                host.querySelectorAll('[role="treeitem"][data-tree-key^="document:"]'),
             ).toHaveLength(2);
             expect(mocks.getMoraEditorMarkdown?.()).toBe("# b");
         });
@@ -1190,9 +1245,7 @@ describe("App 多文档工作区", () => {
         findButton(host, "打开文件...")?.click();
         await vi.waitFor(() =>
             expect(
-                host.querySelectorAll(
-                    '[role="treeitem"][data-tree-key^="document:"]',
-                ),
+                host.querySelectorAll('[role="treeitem"][data-tree-key^="document:"]'),
             ).toHaveLength(2),
         );
         expect(host.querySelector('[role="tablist"]')).toBeNull();
@@ -1228,9 +1281,7 @@ describe("App 多文档工作区", () => {
             ?.click();
         await vi.waitFor(() =>
             expect(
-                host.querySelectorAll(
-                    '[role="treeitem"][data-tree-key^="document:"]',
-                ),
+                host.querySelectorAll('[role="treeitem"][data-tree-key^="document:"]'),
             ).toHaveLength(2),
         );
         openDocumentRow(host, "a")?.click();
@@ -1270,9 +1321,7 @@ describe("App 多文档工作区", () => {
         cleanup = () => app.unmount();
 
         findButton(host, "打开文件...")?.click();
-        await vi.waitFor(() =>
-            expect(openDocumentRow(host, "b")).not.toBeUndefined(),
-        );
+        await vi.waitFor(() => expect(openDocumentRow(host, "b")).not.toBeUndefined());
         const activeRow = openDocumentRow(host, "b");
         activeRow?.focus();
         activeRow?.dispatchEvent(
@@ -1293,9 +1342,7 @@ describe("App 多文档工作区", () => {
         cleanup = () => app.unmount();
 
         findButton(host, "打开文件...")?.click();
-        await vi.waitFor(() =>
-            expect(openDocumentRow(host, "a")).not.toBeUndefined(),
-        );
+        await vi.waitFor(() => expect(openDocumentRow(host, "a")).not.toBeUndefined());
         openDocumentRow(host, "a")?.click();
         await nextTick();
         mocks.editorUpdate?.("dirty a");
@@ -1379,9 +1426,7 @@ describe("App 多文档工作区", () => {
         cleanup = () => app.unmount();
 
         findButton(host, "打开文件...")?.click();
-        await vi.waitFor(() =>
-            expect(openDocumentRow(host, "a")).not.toBeUndefined(),
-        );
+        await vi.waitFor(() => expect(openDocumentRow(host, "a")).not.toBeUndefined());
         const onlyRow = openDocumentRow(host, "a");
         onlyRow?.focus();
         onlyRow?.dispatchEvent(
@@ -1464,9 +1509,7 @@ describe("App 多文档工作区", () => {
 
         await vi.waitFor(() => {
             expect(
-                host.querySelectorAll(
-                    '[role="treeitem"][data-tree-key^="document:"]',
-                ),
+                host.querySelectorAll('[role="treeitem"][data-tree-key^="document:"]'),
             ).toHaveLength(2);
             expect(host.textContent).toContain("bad.mdx");
             expect(openDocumentRow(host, "good-a")).not.toBeUndefined();
@@ -1485,9 +1528,7 @@ describe("App 多文档工作区", () => {
         cleanup = () => app.unmount();
 
         findButton(host, "打开文件...")?.click();
-        await vi.waitFor(() =>
-            expect(openDocumentRow(host, "a")).not.toBeUndefined(),
-        );
+        await vi.waitFor(() => expect(openDocumentRow(host, "a")).not.toBeUndefined());
         mocks.unavailableDiskPaths.add("c:\\notes\\a.mdx");
         await mocks.focusHandler?.({ payload: true });
 
@@ -1519,9 +1560,7 @@ describe("App 多文档工作区", () => {
             ?.click();
         await vi.waitFor(() =>
             expect(
-                host.querySelectorAll(
-                    '[role="treeitem"][data-tree-key^="document:"]',
-                ),
+                host.querySelectorAll('[role="treeitem"][data-tree-key^="document:"]'),
             ).toHaveLength(2),
         );
         openDocumentRow(host, "a")?.click();
@@ -2024,9 +2063,7 @@ describe("App 多文档工作区", () => {
         cleanup = () => app.unmount();
         await vi.waitFor(() => expect(mocks.closeHandler).toBeTypeOf("function"));
         findButton(host, "打开文件...")?.click();
-        await vi.waitFor(() =>
-            expect(openDocumentRow(host, "a.md")).not.toBeUndefined(),
-        );
+        await vi.waitFor(() => expect(openDocumentRow(host, "a.md")).not.toBeUndefined());
         openDocumentRow(host, "a.md")?.click();
         await nextTick();
         findButton(host, "保存")?.click();
@@ -2210,9 +2247,7 @@ describe("App 桌面关闭", () => {
         findButton(host, "打开文件...")?.click();
         await vi.waitFor(() =>
             expect(
-                host.querySelectorAll(
-                    '[role="treeitem"][data-tree-key^="document:"]',
-                ),
+                host.querySelectorAll('[role="treeitem"][data-tree-key^="document:"]'),
             ).toHaveLength(2),
         );
         openDocumentRow(host, "a")?.click();
@@ -2240,9 +2275,7 @@ describe("App 桌面关闭", () => {
         expect(event.preventDefault).toHaveBeenCalledTimes(1);
         expect(mocks.windowClose).not.toHaveBeenCalled();
         expect(
-            host.querySelectorAll(
-                '[role="treeitem"][data-tree-key^="document:"]',
-            ),
+            host.querySelectorAll('[role="treeitem"][data-tree-key^="document:"]'),
         ).toHaveLength(2);
         expect(mocks.invoke).not.toHaveBeenCalledWith("delete_draft", expect.anything());
     });
@@ -2261,9 +2294,7 @@ describe("App 桌面关闭", () => {
 
         expect(mocks.windowClose).not.toHaveBeenCalled();
         expect(
-            host.querySelectorAll(
-                '[role="treeitem"][data-tree-key^="document:"]',
-            ),
+            host.querySelectorAll('[role="treeitem"][data-tree-key^="document:"]'),
         ).toHaveLength(2);
         expect(host.textContent).toContain("无法保存 C:\\notes\\b.mdx");
         expect(mocks.invoke).not.toHaveBeenCalledWith("delete_draft", expect.anything());

@@ -106,6 +106,14 @@ function whenReady(): Promise<void> {
     return editableEditor()?.whenReady() ?? Promise.resolve();
 }
 
+function whenSettled(): Promise<void> {
+    return props.mode === "wysiwyg"
+        ? (milkdownEditor.value?.whenSettled() ?? Promise.resolve())
+        : props.sourcePreview
+          ? (previewEditor.value?.whenSettled() ?? Promise.resolve())
+          : Promise.resolve();
+}
+
 function cancelAi(): void {
     milkdownEditor.value?.cancelAi();
 }
@@ -129,6 +137,7 @@ defineExpose<MoraEditorHandle>({
     execute,
     scrollToHeading,
     whenReady,
+    whenSettled,
     cancelAi,
     releaseDocument,
 });

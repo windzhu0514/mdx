@@ -27,6 +27,7 @@ export type MoraEditorHandle = {
     execute(command: EditorCommand): void;
     scrollToHeading(text: string): boolean;
     whenReady(): Promise<void>;
+    whenSettled(): Promise<void>;
     cancelAi(): void;
     releaseDocument(documentId: string): void;
 };

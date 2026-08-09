@@ -11,9 +11,11 @@ type LowestEditorControls = {
     emitUpdate: (markdown: string) => void;
     focus: ReturnType<typeof vi.fn>;
     readiness: Promise<void>;
+    settlement: Promise<void>;
     uploadImage?: (file: File) => Promise<string>;
     replaceSelection: ReturnType<typeof vi.fn>;
     whenReadyCalls: number;
+    whenSettledCalls: number;
 };
 
 type Deferred<T> = {
@@ -38,6 +40,7 @@ const mocks = vi.hoisted(() => ({
     printSnapshots: [] as string[],
     printTitles: [] as string[],
     nextMilkdownReadiness: undefined as Promise<void> | undefined,
+    nextMilkdownSettlement: undefined as Promise<void> | undefined,
     invoke: vi.fn(),
     openDialog: vi.fn(),
     saveDialog: vi.fn(),
@@ -141,10 +144,15 @@ function lowestEditorStub(kind: "milkdown" | "source") {
                 emitUpdate: (markdown) => emit("update:modelValue", markdown),
                 focus: vi.fn(),
                 readiness,
+                settlement:
+                    kind === "milkdown"
+                        ? (mocks.nextMilkdownSettlement ?? Promise.resolve())
+                        : Promise.resolve(),
                 uploadImage: props.uploadImage as
                     ((file: File) => Promise<string>) | undefined,
                 replaceSelection: mocks.replaceSelection,
                 whenReadyCalls: 0,
+                whenSettledCalls: 0,
             };
             mocks[kind] = controls;
 
@@ -165,6 +173,10 @@ function lowestEditorStub(kind: "milkdown" | "source") {
                 whenReady: () => {
                     controls.whenReadyCalls += 1;
                     return controls.readiness;
+                },
+                whenSettled: () => {
+                    controls.whenSettledCalls += 1;
+                    return controls.settlement;
                 },
             });
 
@@ -252,6 +264,7 @@ beforeEach(() => {
     mocks.printSnapshots = [];
     mocks.printTitles = [];
     mocks.nextMilkdownReadiness = undefined;
+    mocks.nextMilkdownSettlement = undefined;
     mocks.openDialog.mockResolvedValue("C:\\notes\\test.mdx");
     mocks.saveDialog.mockResolvedValue("C:\\notes\\saved.mdx");
     mocks.invoke.mockImplementation(async (command: string, args?: unknown) => {
@@ -848,6 +861,19 @@ describe("App PDF 打印视图", () => {
         await nextTick();
         expect(editorValue(host, "source")).toBe("# 原文");
         expect(host.textContent).not.toContain("未保存");
+    });
+
+    it("waits for deferred Mermaid preview settlement before opening the print dialog", async () => {
+        const host = await mountApp();
+        const mermaidSettlement = createDeferred<void>();
+        if (mocks.milkdown) mocks.milkdown.settlement = mermaidSettlement.promise;
+
+        findButton(host, "导出 PDF / 打印...").click();
+        await vi.waitFor(() => expect(mocks.milkdown?.whenSettledCalls).toBe(1));
+        expect(window.print).not.toHaveBeenCalled();
+
+        mermaidSettlement.resolve();
+        await vi.waitFor(() => expect(window.print).toHaveBeenCalledTimes(1));
     });
 
     it.each([

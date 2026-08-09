@@ -43,6 +43,14 @@
     --color-primary-light: #e2e2e2;
     --color-danger: #444444;
     --color-success: #363636;
+    --color-primary-soft: rgba(36, 36, 36, 0.1);
+    --color-primary-strong: rgba(36, 36, 36, 0.32);
+    --color-focus-border: rgba(36, 36, 36, 0.4);
+    --color-focus-shadow: rgba(36, 36, 36, 0.14);
+    --color-hover-border: rgba(36, 36, 36, 0.22);
+    --editor-selection-background: rgba(36, 36, 36, 0.18);
+    --editor-active-line-background: rgba(36, 36, 36, 0.06);
+    --about-title-background: linear-gradient(#242424, #242424);
     --shadow-lg: 0 16px 44px rgba(0, 0, 0, 0.14);
     color-scheme: light;
 }

@@ -6,8 +6,20 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import CommandPalette from "./CommandPalette.vue";
 
 const commands = [
-    { id: "file.new", category: "文件", label: "新建", shortcut: "Ctrl+N", disabled: false },
-    { id: "edit.undo", category: "编辑", label: "撤销", shortcut: "Ctrl+Z", disabled: true },
+    {
+        id: "file.new",
+        category: "文件",
+        label: "新建",
+        shortcut: "Ctrl+N",
+        disabled: false,
+    },
+    {
+        id: "edit.undo",
+        category: "编辑",
+        label: "撤销",
+        shortcut: "Ctrl+Z",
+        disabled: true,
+    },
     { id: "view.settings", category: "视图", label: "偏好设置...", disabled: false },
 ];
 
@@ -17,6 +29,7 @@ afterEach(() => {
     app?.unmount();
     app = undefined;
     document.body.innerHTML = "";
+    vi.restoreAllMocks();
 });
 
 function mountPalette(open = true) {
@@ -93,14 +106,84 @@ describe("CommandPalette", () => {
         trigger.focus();
         const { close, host, input, setOpen } = mountPalette();
         await keydown(input, "ArrowDown");
-        expect(host.querySelector("[role='option'][aria-selected='true']")?.textContent).toContain(
-            "撤销",
-        );
+        expect(
+            host.querySelector("[role='option'][aria-selected='true']")?.textContent,
+        ).toContain("撤销");
 
         await keydown(input, "Escape");
         expect(close).toHaveBeenCalledOnce();
         await setOpen(false);
         await nextTick();
         expect(document.activeElement).toBe(trigger);
+    });
+
+    it("handles Escape at dialog level even when the close button owns focus", async () => {
+        const { close, host } = mountPalette();
+        const closeButton = host.querySelector<HTMLButtonElement>(
+            "button[aria-label='关闭命令面板']",
+        );
+        closeButton?.focus();
+        closeButton?.dispatchEvent(
+            new KeyboardEvent("keydown", { bubbles: true, key: "Escape" }),
+        );
+        await nextTick();
+
+        expect(close).toHaveBeenCalledOnce();
+    });
+
+    it("traps Tab and Shift+Tab between dialog focus targets", async () => {
+        const { host, input } = mountPalette();
+        const closeButton = host.querySelector<HTMLButtonElement>(
+            "button[aria-label='关闭命令面板']",
+        );
+        if (!closeButton) throw new Error("未找到关闭按钮");
+
+        closeButton.focus();
+        closeButton.dispatchEvent(
+            new KeyboardEvent("keydown", { bubbles: true, key: "Tab" }),
+        );
+        await nextTick();
+        expect(document.activeElement).toBe(input);
+
+        input.dispatchEvent(
+            new KeyboardEvent("keydown", {
+                bubbles: true,
+                key: "Tab",
+                shiftKey: true,
+            }),
+        );
+        await nextTick();
+        expect(document.activeElement).toBe(closeButton);
+    });
+
+    it("does not restore stale focus after executing a command", async () => {
+        const trigger = document.createElement("button");
+        const targetDialog = document.createElement("section");
+        targetDialog.tabIndex = -1;
+        document.body.append(trigger, targetDialog);
+        trigger.focus();
+        const { input, setOpen } = mountPalette();
+        input.value = "偏好";
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        await nextTick();
+        await keydown(input, "Enter");
+        targetDialog.focus();
+
+        await setOpen(false);
+        await nextTick();
+        expect(document.activeElement).toBe(targetDialog);
+    });
+
+    it("scrolls the keyboard-active option into view", async () => {
+        const scrollIntoView = vi.fn();
+        Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+            configurable: true,
+            value: scrollIntoView,
+        });
+        const { input } = mountPalette();
+        await keydown(input, "ArrowDown");
+        await nextTick();
+
+        expect(scrollIntoView).toHaveBeenCalledWith({ block: "nearest" });
     });
 });

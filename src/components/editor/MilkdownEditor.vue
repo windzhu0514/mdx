@@ -396,6 +396,10 @@ function whenReady(): Promise<void> {
     return readiness;
 }
 
+function whenSettled(): Promise<void> {
+    return renderMermaidPreview.whenSettled();
+}
+
 defineExpose<MoraEditorHandle>({
     focus,
     getSelectedText,
@@ -404,6 +408,7 @@ defineExpose<MoraEditorHandle>({
     execute,
     scrollToHeading,
     whenReady,
+    whenSettled,
     cancelAi,
     releaseDocument,
 });

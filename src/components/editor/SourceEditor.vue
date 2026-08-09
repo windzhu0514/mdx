@@ -63,9 +63,7 @@ function replaceActiveState(value: string): void {
     if (!editorView) return;
     editorView.setState(createState(value));
     editorView.dispatch({
-        effects: editableCompartment.reconfigure(
-            EditorView.editable.of(!props.readonly),
-        ),
+        effects: editableCompartment.reconfigure(EditorView.editable.of(!props.readonly)),
     });
     editorView.scrollDOM.scrollTop = 0;
 }
@@ -96,9 +94,7 @@ function switchDocument(nextId: string, value: string): void {
     }
     editorView.setState(cached?.state ?? createState(value));
     editorView.dispatch({
-        effects: editableCompartment.reconfigure(
-            EditorView.editable.of(!props.readonly),
-        ),
+        effects: editableCompartment.reconfigure(EditorView.editable.of(!props.readonly)),
     });
     editorView.scrollDOM.scrollTop = cached?.scrollTop ?? 0;
     activeDocumentId = nextId;
@@ -167,8 +163,7 @@ function scrollToHeading(text: string): boolean {
 
     const doc = editorView.state.doc;
     const heading = extractMarkdownHeadings(doc.toString()).find(
-        (candidate) =>
-            candidate.text === normalizeMarkdownHeadingText(text),
+        (candidate) => candidate.text === normalizeMarkdownHeadingText(text),
     );
     if (!heading) return false;
 
@@ -181,6 +176,10 @@ function scrollToHeading(text: string): boolean {
 }
 
 function whenReady(): Promise<void> {
+    return Promise.resolve();
+}
+
+function whenSettled(): Promise<void> {
     return Promise.resolve();
 }
 
@@ -233,6 +232,7 @@ defineExpose<MoraEditorHandle>({
     execute,
     scrollToHeading,
     whenReady,
+    whenSettled,
     cancelAi,
     releaseDocument,
 });

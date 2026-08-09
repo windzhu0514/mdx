@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from "vue";
+import { computed, nextTick, ref, watch, type ComponentPublicInstance } from "vue";
 
 export type CommandPaletteCommand = {
     id: string;
@@ -21,12 +21,18 @@ const emit = defineEmits<{
 const query = ref("");
 const activeIndex = ref(0);
 const input = ref<HTMLInputElement | null>(null);
+const closeButton = ref<HTMLButtonElement | null>(null);
+const dialog = ref<HTMLElement | null>(null);
+const optionElements = ref<HTMLElement[]>([]);
 let returnFocus: HTMLElement | null = null;
+let restoreFocusOnClose = true;
 
 const filteredCommands = computed(() => {
     const needle = query.value.trim().toLocaleLowerCase("zh-CN");
     return props.commands.filter((command) => {
-        const haystack = `${command.category} ${command.label}`.toLocaleLowerCase("zh-CN");
+        const haystack = `${command.category} ${command.label}`.toLocaleLowerCase(
+            "zh-CN",
+        );
         return !needle || haystack.includes(needle);
     });
 });
@@ -39,7 +45,11 @@ watch(
     () => props.open,
     (open) => {
         if (open) {
-            returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+            returnFocus =
+                document.activeElement instanceof HTMLElement
+                    ? document.activeElement
+                    : null;
+            restoreFocusOnClose = true;
             void nextTick(() => input.value?.focus());
             return;
         }
@@ -47,7 +57,9 @@ watch(
         query.value = "";
         activeIndex.value = 0;
         void nextTick(() => {
-            if (returnFocus?.isConnected) returnFocus.focus();
+            if (restoreFocusOnClose && returnFocus?.isConnected) returnFocus.focus();
+            returnFocus = null;
+            restoreFocusOnClose = true;
         });
     },
     { immediate: true },
@@ -55,13 +67,31 @@ watch(
 
 function executeActive(): void {
     const command = filteredCommands.value[activeIndex.value];
-    if (command && !command.disabled) emit("run", command.id);
+    if (command && !command.disabled) {
+        restoreFocusOnClose = false;
+        emit("run", command.id);
+    }
 }
 
 function moveActive(delta: number): void {
     const count = filteredCommands.value.length;
     if (count === 0) return;
     activeIndex.value = (activeIndex.value + delta + count) % count;
+    void nextTick(() => {
+        optionElements.value[activeIndex.value]?.scrollIntoView({ block: "nearest" });
+    });
+}
+
+function setOptionElement(
+    element: Element | ComponentPublicInstance | null,
+    index: number,
+): void {
+    if (element instanceof HTMLElement) optionElements.value[index] = element;
+}
+
+function requestClose(): void {
+    restoreFocusOnClose = true;
+    emit("close");
 }
 
 function selectCommand(index: number): void {
@@ -83,29 +113,45 @@ function handleKeydown(event: KeyboardEvent): void {
             event.preventDefault();
             executeActive();
             break;
-        case "Escape":
-            event.preventDefault();
-            emit("close");
-            break;
     }
+}
+
+function handleDialogKeydown(event: KeyboardEvent): void {
+    if (event.key === "Escape") {
+        event.preventDefault();
+        requestClose();
+        return;
+    }
+    if (event.key !== "Tab") return;
+
+    event.preventDefault();
+    const active = document.activeElement;
+    if (event.shiftKey) {
+        (active === input.value ? closeButton.value : input.value)?.focus();
+        return;
+    }
+    (active === closeButton.value ? input.value : closeButton.value)?.focus();
 }
 </script>
 
 <template>
-    <div v-if="open" class="panel-backdrop" @click.self="emit('close')">
+    <div v-if="open" class="panel-backdrop" @click.self="requestClose">
         <section
+            ref="dialog"
             class="command-palette"
             role="dialog"
             aria-modal="true"
             aria-labelledby="command-palette-title"
+            @keydown="handleDialogKeydown"
         >
             <header>
                 <h2 id="command-palette-title">命令面板</h2>
                 <button
+                    ref="closeButton"
                     type="button"
                     class="icon-button"
                     aria-label="关闭命令面板"
-                    @click="emit('close')"
+                    @click="requestClose"
                 >
                     ×
                 </button>
@@ -128,9 +174,13 @@ function handleKeydown(event: KeyboardEvent): void {
                     v-for="(command, index) in filteredCommands"
                     :id="`command-palette-option-${index}`"
                     :key="command.id"
+                    :ref="(element) => setOptionElement(element, index)"
                     :data-command-id="command.id"
                     class="command-palette-item"
-                    :class="{ 'is-active': index === activeIndex, 'is-disabled': command.disabled }"
+                    :class="{
+                        'is-active': index === activeIndex,
+                        'is-disabled': command.disabled,
+                    }"
                     role="option"
                     :aria-disabled="command.disabled"
                     :aria-selected="index === activeIndex"

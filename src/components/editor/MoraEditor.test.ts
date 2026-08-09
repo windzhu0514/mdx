@@ -28,6 +28,7 @@ type ChildHandle = MoraEditorHandle & {
         releaseDocument: string[];
         scrollToHeading: string[];
         whenReady: number;
+        whenSettled: number;
         unmounted: number;
     };
 };
@@ -51,6 +52,7 @@ function createChildHandle(
         releaseDocument: [],
         scrollToHeading: [],
         whenReady: 0,
+        whenSettled: 0,
         unmounted: 0,
     };
 
@@ -77,6 +79,10 @@ function createChildHandle(
         },
         whenReady: () => {
             calls.whenReady += 1;
+            return Promise.resolve();
+        },
+        whenSettled: () => {
+            calls.whenSettled += 1;
             return Promise.resolve();
         },
     };
@@ -344,6 +350,15 @@ describe("MoraEditor", () => {
         await expect(editor.handle.value?.whenReady()).resolves.toBeUndefined();
         expect(childHandles.source[0].calls.whenReady).toBe(1);
         expect(childHandles.milkdown[0].calls.whenReady).toBe(0);
+    });
+
+    it("delegates settlement to the visible Milkdown editor", async () => {
+        const editor = mountEditor("wysiwyg", false);
+        cleanup = editor.unmount;
+        await nextTick();
+
+        await expect(editor.handle.value?.whenSettled()).resolves.toBeUndefined();
+        expect(childHandles.milkdown[0].calls.whenSettled).toBe(1);
     });
 
     it("forwards a real child update event to its parent", async () => {

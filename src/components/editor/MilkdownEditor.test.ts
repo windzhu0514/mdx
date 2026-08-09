@@ -61,6 +61,8 @@ const mocks = vi.hoisted(() => {
             tr: editorView.state.tr,
         }),
     );
+    const mermaidInitialize = vi.fn();
+    const mermaidRender = vi.fn(async () => ({ svg: "<svg></svg>" }));
     const createEditor: () => Promise<void> = async () => undefined;
     const destroyEditor: () => Promise<void> = async () => undefined;
     const instances: Array<{
@@ -78,6 +80,8 @@ const mocks = vi.hoisted(() => {
         destroyEditor,
         editorView,
         instances,
+        mermaidInitialize,
+        mermaidRender,
         parser,
         selection,
         selectedMarkdown: "item one\nitem two",
@@ -86,9 +90,20 @@ const mocks = vi.hoisted(() => {
     };
 });
 
+vi.mock("mermaid", () => ({
+    default: {
+        initialize: mocks.mermaidInitialize,
+        render: mocks.mermaidRender,
+    },
+}));
+
 vi.mock("@milkdown/crepe", () => {
     class Crepe {
-        static Feature = { AI: "ai", CodeMirror: "code-mirror", ImageBlock: "image-block" };
+        static Feature = {
+            AI: "ai",
+            CodeMirror: "code-mirror",
+            ImageBlock: "image-block",
+        };
         readonly create = vi.fn(() => mocks.createEditor());
         readonly destroy = vi.fn(() => mocks.destroyEditor());
         readonly setReadonly = vi.fn(() => this);
@@ -296,6 +311,9 @@ afterEach(() => {
     mocks.textSelectionCreate.mockClear();
     mocks.parser.mockClear();
     mocks.stateCreate.mockClear();
+    mocks.mermaidInitialize.mockClear();
+    mocks.mermaidRender.mockReset();
+    mocks.mermaidRender.mockResolvedValue({ svg: "<svg></svg>" });
     mocks.editorView.state.selection = { from: 2, to: 5 };
     mocks.createEditor = async () => undefined;
     mocks.destroyEditor = async () => undefined;
@@ -308,7 +326,10 @@ describe("MilkdownEditor", () => {
     it.each([false, true])(
         "configures the public CodeMirror preview hook for Mermaid blocks in readonly=%s",
         async (readonly) => {
-            const editor = mountEditor("```mermaid\nflowchart LR\nA --> B\n```", readonly);
+            const editor = mountEditor(
+                "```mermaid\nflowchart LR\nA --> B\n```",
+                readonly,
+            );
             cleanup = editor.unmount;
             await nextTick();
 
@@ -324,6 +345,43 @@ describe("MilkdownEditor", () => {
             );
         },
     );
+
+    it("exposes Mermaid preview settlement separately from Crepe readiness", async () => {
+        const deferred = createDeferred<{ svg: string }>();
+        mocks.mermaidRender.mockReturnValueOnce(deferred.promise);
+        const editor = mountEditor("```mermaid\nflowchart LR\nA --> B\n```");
+        cleanup = editor.unmount;
+        await nextTick();
+
+        const options = mocks.instances[0].options as {
+            featureConfigs: Record<
+                string,
+                {
+                    renderPreview: (
+                        language: string,
+                        source: string,
+                        applyPreview: (value: HTMLElement | null) => void,
+                    ) => void;
+                }
+            >;
+        };
+        options.featureConfigs["code-mirror"].renderPreview(
+            "mermaid",
+            "flowchart LR\nA --> B",
+            vi.fn(),
+        );
+
+        let settled = false;
+        const waiting = editor.handle.value?.whenSettled().then(() => {
+            settled = true;
+        });
+        await Promise.resolve();
+        expect(settled).toBe(false);
+
+        deferred.resolve({ svg: "<svg></svg>" });
+        await waiting;
+        expect(settled).toBe(true);
+    });
 
     it("enables Crepe AI with diff review and forwards provider errors", async () => {
         const provider: MoraAIProvider = async function* () {
