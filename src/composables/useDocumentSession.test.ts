@@ -254,6 +254,37 @@ describe("document session", () => {
         expect(session.newDocument().displayName).toBe("未命名文档 2");
     });
 
+    it("expands a workspace root whenever the folder is opened", async () => {
+        const session = useDocumentSession(true);
+        const folder = await session.openFolder("C:\\Root");
+
+        expect(session.expandedPaths.value).toEqual([folder.path]);
+
+        session.expandedPaths.value = [];
+        await session.openFolder("c:\\root");
+
+        expect(session.expandedPaths.value).toEqual([folder.path]);
+        expect(invoke).toHaveBeenCalledTimes(3);
+    });
+
+    it("closes an open folder from its recorded identity without resolving its path again", async () => {
+        const session = useDocumentSession(true);
+        await session.openFolder("C:\\Root");
+        const document = await session.openMdx("C:\\Root\\note.mdx");
+        invoke.mockClear();
+
+        await expect(
+            session.closeFolder("c:/root/", {
+                decide: async () => "discard",
+                save: async () => true,
+            }),
+        ).resolves.toBe(true);
+
+        expect(session.folders.value).toEqual([]);
+        expect(session.documents.value).not.toContain(document);
+        expect(invoke).not.toHaveBeenCalledWith("resolve_path", expect.anything());
+    });
+
     it("keeps dirty content isolated and leaves the folder untouched on cancel", async () => {
         const decisions: Array<"discard" | "cancel"> = ["discard", "cancel"];
         const session = useDocumentSession(true);

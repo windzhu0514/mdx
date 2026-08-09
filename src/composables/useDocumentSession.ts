@@ -59,6 +59,10 @@ function mdxTargetPath(path: string) {
     return /\.mdx$/iu.test(path) ? path : `${path}.mdx`;
 }
 
+function workspacePathKey(path: string) {
+    return path.replace(/\//gu, "\\").replace(/\\+$/u, "").toLocaleLowerCase("en-US");
+}
+
 export function sameResources(left: ResourceSaveData[], right: ResourceSaveData[]) {
     return (
         left.length === right.length &&
@@ -389,7 +393,16 @@ export function useDocumentSession(desktop: boolean) {
         const existing = folders.value.find(
             (folder) => folderIdentities.get(folder.path) === resolved.identity,
         );
-        if (existing) return existing;
+        if (existing) {
+            const expanded = expandedPaths.value.some(
+                (item) => workspacePathKey(item) === workspacePathKey(existing.path),
+            );
+            if (!expanded) {
+                expandedPaths.value = [...expandedPaths.value, existing.path];
+                scheduleSessionWrite();
+            }
+            return existing;
+        }
 
         const scan = await invoke<FolderScan>("scan_workspace_folder", {
             path: resolved.path,
@@ -402,6 +415,7 @@ export function useDocumentSession(desktop: boolean) {
         };
         folderIdentities.set(folder.path, resolved.identity);
         folders.value = [...folders.value, folder];
+        expandedPaths.value = [...expandedPaths.value, folder.path];
         scheduleSessionWrite();
         return folder;
     }
@@ -573,11 +587,15 @@ export function useDocumentSession(desktop: boolean) {
     }
 
     async function closeFolder(path: string, actions: CloseActions) {
-        const resolved = await resolve(path);
+        const folder = folders.value.find(
+            (item) => workspacePathKey(item.path) === workspacePathKey(path),
+        );
+        if (!folder) return false;
+        const rootIdentity = folderIdentities.get(folder.path);
+        if (!rootIdentity) return false;
         const targets = documents.value.filter(
             (item) =>
-                item.pathIdentity !== null &&
-                isInside(item.pathIdentity, resolved.identity),
+                item.pathIdentity !== null && isInside(item.pathIdentity, rootIdentity),
         );
         const discarded: SessionDocument[] = [];
 
@@ -596,11 +614,9 @@ export function useDocumentSession(desktop: boolean) {
         for (const id of removedIds) draftKeys.delete(id);
         chooseNextActiveDocument(removedIds);
         folders.value = folders.value.filter(
-            (folder) => folderIdentities.get(folder.path) !== resolved.identity,
+            (item) => workspacePathKey(item.path) !== workspacePathKey(folder.path),
         );
-        for (const [folderPath, identity] of folderIdentities) {
-            if (identity === resolved.identity) folderIdentities.delete(folderPath);
-        }
+        folderIdentities.delete(folder.path);
         await persist();
         return true;
     }

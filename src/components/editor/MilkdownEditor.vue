@@ -4,7 +4,7 @@
 
 <script setup lang="ts">
 import { Crepe } from "@milkdown/crepe";
-import { abortAICmd, type AIProvider } from "@milkdown/crepe/feature/ai";
+import type { AIProvider } from "@milkdown/crepe/feature/ai";
 import "@milkdown/crepe/theme/common/style.css";
 import "@milkdown/crepe/theme/frame.css";
 import { commandsCtx, editorViewCtx, parserCtx } from "@milkdown/kit/core";
@@ -65,7 +65,7 @@ function reportLifecycleError(operation: string, error: unknown): void {
 function cancelAi(): void {
     if (!props.aiProvider || !crepe || !ready || disposed) return;
     crepe.editor.action((ctx) => {
-        ctx.get(commandsCtx).call(abortAICmd.key, { keep: false });
+        ctx.get(commandsCtx).call("AbortAI", { keep: false });
     });
 }
 

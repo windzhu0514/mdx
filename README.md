@@ -1,167 +1,90 @@
 # Mora 墨笺
 
-Mora 墨笺是一款本地优先、所见即所得的 MDX 扩展笔记编辑器，使用 Tauri 2、Vue 3、TypeScript、Rust、Milkdown/Crepe 和 CodeMirror 6 构建。
+> 像 Word 一样完整交付，像 Markdown 一样开放可读。
 
-> 本项目中的 `.mdx` 表示自定义的 **MDXNote 笔记包**，与 Web 开发中的 Markdown + JSX（MDX）无关。
+Mora 墨笺是一款面向 Windows 的本地优先笔记软件。它把 Markdown 正文、图片和附件封装在一个 `.mdx` 文件中，让一篇笔记既能像 Word 文档一样独立保存和传递，又保留 Markdown 的透明结构与可迁移性。
 
-## 主要能力
+> **当前状态：** `0.1.0` 开发版本，尚未发布正式安装包。如需体验，请从源码运行。
 
-### 编辑体验
+## 为什么需要 Mora
 
-- Milkdown/Crepe 所见即所得编辑，以及 CodeMirror 6 仅源码和垂直双栏模式。
-- 文档名由 `.mdx` 文件名决定；支持文档目录、当前文档查找替换和常用 Markdown 命令。
-- 浅色、深色、跟随系统主题，以及字体、字号、行高、阅读宽度偏好。
-- 完整桌面菜单和紧凑状态栏，支持 760px 最小窗口、键盘焦点和减少动态效果。
+Word 擅长把内容和图片放进一个文档，Markdown 则胜在简单、开放和便于复用。常见 Markdown 笔记的问题是：正文只有一个 `.md` 文件，图片和附件却散落在旁边的目录或远程地址中。移动、备份或发送笔记时，必须同时维护整套路径结构。
 
-### 本地笔记与资源
+Mora 希望在两者之间取得一个明确的平衡：**不复制 Word 的复杂排版，而是让 Markdown 获得完整的单文件交付能力。**
 
-- 新建、打开、保存、另存为自定义 `.mdx` 笔记包。
-- 图片粘贴、图片/附件选择和 Tauri 文件拖放，资源保存到包内 `assets/` 或 `attachments/`。
-- 正文持久化时始终使用相对路径，显示时映射为临时 Blob URL。
-- 本地笔记列表和全文搜索；索引覆盖在 Mora 中打开或保存过的笔记。
+| 对比维度 | Word 文档（`.docx`） | 常见 Markdown 笔记 | Mora（`.mdx`） |
+| --- | --- | --- | --- |
+| 文档结构 | ZIP 容器中的 Office Open XML 与媒体资源 | 纯文本正文，资源通常独立存放 | ZIP 容器中的标准 `content.md` 与资源目录 |
+| 是否能单文件携带图片和附件 | 图片可以内嵌；附件可通过链接或嵌入对象处理 | 通常需要同时携带资源目录 | 正文、图片和附件明确封装在同一个文件中 |
+| 解包后的可读性 | 主要内容是 XML，需要兼容软件解释 | 正文可直接阅读，但外部资源可能缺失 | 可直接得到 Markdown 正文、图片和附件 |
+| 主要目标 | 复杂排版、页面布局和办公文档 | 轻量写作与文本可移植性 | Markdown 写作与完整文档交付 |
 
-### 数据可靠性
+## 一篇笔记就是一个完整文件
 
-- 新建、打开和关闭前提供“保存 / 放弃 / 取消”未保存保护。
-- 自动保存恢复草稿，草稿包含尚未写入笔记包的新资源。
-- 严格执行 `.tmp + .bak` 安全保存，失败时尝试恢复原文件。
-- 覆盖保存时自动创建历史快照，包内最多保留 20 份，可从界面恢复。
-- 保存前验证新 ZIP，打开时校验格式、版本、路径、重复条目、条目数和解压体积。
-
-### 工作区
-
-- 空工作区会显示欢迎页，可新建笔记或一次选择多个 `.mdx`、`.md`、`.markdown` 文件打开。
-- 多个文档可同时保持打开；切换文档不会触发未保存提示，各文档独立保留正文、脏状态、撤销历史和资源会话。
-- 可添加多个文件夹作为工作区根目录；根目录允许重叠，文件只显示一次并归入路径最长的匹配根目录。文件夹视图用于导航，不充当文件管理器，也不会持续监视磁盘；窗口重新获得焦点时会刷新，也可手动刷新。
-- Markdown 文件会作为未保存的导入文档打开，第一次保存时写入 `.mdx`。转换本地图片和附件前会要求确认；无法解析的链接保持原文，取消或失败不会改写原 Markdown 文件。
-- “最近打开”菜单显示最近 10 条记录，完整对话框最多保留并可搜索 50 条。暂时不可用的路径会保留，便于重试、单条移除或全部清空。
-- 重启后会恢复已打开文档、文件夹、活动文档、侧栏状态和未保存草稿；暂时不可用的文档路径会留在工作区，供稍后重试或移除。
-- 磁盘文件发生外部修改时，未编辑的文档自动重新载入；有未保存内容时会提示选择覆盖磁盘、从磁盘重新载入、另存为或取消。
-- 关闭文档、文件夹或窗口时，会逐个处理受影响的未保存文档；任一项取消都会终止关闭，避免只关闭部分工作区。
-
-### 导出
-
-- 导出 Markdown 正文及同名资源目录，并重写资源路径。
-- 通过系统打印对话框导出 PDF，使用专用打印样式。
-
-## MDXNote 文件格式
-
-`.mdx` 本质是 ZIP 压缩包。标准结构如下：
+Mora 使用自定义的 **MDXNote** 格式。这里的 `.mdx` 与 Web 开发中的 Markdown + JSX 无关，它本质上是一个结构明确的 ZIP 笔记包：
 
 ```text
 note.mdx
 ├── manifest.json
 ├── meta.json
 ├── content.md
-├── assets/
-├── attachments/
-├── thumbnails/
-├── history/        # 可选，自动历史快照
-└── exports/        # 可选，兼容保留目录
+├── assets/          # 图片
+├── attachments/     # 附件
+├── thumbnails/      # 缩略图
+└── history/         # 历史快照，可选
 ```
 
-`content.md` 中的资源引用必须使用包内相对路径：
+正文始终使用包内相对路径引用资源：
 
 ```markdown
 ![图片](assets/image.png)
 [附件](attachments/file.pdf)
 ```
 
-打开文件时会验证：
+因此，即使将 `.mdx` 解压，`content.md` 仍然可以找到对应的图片和附件。
 
-- `manifest.json.format === "MDXNote"`。
-- 格式主版本为当前支持的 v1，且不允许加密包。
-- 必需条目唯一，所有 ZIP 路径均为安全的包内相对路径。
-- 最多 4096 个条目；文本条目最大 16 MiB；单个资源最大 512 MiB；总解压体积最大 2 GiB。
+## Mora 重点解决的事情
 
-旧版 v1 笔记无需迁移即可打开；缺少的新元数据字段会使用默认值。
+- **笔记与资源不分家：** 粘贴图片、选择附件或拖入文件后，资源随笔记一同保存，不需要手动整理配套目录。
+- **文件归用户管理：** 笔记保存在用户选择的位置，可以使用现有的文件夹、移动硬盘和备份工具管理。
+- **保留 Markdown 出入口：** 可以导入 `.md`、`.markdown`，也可以导出 Markdown 正文和资源目录。
+- **降低保存失败的损失：** 使用 `.tmp + .bak` 安全保存，并提供未保存保护、恢复草稿和历史快照。
+- **谨慎处理外部变化：** 磁盘文件被其他程序修改时，根据当前编辑状态自动重新载入或提示用户选择。
 
-## 本地数据
+## 适合谁
 
-笔记正文和资源只保存在用户选择的 `.mdx` 文件中。以下应用状态保存在 Tauri 应用数据目录：
+- 笔记中经常包含截图、参考图片、PDF 或其他资料，希望一个文件即可完整保存。
+- 重视本地文件所有权，希望自己决定笔记放在哪里、如何备份和迁移。
+- 喜欢 Markdown 的简洁结构，但不想长期维护正文与资源目录之间的路径关系。
+- 需要整理会议记录、研究资料、教程、项目文档或个人知识档案。
 
-- 自动恢复草稿。
-- 最近打开列表。
-- 已打开或保存笔记的全文索引。
+## 数据与隐私
 
-主题和排版偏好保存在 WebView 的本地存储中。当前版本不包含云同步、多人协作或加密。
+笔记正文、图片和附件保存在用户选择的 `.mdx` 文件中。恢复草稿、最近打开记录和本地搜索索引保存在 Mora 的应用数据目录中。
 
-## 环境要求
-
-Windows 桌面开发需要：
-
-1. Node.js 和 npm。
-2. Rust 和 Cargo，建议通过 `rustup` 安装。
-3. Microsoft Visual Studio Build Tools，包含 MSVC 和 Windows SDK。
-4. WebView2 Runtime。
-
-## 开发
-
-```bash
-npm install
-
-# Web 前端预览；Tauri 专属初始化会自动跳过
-npm run dev
-
-# 启动桌面开发环境
-npm run tauri -- dev
-```
-
-## 测试与质量门禁
-
-```bash
-npm test
-npm run lint
-npm run format:check
-npm run build
-
-cargo fmt --check --manifest-path src-tauri/Cargo.toml
-cargo test --manifest-path src-tauri/Cargo.toml
-cargo check --manifest-path src-tauri/Cargo.toml
-
-npm run tauri -- build
-```
-
-任何代码修改都应至少运行前端构建、Rust 静态检查和 Tauri 打包；完整验收使用上面的全部命令。
-
-## 构建产物
-
-成功打包后，Windows 产物通常位于：
-
-```text
-src-tauri/target/release/mora.exe
-src-tauri/target/release/bundle/msi/Mora_0.1.0_x64_en-US.msi
-src-tauri/target/release/bundle/nsis/Mora_0.1.0_x64-setup.exe
-```
-
-## 目录结构
-
-```text
-src/                         Vue 3 前端
-  App.vue                    主应用编排
-  components/                编辑器、面板、状态栏和目录等组件
-  composables/               资源、草稿、偏好等状态逻辑
-  utils/                     文本、快捷键、路径和离开守卫
-
-src-tauri/src/               Rust / Tauri 后端
-  lib.rs                     Commands 与笔记包读写编排
-  archive_security.rs        ZIP 与版本安全校验
-  draft_store.rs             草稿存储
-  history.rs                 历史快照
-  note_index.rs              本地笔记索引与搜索
-  resource_import.rs         图片和附件导入
-  export.rs                  Markdown 导出
-
-docs/                        需求、设计和分阶段实施计划
-```
-
-## 技术文档
-
-- [Markdown 编辑器组件调研与迁移决策](docs/research/2026-07-21-markdown-editor-component-evaluation.md)：记录编辑器能力矩阵、Milkdown/Crepe 与 CodeMirror 6 迁移决策和验收标准。
+Mora 不要求登录，也不会为了保存笔记而上传文档。AI 功能是可选的：只有用户主动调用 AI 时，当前 Markdown 文档、选区和指令才会发送到用户配置的 OpenAI-compatible 服务；API Key 保存在系统凭据存储中。
 
 ## 当前限制
 
-- 全文索引不会扫描任意磁盘目录，只包含在 Mora 中打开或保存过的笔记。
-- 资源读写已有严格体积限制，但当前仍采用内存缓冲和 Base64 传输，不适合超大附件。
-- PDF 导出依赖系统打印能力，不内置独立 PDF 渲染器。
-- 加密、云同步、全文目录扫描和移动端支持仍为后续扩展方向。
+- 当前主要面向 Windows，尚未发布正式安装包。
+- 不提供云同步、多人协作或加密笔记。
+- 不以替代 Word 的分页、复杂排版、表单和审阅流程为目标。
+- 资源目前使用内存缓冲和 Base64 传输，不适合超大附件。
+- PDF 导出依赖系统打印能力。
+
+## 从源码运行
+
+需要 Node.js、Rust、Microsoft Visual Studio Build Tools、Windows SDK 和 WebView2 Runtime。
+
+```bash
+npm install
+npm run tauri -- dev
+```
+
+构建 Windows 安装包：
+
+```bash
+npm run tauri -- build
+```
+
+更多设计与技术资料见 [`docs/`](docs/)。

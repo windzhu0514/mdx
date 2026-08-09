@@ -145,7 +145,7 @@ vi.mock("@milkdown/kit/core", () => ({
 }));
 
 vi.mock("@milkdown/crepe/feature/ai", () => ({
-    abortAICmd: { key: "abort-ai" },
+    abortAICmd: () => async () => undefined,
 }));
 
 vi.mock("@milkdown/kit/utils", () => ({
@@ -477,7 +477,7 @@ describe("MilkdownEditor", () => {
         editor.markdown.value = "# B";
         await nextTick();
 
-        expect(mocks.commands.call).toHaveBeenCalledWith("abort-ai", { keep: false });
+        expect(mocks.commands.call).toHaveBeenCalledWith("AbortAI", { keep: false });
         expect(mocks.parser).toHaveBeenCalledWith("# B");
         expect(mocks.editorView.updateState).toHaveBeenCalledTimes(1);
         expect(mocks.commands.call.mock.invocationCallOrder[0]).toBeLessThan(
@@ -507,7 +507,7 @@ describe("MilkdownEditor", () => {
         editor.markdown.value = "# B";
         await nextTick();
 
-        expect(mocks.commands.call).not.toHaveBeenCalledWith("abort-ai", {
+        expect(mocks.commands.call).not.toHaveBeenCalledWith("AbortAI", {
             keep: false,
         });
         expect(mocks.editorView.updateState).toHaveBeenCalledTimes(1);
