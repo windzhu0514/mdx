@@ -68,6 +68,7 @@ function saveAiKey() {
                     <option value="system">跟随系统</option>
                     <option value="light">浅色</option>
                     <option value="dark">深色</option>
+                    <option value="monochrome">阅读黑白</option>
                 </select>
             </label>
 

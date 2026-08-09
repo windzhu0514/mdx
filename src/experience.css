@@ -32,6 +32,21 @@
     color-scheme: dark;
 }
 
+:root[data-theme="monochrome"] {
+    --color-bg-base: #ededed;
+    --color-bg-surface: #ffffff;
+    --color-bg-elevated: rgba(255, 255, 255, 0.98);
+    --color-border: rgba(20, 20, 20, 0.18);
+    --color-text-main: #161616;
+    --color-text-muted: #5f5f5f;
+    --color-primary: #242424;
+    --color-primary-light: #e2e2e2;
+    --color-danger: #444444;
+    --color-success: #363636;
+    --shadow-lg: 0 16px 44px rgba(0, 0, 0, 0.14);
+    color-scheme: light;
+}
+
 html,
 body,
 #app {

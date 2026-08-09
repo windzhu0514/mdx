@@ -1,6 +1,6 @@
 import { ref, watch } from "vue";
 
-export type ThemePreference = "system" | "light" | "dark";
+export type ThemePreference = "system" | "light" | "dark" | "monochrome";
 export type FontPreference = "sans" | "serif" | "mono";
 
 export type EditorPreferences = {
@@ -17,7 +17,7 @@ export type EditorPreferences = {
 export type PreferenceStorage = Pick<Storage, "getItem" | "setItem">;
 
 const STORAGE_KEY = "mora.preferences.v1";
-const themes: ThemePreference[] = ["system", "light", "dark"];
+const themes: ThemePreference[] = ["system", "light", "dark", "monochrome"];
 const fonts: FontPreference[] = ["sans", "serif", "mono"];
 
 export const DEFAULT_PREFERENCES: EditorPreferences = {

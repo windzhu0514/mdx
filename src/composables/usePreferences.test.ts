@@ -79,4 +79,14 @@ describe("editor preferences", () => {
         expect(resolveTheme("system", false)).toBe("light");
         expect(resolveTheme("light", true)).toBe("light");
     });
+
+    it("persists the monochrome reading theme", () => {
+        const storage = memoryStorage();
+        const preferences = normalizePreferences({ theme: "monochrome" });
+
+        expect(preferences.theme).toBe("monochrome");
+        savePreferences(storage, preferences);
+        expect(loadPreferences(storage).theme).toBe("monochrome");
+        expect(resolveTheme("monochrome", true)).toBe("monochrome");
+    });
 });
