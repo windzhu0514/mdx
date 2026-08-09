@@ -37,8 +37,16 @@ describe("mermaidPreview", () => {
         const applyPreview = vi.fn();
         const preview = createMermaidPreview(mermaid);
 
+        expect(mermaid.initialize).toHaveBeenCalledWith({
+            startOnLoad: false,
+            securityLevel: "strict",
+            theme: "neutral",
+        });
         expect(preview("mermaid", "flowchart LR\nA --> B", applyPreview)).toBeUndefined();
-        await vi.waitFor(() => expect(applyPreview).toHaveBeenCalled());
+        await vi.waitFor(() => {
+            const host = applyPreview.mock.calls[0]?.[0] as HTMLElement;
+            expect(host.innerHTML).toBe("<svg data-chart=\"flow\"></svg>");
+        });
         expect(mermaid.render).toHaveBeenCalledOnce();
     });
 
