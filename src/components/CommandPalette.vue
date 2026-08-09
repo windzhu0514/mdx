@@ -78,7 +78,10 @@ function moveActive(delta: number): void {
     if (count === 0) return;
     activeIndex.value = (activeIndex.value + delta + count) % count;
     void nextTick(() => {
-        optionElements.value[activeIndex.value]?.scrollIntoView({ block: "nearest" });
+        const option = optionElements.value[activeIndex.value];
+        if (typeof option?.scrollIntoView === "function") {
+            option.scrollIntoView({ block: "nearest" });
+        }
     });
 }
 

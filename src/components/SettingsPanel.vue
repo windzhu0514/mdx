@@ -27,6 +27,7 @@ watch(
     (open) => {
         if (open) void nextTick(() => panel.value?.focus());
     },
+    { immediate: true },
 );
 
 function numberValue(event: Event) {

@@ -83,11 +83,10 @@ describe("模态面板关闭按钮", () => {
         },
     ])("$name 打开后接管模态焦点", async ({ component, props }) => {
         const host = mountPanel(component, props);
-        await nextTick();
         const dialog = host.querySelector<HTMLElement>('[role="dialog"]');
 
         expect(dialog).not.toBeNull();
-        expect(document.activeElement).toBe(dialog);
+        await vi.waitFor(() => expect(document.activeElement).toBe(dialog));
     });
 });
 

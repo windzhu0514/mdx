@@ -749,11 +749,14 @@ describe("App Web 预览启动", () => {
     it("blocks the command palette shortcut while another modal owns focus", async () => {
         const host = await mountApp();
         findButton(host, "偏好设置...")?.click();
-        await vi.waitFor(() =>
-            expect(
-                host.querySelector('[aria-labelledby="settings-title"]'),
-            ).not.toBeNull(),
-        );
+        const settings = await vi.waitFor(() => {
+            const element = host.querySelector<HTMLElement>(
+                '[aria-labelledby="settings-title"]',
+            );
+            expect(element).not.toBeNull();
+            expect(document.activeElement).toBe(element);
+            return element;
+        });
 
         window.dispatchEvent(
             new KeyboardEvent("keydown", {
@@ -766,7 +769,8 @@ describe("App Web 预览启动", () => {
         await nextTick();
 
         expect(host.querySelector("input[aria-label='搜索命令']")).toBeNull();
-        expect(host.querySelectorAll('[aria-modal="true"]')).toHaveLength(1);
+        expect(settings?.isConnected).toBe(true);
+        expect(document.activeElement).toBe(settings);
     });
 
     it("hands focus to a modal opened by a palette command", async () => {

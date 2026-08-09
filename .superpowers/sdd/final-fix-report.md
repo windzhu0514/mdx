@@ -20,6 +20,8 @@ Baseline: `8f76b3b`
 - Tests for A, B, and C were authored before their corresponding production changes.
 - RED command attempted: `npm.cmd test -- src/components/editor/mermaidPreview.test.ts`.
 - RED could not reach assertions: Vite config loading failed with `Error: spawn EPERM` from `node:internal/child_process` while starting esbuild. Per task instruction, npm/cargo commands were not retried.
+- Controller focused run for commit `bade422`: 8 files, 150 tests; 147 passed, 3 failed, with 1 unhandled error. The failures exposed initial-open dialog focus, an over-broad modal-count assertion, and missing `scrollIntoView` capability detection.
+- Follow-up fixes: Settings/History watches now handle initial `open=true`; accessibility and modal-ownership tests wait for/assert actual focus ownership; palette scrolling checks the public method before calling it while the dedicated test supplies and verifies the method.
 - GREEN assertion runs remain pending for the controller; no passing Vitest/build result is claimed here.
 - Passed static checks:
   - `node node_modules/vue-tsc/bin/vue-tsc.js --noEmit`
