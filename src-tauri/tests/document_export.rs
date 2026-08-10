@@ -53,19 +53,28 @@ fn renders_real_docx_with_structure_and_media() {
 
 #[test]
 fn docx_preserves_model_styles_relationships_and_readable_fallbacks() {
-    let bytes = render_docx(&parse_document(&rich_request()).unwrap()).unwrap();
+    let mut request = rich_request();
+    request.title = "标题 & <DOCX> > \"引号\" '单引号'".to_string();
+    let bytes = render_docx(&parse_document(&request).unwrap()).unwrap();
     let mut zip = ZipArchive::new(Cursor::new(bytes)).unwrap();
 
     let content_types = read_zip_entry(&mut zip, "[Content_Types].xml");
-    let custom_properties = read_zip_entry(&mut zip, "docProps/custom.xml");
+    let core_properties = read_zip_entry(&mut zip, "docProps/core.xml");
     let styles = read_zip_entry(&mut zip, "word/styles.xml");
     let numbering = read_zip_entry(&mut zip, "word/numbering.xml");
     let document = read_zip_entry(&mut zip, "word/document.xml");
     let relationships = read_zip_entry(&mut zip, "word/_rels/document.xml.rels");
 
     assert!(content_types.contains("wordprocessingml.document.main+xml"));
-    assert!(custom_properties.contains("name=\"Title\""));
-    assert!(custom_properties.contains("标题"));
+    assert!(core_properties.contains(
+        "<dc:title>标题 &amp; &lt;DOCX&gt; &gt; &quot;引号&quot; &apos;单引号&apos;</dc:title>"
+    ));
+    if zip.file_names().any(|name| name == "docProps/custom.xml") {
+        assert!(
+            !read_zip_entry(&mut zip, "docProps/custom.xml").contains("name=\"Title\""),
+            "标准标题不应再写入同名 custom property"
+        );
+    }
     assert!(styles.contains("MoraBody"));
     assert!(styles.contains("MoraQuote"));
     assert!(styles.contains("MoraCode"));

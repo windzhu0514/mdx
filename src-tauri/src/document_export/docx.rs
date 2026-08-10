@@ -2,7 +2,9 @@ use super::{
     Block, DocumentModel, ImageData, ImageFormat, Inline, ListItem, MermaidImage, TableAlignment,
 };
 use docx_rs::*;
-use std::io::Cursor;
+use std::io::{Cursor, Read, Write};
+use zip::write::FileOptions;
+use zip::{ZipArchive, ZipWriter};
 
 const PAGE_WIDTH_TWIPS: u32 = 11_906;
 const PAGE_HEIGHT_TWIPS: u32 = 16_838;
@@ -15,6 +17,7 @@ const TASK_CHECKED_NUMBERING_ID: usize = 3;
 const TASK_UNCHECKED_NUMBERING_ID: usize = 4;
 const ORDERED_ABSTRACT_NUMBERING_ID: usize = 2;
 const FIRST_DYNAMIC_NUMBERING_ID: usize = 5;
+const CORE_PROPERTIES_PATH: &str = "docProps/core.xml";
 
 pub fn render_docx(model: &DocumentModel) -> Result<Vec<u8>, String> {
     let mut document = Docx::new()
@@ -26,8 +29,7 @@ pub fn render_docx(model: &DocumentModel) -> Result<Vec<u8>, String> {
                 .bottom(PAGE_MARGIN_TWIPS)
                 .left(PAGE_MARGIN_TWIPS),
         )
-        .default_size(21)
-        .custom_property("Title", model.title.clone());
+        .default_size(21);
 
     for style in document_styles() {
         document = document.add_style(style);
@@ -50,7 +52,108 @@ pub fn render_docx(model: &DocumentModel) -> Result<Vec<u8>, String> {
         .build()
         .pack(&mut cursor)
         .map_err(|error| format!("DOCX 打包失败：{error}"))?;
-    Ok(cursor.into_inner())
+    rewrite_docx_core_title(cursor.into_inner(), &model.title)
+}
+
+fn rewrite_docx_core_title(docx_bytes: Vec<u8>, title: &str) -> Result<Vec<u8>, String> {
+    let mut source = ZipArchive::new(Cursor::new(docx_bytes))
+        .map_err(|error| format!("无法打开 DOCX ZIP：{error}"))?;
+    let mut destination = ZipWriter::new(Cursor::new(Vec::new()));
+    let mut replaced_core_properties = false;
+
+    for index in 0..source.len() {
+        let mut entry = source
+            .by_index(index)
+            .map_err(|error| format!("无法读取 DOCX ZIP 条目 {index}：{error}"))?;
+        if entry.name() != CORE_PROPERTIES_PATH {
+            destination
+                .raw_copy_file(entry)
+                .map_err(|error| format!("无法复制 DOCX ZIP 条目 {index}：{error}"))?;
+            continue;
+        }
+
+        let mut core_xml = String::new();
+        entry
+            .read_to_string(&mut core_xml)
+            .map_err(|error| format!("无法读取 {CORE_PROPERTIES_PATH} UTF-8 内容：{error}"))?;
+        let rewritten_core_xml = rewrite_core_xml_title(&core_xml, title)?;
+        let mut options = FileOptions::default()
+            .compression_method(entry.compression())
+            .last_modified_time(entry.last_modified());
+        if let Some(mode) = entry.unix_mode() {
+            options = options.unix_permissions(mode);
+        }
+        destination
+            .start_file(CORE_PROPERTIES_PATH, options)
+            .map_err(|error| format!("无法写入 {CORE_PROPERTIES_PATH}：{error}"))?;
+        destination
+            .write_all(rewritten_core_xml.as_bytes())
+            .map_err(|error| format!("无法写入 {CORE_PROPERTIES_PATH} 内容：{error}"))?;
+        replaced_core_properties = true;
+    }
+
+    if !replaced_core_properties {
+        return Err(format!("DOCX 缺少 {CORE_PROPERTIES_PATH}。"));
+    }
+
+    destination
+        .finish()
+        .map(Cursor::into_inner)
+        .map_err(|error| format!("无法完成 DOCX ZIP 重封装：{error}"))
+}
+
+fn rewrite_core_xml_title(core_xml: &str, title: &str) -> Result<String, String> {
+    let root_closing_tag = "</cp:coreProperties>";
+    let root_closing_index = core_xml
+        .rfind(root_closing_tag)
+        .ok_or_else(|| format!("{CORE_PROPERTIES_PATH} 缺少 {root_closing_tag}。"))?;
+    let title_xml = format!("<dc:title>{}</dc:title>", escape_xml_text(title));
+
+    if let Some(title_start) = core_xml.find("<dc:title") {
+        let opening_tag_end = core_xml[title_start..]
+            .find('>')
+            .map(|offset| title_start + offset)
+            .ok_or_else(|| format!("{CORE_PROPERTIES_PATH} 的 dc:title 开始标签未闭合。"))?;
+        let title_closing_tag = "</dc:title>";
+        let title_end = core_xml[opening_tag_end + 1..]
+            .find(title_closing_tag)
+            .map(|offset| opening_tag_end + 1 + offset)
+            .ok_or_else(|| format!("{CORE_PROPERTIES_PATH} 缺少 {title_closing_tag}。"))?;
+        if title_end > root_closing_index {
+            return Err(format!(
+                "{CORE_PROPERTIES_PATH} 的 dc:title 位于根元素结束标签之后。"
+            ));
+        }
+
+        return Ok(format!(
+            "{}{}{}",
+            &core_xml[..title_start],
+            title_xml,
+            &core_xml[title_end + title_closing_tag.len()..]
+        ));
+    }
+
+    Ok(format!(
+        "{}{}{}",
+        &core_xml[..root_closing_index],
+        title_xml,
+        &core_xml[root_closing_index..]
+    ))
+}
+
+fn escape_xml_text(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        match character {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '\"' => escaped.push_str("&quot;"),
+            '\'' => escaped.push_str("&apos;"),
+            _ => escaped.push(character),
+        }
+    }
+    escaped
 }
 
 struct Renderer {
@@ -756,7 +859,7 @@ fn heading_size(level: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::image_size_emu;
+    use super::{image_size_emu, rewrite_core_xml_title};
 
     #[test]
     fn scales_model_image_dimensions_to_the_document_width_without_distortion() {
@@ -766,5 +869,36 @@ mod tests {
     #[test]
     fn scales_maximum_model_dimensions_without_overflow() {
         assert_eq!(image_size_emu(u32::MAX, u32::MAX), (5_733_288, 5_733_288));
+    }
+
+    #[test]
+    fn core_title_rewriter_replaces_existing_title_and_escapes_xml_text() {
+        let core_xml = "<cp:coreProperties><dc:title>旧标题</dc:title></cp:coreProperties>";
+
+        let rewritten =
+            rewrite_core_xml_title(core_xml, "标题 & <DOCX> > \"引号\" '单引号'").unwrap();
+
+        assert_eq!(
+            rewritten,
+            "<cp:coreProperties><dc:title>标题 &amp; &lt;DOCX&gt; &gt; &quot;引号&quot; &apos;单引号&apos;</dc:title></cp:coreProperties>"
+        );
+    }
+
+    #[test]
+    fn core_title_rewriter_returns_an_error_for_missing_root_closing_tag() {
+        let error = rewrite_core_xml_title("<cp:coreProperties>", "标题").unwrap_err();
+
+        assert!(error.contains("</cp:coreProperties>"));
+    }
+
+    #[test]
+    fn core_title_rewriter_returns_an_error_for_an_unclosed_existing_title() {
+        let error = rewrite_core_xml_title(
+            "<cp:coreProperties><dc:title>旧标题</cp:coreProperties>",
+            "标题",
+        )
+        .unwrap_err();
+
+        assert!(error.contains("</dc:title>"));
     }
 }
