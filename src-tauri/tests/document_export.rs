@@ -179,6 +179,38 @@ fn renders_real_docx_with_structure_and_media() {
 }
 
 #[test]
+fn docx_renders_request_title_in_document_body() {
+    let mut request = fixture_request("正文内容");
+    request.title = "DOCX 正文标题".to_string();
+
+    let bytes = render_docx(&parse_document(&request).unwrap()).unwrap();
+    let mut zip = ZipArchive::new(Cursor::new(bytes)).unwrap();
+    let document_xml = read_zip_entry(&mut zip, "word/document.xml");
+
+    assert!(document_xml.contains("DOCX 正文标题"));
+}
+
+#[test]
+fn docx_styles_do_not_write_hex_values_to_word_highlight() {
+    let bytes = render_docx(&parse_document(&rich_request()).unwrap()).unwrap();
+    let mut zip = ZipArchive::new(Cursor::new(bytes)).unwrap();
+    let styles_xml = read_zip_entry(&mut zip, "word/styles.xml");
+
+    assert!(!styles_xml.contains("<w:highlight w:val=\"F5F6F8\""));
+}
+
+#[test]
+fn typst_ordered_lists_use_the_markdown_start_without_repeating_markers() {
+    let model = parse_document(&fixture_request("3. 从三开始\n4. 第二项")).unwrap();
+    let source = render_typst_source(&model);
+
+    assert!(
+        source.contains("#enum(\n  start: 3,\n  [#text(\"从三开始\")],\n  [#text(\"第二项\")],\n)"),
+        "Typst source: {source}"
+    );
+}
+
+#[test]
 fn renders_typst_source_from_the_shared_document_model() {
     let source = render_typst_source(&parse_document(&rich_request()).unwrap());
 
@@ -189,8 +221,8 @@ fn renders_typst_source_from_the_shared_document_model() {
     assert!(source.contains("#strong["));
     assert!(source.contains("#strike["));
     assert!(source.contains("#quote["));
-    assert!(source.contains("#enum(start: 1)["));
-    assert!(source.contains("#list["));
+    assert!(source.contains("#enum(\n  start: 1,"));
+    assert!(source.contains("#list(\n"));
     assert!(source.contains("#linebreak()"));
     assert!(source.contains("#line(length: 100%)"));
     assert!(source.contains("附件：report.pdf"));

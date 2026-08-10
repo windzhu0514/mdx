@@ -35,12 +35,12 @@ pub fn render_docx(model: &DocumentModel) -> Result<Vec<u8>, String> {
         document = document.add_style(style);
     }
     document = add_numbering_definitions(document);
-
     let mut renderer = Renderer {
         document,
         next_numbering_id: FIRST_DYNAMIC_NUMBERING_ID,
         image_error: None,
     };
+    renderer.add_title(&model.title);
     renderer.render_blocks(&model.blocks, false);
     if let Some(error) = renderer.image_error {
         return Err(error);
@@ -66,8 +66,16 @@ fn rewrite_docx_core_title(docx_bytes: Vec<u8>, title: &str) -> Result<Vec<u8>, 
             .by_index(index)
             .map_err(|error| format!("无法读取 DOCX ZIP 条目 {index}：{error}"))?;
         if entry.name() != CORE_PROPERTIES_PATH {
+            let mut options = FileOptions::default()
+                .compression_method(entry.compression())
+                .last_modified_time(entry.last_modified());
+            if let Some(mode) = entry.unix_mode() {
+                options = options.unix_permissions(mode);
+            }
             destination
-                .raw_copy_file(entry)
+                .start_file(entry.name(), options)
+                .map_err(|error| format!("无法写入 DOCX ZIP 条目 {index}：{error}"))?;
+            std::io::copy(&mut entry, &mut destination)
                 .map_err(|error| format!("无法复制 DOCX ZIP 条目 {index}：{error}"))?;
             continue;
         }
@@ -171,6 +179,15 @@ impl Renderer {
     fn push_table(&mut self, table: Table) {
         let document = std::mem::replace(&mut self.document, Docx::new());
         self.document = document.add_table(table);
+    }
+
+    fn add_title(&mut self, title: &str) {
+        self.push_paragraph(
+            Paragraph::new()
+                .style("MoraTitle")
+                .align(AlignmentType::Center)
+                .add_run(Run::new().add_text(title)),
+        );
     }
 
     fn render_blocks(&mut self, blocks: &[Block], quote: bool) {
@@ -775,6 +792,11 @@ fn numbering_level(level: usize, format: NumberFormat, text: LevelText) -> Level
 fn document_styles() -> Vec<Style> {
     let body_fonts = body_fonts();
     let mut styles = vec![
+        Style::new("MoraTitle", StyleType::Paragraph)
+            .name("Mora Title")
+            .fonts(body_fonts.clone())
+            .size(44)
+            .bold(),
         Style::new("MoraBody", StyleType::Paragraph)
             .name("Mora Body")
             .fonts(body_fonts.clone())
@@ -788,25 +810,21 @@ fn document_styles() -> Vec<Style> {
         Style::new("MoraCode", StyleType::Paragraph)
             .name("Mora Code Block")
             .fonts(code_fonts())
-            .size(19)
-            .highlight("F5F6F8"),
+            .size(19),
         Style::new("MoraQuoteCode", StyleType::Paragraph)
             .name("Mora Quote Code Block")
             .fonts(code_fonts())
             .size(19)
-            .highlight("F5F6F8")
             .indent(Some(360), None, None, None),
         Style::new("MoraInlineCode", StyleType::Character)
             .name("Mora Inline Code")
             .fonts(code_fonts())
-            .size(19)
-            .highlight("F5F6F8"),
+            .size(19),
         Style::new("MoraCodeText", StyleType::Character)
             .name("Mora Code Text")
             .fonts(code_fonts())
             .size(19),
     ];
-
     for level in 1..=6 {
         styles.push(
             Style::new(format!("MoraHeading{level}"), StyleType::Paragraph)

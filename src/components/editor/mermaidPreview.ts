@@ -96,7 +96,8 @@ export async function renderMermaidForExport(
     mermaid: MermaidRenderer,
     sources: readonly string[],
 ): Promise<MermaidDiagramSnapshot[]> {
-    const restoreTheme = document.documentElement.dataset.theme === "dark" ? "dark" : "neutral";
+    const restoreTheme =
+        document.documentElement.dataset.theme === "dark" ? "dark" : "neutral";
     mermaid.initialize({
         startOnLoad: false,
         securityLevel: "strict",
@@ -108,7 +109,10 @@ export async function renderMermaidForExport(
         for (const [index, source] of sources.entries()) {
             if (!isSupportedMermaidSource(source)) continue;
             try {
-                const { svg } = await mermaid.render(`mora-export-mermaid-${index}`, source);
+                const { svg } = await mermaid.render(
+                    `mora-export-mermaid-${index}`,
+                    source,
+                );
                 diagrams.push({ label: mermaidDiagramLabel(source), source, svg });
             } catch {
                 // Missing entries deliberately fall back to code blocks in Rust.

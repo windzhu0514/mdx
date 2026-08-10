@@ -419,7 +419,9 @@ describe("MilkdownEditor", () => {
     });
 
     it("exports Mermaid diagrams from the current ProseMirror document", async () => {
-        mocks.mermaidRender.mockResolvedValueOnce({ svg: '<svg data-export="flow"></svg>' });
+        mocks.mermaidRender.mockResolvedValueOnce({
+            svg: '<svg data-export="flow"></svg>',
+        });
         const editor = mountEditor("```mermaid\nflowchart LR\nA --> B\n```");
         cleanup = editor.unmount;
         await nextTick();

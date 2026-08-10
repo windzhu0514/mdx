@@ -741,7 +741,9 @@ describe("App Web 预览启动", () => {
         expect(labels.indexOf("导出 Markdown...")).toBeLessThan(
             labels.indexOf("导出 Word..."),
         );
-        expect(labels.indexOf("导出 Word...")).toBeLessThan(labels.indexOf("导出 PDF..."));
+        expect(labels.indexOf("导出 Word...")).toBeLessThan(
+            labels.indexOf("导出 PDF..."),
+        );
         expect(labels.indexOf("导出 PDF...")).toBeLessThan(labels.indexOf("打印..."));
 
         mocks.saveDialog.mockResolvedValueOnce(null).mockResolvedValueOnce(null);

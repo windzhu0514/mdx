@@ -156,24 +156,24 @@ impl Renderer {
     fn render_list(&mut self, start: Option<u64>, items: &[ListItem]) {
         match start {
             Some(start) => {
-                self.source.push_str("#enum(start: ");
+                self.source.push_str("#enum(\n  start: ");
                 self.source.push_str(&start.to_string());
-                self.source.push_str(")[\n");
+                self.source.push_str(",\n");
                 for item in items {
-                    self.source.push_str("+ ");
+                    self.source.push_str("  [");
                     self.render_list_item(item);
-                    self.source.push('\n');
+                    self.source.push_str("],\n");
                 }
-                self.source.push(']');
+                self.source.push(')');
             }
             None => {
-                self.source.push_str("#list[\n");
+                self.source.push_str("#list(\n");
                 for item in items {
-                    self.source.push_str("- ");
+                    self.source.push_str("  [");
                     self.render_list_item(item);
-                    self.source.push('\n');
+                    self.source.push_str("],\n");
                 }
-                self.source.push(']');
+                self.source.push(')');
             }
         }
     }

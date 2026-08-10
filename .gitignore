@@ -4,6 +4,7 @@ dist/
 *.log
 .worktrees/
 .superpowers/
+tmp/document-export-qa/
 
 src-tauri/target/
 src-tauri/gen/

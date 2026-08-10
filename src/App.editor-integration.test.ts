@@ -762,10 +762,14 @@ describe("App PDF 打印视图", () => {
         const host = await mountApp();
         findButton(host, "打开文件...").click();
         await vi.waitFor(() =>
-            expect(host.querySelector(".menu-document-name")?.textContent).toContain("other"),
+            expect(host.querySelector(".menu-document-name")?.textContent).toContain(
+                "other",
+            ),
         );
         openDocumentRow(host, "draft")?.click();
-        await vi.waitFor(() => expect(editorValue(host, "milkdown")).toContain("# 旧正文"));
+        await vi.waitFor(() =>
+            expect(editorValue(host, "milkdown")).toContain("# 旧正文"),
+        );
         await vi.waitFor(() =>
             expect(mocks.invoke).toHaveBeenCalledWith("read_asset", {
                 path: pathA,
@@ -798,7 +802,10 @@ describe("App PDF 打印视图", () => {
             expect(host.textContent).toContain("Word 导出已取消：活动文档已切换"),
         );
         expect(mocks.saveDialog).not.toHaveBeenCalled();
-        expect(mocks.invoke).not.toHaveBeenCalledWith("export_document", expect.anything());
+        expect(mocks.invoke).not.toHaveBeenCalledWith(
+            "export_document",
+            expect.anything(),
+        );
         expect(mocks.invoke).not.toHaveBeenCalledWith("save_mdx", expect.anything());
     });
 
