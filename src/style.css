@@ -8,6 +8,20 @@
     --color-primary-light: #eff6ff;
     --color-danger: #ef4444;
     --color-success: #10b981;
+    --color-bg-chrome: rgba(255, 255, 255, 0.72);
+    --color-bg-sidebar: rgba(255, 255, 255, 0.58);
+    --color-bg-sidebar-subtle: rgba(255, 255, 255, 0.4);
+    --color-bg-sidebar-header: rgba(255, 255, 255, 0.62);
+    --color-bg-popup: rgba(255, 255, 255, 0.96);
+    --color-bg-input: rgba(255, 255, 255, 0.92);
+    --color-bg-control: rgba(15, 23, 42, 0.04);
+    --color-bg-control-hover: rgba(15, 23, 42, 0.08);
+    --color-inset-highlight: rgba(255, 255, 255, 0.5);
+    --app-background-image: radial-gradient(
+        circle at 50% -20%,
+        rgba(255, 255, 255, 1) 0%,
+        rgba(244, 247, 249, 0) 80%
+    );
     --color-primary-soft: color-mix(in srgb, var(--color-primary) 10%, transparent);
     --color-primary-strong: color-mix(in srgb, var(--color-primary) 32%, transparent);
     --color-focus-border: color-mix(in srgb, var(--color-primary) 35%, transparent);
@@ -48,11 +62,7 @@ body,
     width: 100%;
     height: 100%;
     background: var(--color-bg-base);
-    background-image: radial-gradient(
-        circle at 50% -20%,
-        rgba(255, 255, 255, 1) 0%,
-        rgba(244, 247, 249, 0) 80%
-    );
+    background-image: var(--app-background-image);
     font-family: var(--font-sans);
     color: var(--color-text-main);
     -webkit-font-smoothing: antialiased;
@@ -98,7 +108,7 @@ summary {
     max-width: 420px;
     display: flex;
     flex-direction: column;
-    background: rgba(255, 255, 255, 0.58);
+    background: var(--color-bg-sidebar);
     border-right: 1px solid var(--color-border);
     overflow: visible;
 }
@@ -210,7 +220,7 @@ summary {
     padding: 1px 4px;
     border-radius: 3px;
     color: var(--color-text-muted);
-    background: rgba(15, 23, 42, 0.06);
+    background: var(--color-bg-control);
     font-size: 10px;
     white-space: nowrap;
 }
@@ -244,7 +254,7 @@ summary {
 
 .workspace-row-action:hover {
     color: var(--color-text-main);
-    background: rgba(15, 23, 42, 0.08);
+    background: var(--color-bg-control-hover);
 }
 
 .workspace-resize-handle {
@@ -268,7 +278,7 @@ summary {
     width: 240px;
     flex: 0 0 240px;
     order: 3;
-    background: rgba(255, 255, 255, 0.4);
+    background: var(--color-bg-sidebar-subtle);
     border-left: 1px solid var(--color-border);
     border-right: 0;
     display: flex;
@@ -291,7 +301,7 @@ summary {
     font-size: 13px;
     color: var(--color-text-main);
     border-bottom: 1px solid var(--color-border);
-    background: rgba(255, 255, 255, 0.6);
+    background: var(--color-bg-sidebar-header);
     position: sticky;
     top: 0;
     z-index: 10;
@@ -346,7 +356,7 @@ summary {
 }
 
 .icon-button:hover {
-    background: rgba(15, 23, 42, 0.05);
+    background: var(--color-bg-control-hover);
     color: var(--color-text-main);
 }
 
@@ -356,13 +366,13 @@ summary {
     align-items: center;
     gap: 4px;
     padding: 8px 16px;
-    background: rgba(255, 255, 255, 0.7);
+    background: var(--color-bg-chrome);
     backdrop-filter: blur(24px);
     -webkit-backdrop-filter: blur(24px);
     border-bottom: 1px solid var(--color-border);
     z-index: 200;
     position: relative;
-    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.5) inset;
+    box-shadow: 0 1px 0 var(--color-inset-highlight) inset;
 }
 
 .menu-document-name {
@@ -400,7 +410,7 @@ summary {
 
 .menu-group[open] summary,
 .menu-group summary:hover {
-    background: rgba(15, 23, 42, 0.05);
+    background: var(--color-bg-control-hover);
 }
 
 /* Dropdown Menu Popup */
@@ -411,7 +421,7 @@ summary {
     display: grid;
     min-width: 150px;
     padding: 3px;
-    background: rgba(255, 255, 255, 0.95);
+    background: var(--color-bg-popup);
     backdrop-filter: blur(16px);
     border: 1px solid var(--color-border);
     border-radius: var(--radius-md);
@@ -542,7 +552,7 @@ summary {
     align-items: center;
     margin-left: auto;
     padding: 4px;
-    background: rgba(15, 23, 42, 0.04);
+    background: var(--color-bg-control);
     border-radius: 99px;
     box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.03);
 }
@@ -670,7 +680,7 @@ summary {
     z-index: 120;
     min-width: 440px;
     padding: 10px;
-    background: rgba(255, 255, 255, 0.95);
+    background: var(--color-bg-popup);
     backdrop-filter: blur(16px);
     -webkit-backdrop-filter: blur(16px);
     border: 1px solid var(--color-border);
@@ -694,7 +704,7 @@ summary {
     padding: 7px 9px;
     border: 1px solid var(--color-border);
     border-radius: var(--radius-sm);
-    background: rgba(255, 255, 255, 0.92);
+    background: var(--color-bg-input);
     color: var(--color-text-main);
 }
 
@@ -714,7 +724,7 @@ summary {
     padding: 7px 10px;
     border: 1px solid var(--color-border);
     border-radius: var(--radius-sm);
-    background: rgba(15, 23, 42, 0.03);
+    background: var(--color-bg-control);
     color: var(--color-text-main);
     cursor: pointer;
     transition: all 0.15s ease;
@@ -779,7 +789,7 @@ summary {
     justify-content: space-between;
     gap: 10px;
     padding: 4px 8px;
-    background: rgba(255, 255, 255, 0.7);
+    background: var(--color-bg-chrome);
     backdrop-filter: blur(20px);
     -webkit-backdrop-filter: blur(20px);
     border-top: 1px solid var(--color-border);

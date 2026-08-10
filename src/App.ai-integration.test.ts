@@ -78,6 +78,10 @@ vi.mock("@tauri-apps/api/core", () => ({
     isTauri: () => true,
 }));
 
+vi.mock("@tauri-apps/api/app", () => ({
+    setTheme: vi.fn(async () => undefined),
+}));
+
 vi.mock("@tauri-apps/api/window", () => ({
     getCurrentWindow: () => ({
         onDragDropEvent: vi.fn(async () => () => undefined),

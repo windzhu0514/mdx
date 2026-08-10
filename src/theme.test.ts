@@ -35,3 +35,35 @@ describe("monochrome interaction theme", () => {
         );
     });
 });
+
+describe("dark application theme", () => {
+    it("routes application chrome through semantic surface variables", () => {
+        expect(styleCss).toMatch(
+            /html,[\s\S]*?#app\s*\{[^}]*background-image:\s*var\(--app-background-image\)/u,
+        );
+        expect(styleCss).toMatch(
+            /\.workspace-sidebar\s*\{[^}]*background:\s*var\(--color-bg-sidebar\)/su,
+        );
+        expect(styleCss).toMatch(
+            /\.toc-sidebar\s*\{[^}]*background:\s*var\(--color-bg-sidebar-subtle\)/su,
+        );
+        expect(styleCss).toMatch(
+            /\.menu-bar\s*\{[^}]*background:\s*var\(--color-bg-chrome\)/su,
+        );
+        expect(styleCss).toMatch(
+            /\.status-bar\s*\{[^}]*background:\s*var\(--color-bg-chrome\)/su,
+        );
+        expect(styleCss).toMatch(
+            /\.menu-popup\s*\{[^}]*background:\s*var\(--color-bg-popup\)/su,
+        );
+        expect(styleCss).toMatch(
+            /\.find-panel\s*\{[^}]*background:\s*var\(--color-bg-popup\)/su,
+        );
+    });
+
+    it("defines a matte dark palette for chrome, sidebars, controls, and inputs", () => {
+        expect(experienceCss).toMatch(
+            /:root\[data-theme="dark"\]\s*\{[^}]*--color-bg-chrome:\s*rgba\(16, 24, 30, 0\.96\)[^}]*--color-bg-sidebar:\s*#121b21[^}]*--color-bg-popup:\s*rgba\(27, 38, 45, 0\.98\)[^}]*--color-bg-input:\s*#111a20[^}]*--color-bg-control:\s*rgba\(213, 231, 232, 0\.06\)[^}]*--app-background-image:/su,
+        );
+    });
+});

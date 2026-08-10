@@ -10,6 +10,7 @@
             :ai-provider="readonly ? undefined : aiProvider"
             @update:model-value="emit('update:modelValue', $event)"
             @ai-error="emit('ai-error', $event)"
+            @open-mermaid="emit('open-mermaid', $event)"
         />
         <div
             v-show="mode === 'source'"
@@ -29,6 +30,7 @@
                 :document-id="`${documentId}:preview`"
                 :model-value="displayValue ?? modelValue"
                 readonly
+                @open-mermaid="emit('open-mermaid', $event)"
             />
         </div>
     </div>
@@ -45,6 +47,7 @@ import type {
 } from "./editorTypes";
 import MilkdownEditor from "./MilkdownEditor.vue";
 import SourceEditor from "./SourceEditor.vue";
+import type { MermaidViewerRequest } from "./mermaidPreview";
 
 const props = defineProps<{
     documentId: string;
@@ -60,6 +63,7 @@ const props = defineProps<{
 const emit = defineEmits<{
     "update:modelValue": [markdown: string];
     "ai-error": [message: string];
+    "open-mermaid": [request: MermaidViewerRequest];
 }>();
 
 const milkdownEditor = ref<MoraEditorHandle | null>(null);

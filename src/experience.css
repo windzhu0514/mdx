@@ -18,16 +18,30 @@
 }
 
 :root[data-theme="dark"] {
-    --color-bg-base: #11181e;
-    --color-bg-surface: #182229;
-    --color-bg-elevated: rgba(24, 34, 41, 0.97);
-    --color-border: rgba(212, 228, 230, 0.13);
-    --color-text-main: #dce8e8;
-    --color-text-muted: #91a3a7;
-    --color-primary: #66b9ba;
-    --color-primary-light: rgba(73, 155, 158, 0.18);
+    --color-bg-base: #0d1419;
+    --color-bg-surface: #151f25;
+    --color-bg-elevated: #1b262d;
+    --color-border: rgba(205, 225, 228, 0.14);
+    --color-text-main: #e4eded;
+    --color-text-muted: #9cacae;
+    --color-primary: #72bebf;
+    --color-primary-light: rgba(82, 166, 168, 0.17);
     --color-danger: #ef8c93;
     --color-success: #75c99f;
+    --color-bg-chrome: rgba(16, 24, 30, 0.96);
+    --color-bg-sidebar: #121b21;
+    --color-bg-sidebar-subtle: #10181d;
+    --color-bg-sidebar-header: #162128;
+    --color-bg-popup: rgba(27, 38, 45, 0.98);
+    --color-bg-input: #111a20;
+    --color-bg-control: rgba(213, 231, 232, 0.06);
+    --color-bg-control-hover: rgba(213, 231, 232, 0.1);
+    --color-inset-highlight: rgba(255, 255, 255, 0.04);
+    --app-background-image: radial-gradient(
+        circle at 50% -18%,
+        rgba(74, 132, 134, 0.12) 0%,
+        rgba(13, 20, 25, 0) 58%
+    );
     --shadow-lg: 0 24px 72px rgba(0, 0, 0, 0.42);
     color-scheme: dark;
 }
@@ -85,13 +99,13 @@ summary:focus-visible,
 
 .menu-bar,
 .status-bar {
-    background: color-mix(in srgb, var(--color-bg-surface) 88%, transparent);
+    background: var(--color-bg-chrome);
     backdrop-filter: blur(18px);
 }
 
 .menu-popup,
 .menu-popup-submenu {
-    background: var(--color-bg-elevated);
+    background: var(--color-bg-popup);
 }
 
 .markdown-editor .ProseMirror {
@@ -684,6 +698,26 @@ summary:focus-visible,
     overflow-x: auto;
     padding: 16px;
     color: var(--color-text-main);
+}
+
+button.mermaid-preview {
+    width: 100%;
+    border: 0;
+    border-radius: var(--radius-md);
+    background: transparent;
+    font: inherit;
+    cursor: zoom-in;
+    transition:
+        background 0.16s ease,
+        box-shadow 0.16s ease;
+}
+
+button.mermaid-preview:hover {
+    background: var(--color-bg-control);
+}
+
+button.mermaid-preview:focus-visible {
+    box-shadow: 0 0 0 2px var(--color-focus-border) inset;
 }
 
 .mermaid-preview svg {

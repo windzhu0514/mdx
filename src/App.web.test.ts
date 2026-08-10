@@ -9,11 +9,13 @@ const mocks = vi.hoisted(() => ({
     focusHandler: undefined as
         ((event: { payload: boolean }) => Promise<void>) | undefined,
     editorUpdate: undefined as ((markdown: string) => void) | undefined,
+    openMermaid: undefined as ((request: unknown) => void) | undefined,
     aiKeyConfigured: false,
     aiKeyStatusResponses: [] as Array<boolean | Promise<boolean>>,
     getMoraEditorAiProvider: undefined as (() => unknown) | undefined,
     getMoraEditorMarkdown: undefined as (() => string) | undefined,
     moraEditorMounted: vi.fn(),
+    mermaidPng: vi.fn(async () => "cG5nLWRhdGE="),
     cancelAi: vi.fn(),
     releaseDocument: vi.fn(),
     openDialog: vi.fn(),
@@ -362,6 +364,7 @@ const mocks = vi.hoisted(() => ({
         return undefined;
     }),
     isTauri: vi.fn(() => false),
+    setTheme: vi.fn(async () => undefined),
     windowClose: vi.fn(async () => undefined),
 }));
 
@@ -372,6 +375,10 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 vi.mock("@tauri-apps/api/window", () => ({
     getCurrentWindow: mocks.getCurrentWindow,
+}));
+
+vi.mock("@tauri-apps/api/app", () => ({
+    setTheme: mocks.setTheme,
 }));
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({
@@ -393,10 +400,11 @@ vi.mock("./components/editor/MoraEditor.vue", async () => {
                 sourcePreview: { type: Boolean, required: true },
                 aiProvider: { type: Function, default: undefined },
             },
-            emits: ["update:modelValue", "ai-error"],
+            emits: ["update:modelValue", "ai-error", "open-mermaid"],
             setup(props, { emit, expose }) {
                 mocks.moraEditorMounted();
                 mocks.editorUpdate = (markdown) => emit("update:modelValue", markdown);
+                mocks.openMermaid = (request) => emit("open-mermaid", request);
                 mocks.getMoraEditorAiProvider = () => props.aiProvider;
                 mocks.getMoraEditorMarkdown = () =>
                     props.displayValue ?? props.modelValue;
@@ -415,6 +423,10 @@ vi.mock("./components/editor/MoraEditor.vue", async () => {
         }),
     };
 });
+
+vi.mock("./components/editor/mermaidExport", () => ({
+    svgToPngBase64: mocks.mermaidPng,
+}));
 
 import App from "./App.vue";
 
@@ -648,13 +660,17 @@ beforeEach(() => {
     mocks.closeHandler = undefined;
     mocks.focusHandler = undefined;
     mocks.editorUpdate = undefined;
+    mocks.openMermaid = undefined;
     mocks.getMoraEditorAiProvider = undefined;
     mocks.getMoraEditorMarkdown = undefined;
     mocks.isTauri.mockReturnValue(false);
+    mocks.setTheme.mockReset();
+    localStorage.clear();
     mocks.aiKeyConfigured = false;
     mocks.aiKeyStatusResponses = [];
     mocks.openDialog.mockReset();
     mocks.saveDialog.mockReset();
+    mocks.mermaidPng.mockClear();
     mocks.markdownImports.clear();
     mocks.markdownResourcePlans.clear();
     mocks.markdownResourceFailures.clear();
@@ -702,6 +718,60 @@ afterEach(() => {
 });
 
 describe("App Web 预览启动", () => {
+    it("在 Tauri 中把当前深色主题同步给原生窗口", async () => {
+        mocks.isTauri.mockReturnValue(true);
+        localStorage.setItem("mora.preferences.v1", JSON.stringify({ theme: "dark" }));
+
+        await mountApp();
+
+        await vi.waitFor(() => expect(mocks.setTheme).toHaveBeenCalledWith("dark"));
+    });
+
+    it("opens Mermaid diagrams in the app viewer and exports the active diagram", async () => {
+        mocks.isTauri.mockReturnValue(true);
+        mocks.saveDialog.mockResolvedValue("C:\\notes\\流程图.png");
+        const host = await mountApp();
+        findButton(host, "新建文档")?.click();
+        await vi.waitFor(() => expect(mocks.openMermaid).toBeTypeOf("function"));
+
+        mocks.openMermaid?.({
+            activeIndex: 0,
+            diagrams: [
+                {
+                    label: "流程图",
+                    source: "flowchart LR\nA --> B",
+                    svg: '<svg viewBox="0 0 800 500"></svg>',
+                },
+            ],
+        });
+        await nextTick();
+
+        const dialog = host.querySelector<HTMLDialogElement>(".mermaid-viewer-dialog");
+        await vi.waitFor(() => expect(dialog?.open).toBe(true));
+        expect(host.textContent).toContain("流程图");
+        window.dispatchEvent(
+            new KeyboardEvent("keydown", {
+                bubbles: true,
+                ctrlKey: true,
+                shiftKey: true,
+                key: "p",
+            }),
+        );
+        await nextTick();
+        expect(host.querySelector("input[aria-label='搜索命令']")).toBeNull();
+
+        host.querySelector<HTMLButtonElement>('button[aria-label="导出 PNG"]')?.click();
+        await vi.waitFor(() =>
+            expect(mocks.invoke).toHaveBeenCalledWith("export_diagram_png", {
+                path: "C:\\notes\\流程图.png",
+                base64: "cG5nLWRhdGE=",
+            }),
+        );
+
+        host.querySelector<HTMLButtonElement>('button[aria-label="关闭查看器"]')?.click();
+        await vi.waitFor(() => expect(dialog?.open).toBe(false));
+    });
+
     it("opens the command palette and runs the existing file-menu new action", async () => {
         const host = await mountApp();
         window.dispatchEvent(

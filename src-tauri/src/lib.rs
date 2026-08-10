@@ -280,6 +280,24 @@ fn import_markdown(path: String) -> Result<markdown_import::ImportedMarkdown, St
 }
 
 #[tauri::command]
+fn export_diagram_png(path: String, base64: String) -> Result<(), String> {
+    use base64::{engine::general_purpose, Engine as _};
+
+    let target = PathBuf::from(path);
+    if target.as_os_str().is_empty() {
+        return Err("PNG 导出路径为空。".to_string());
+    }
+    let bytes = general_purpose::STANDARD
+        .decode(base64)
+        .map_err(|error| format!("PNG 数据解码失败：{error}"))?;
+    const PNG_SIGNATURE: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
+    if !bytes.starts_with(PNG_SIGNATURE) {
+        return Err("导出数据不是有效的 PNG。".to_string());
+    }
+    fs::write(&target, bytes).map_err(|error| format!("写入 PNG 失败：{error}"))
+}
+
+#[tauri::command]
 fn save_mdx(app: AppHandle, request: MdxSaveRequest) -> Result<MdxNote, String> {
     let path = request
         .path
@@ -876,6 +894,7 @@ pub fn run() {
             validate_mdx,
             import_markdown,
             export_markdown,
+            export_diagram_png,
             import_resource,
             prepare_markdown_resources_command,
             read_asset,
@@ -941,6 +960,42 @@ mod tests {
         assert!(meta.assets.is_empty());
         assert_eq!(meta.attachments.len(), 1);
         assert_eq!(meta.attachments[0].size, 42);
+    }
+
+    #[test]
+    fn diagram_png_export_decodes_and_validates_png_bytes() {
+        let dir = temp_test_dir("diagram-png");
+        fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("diagram.png");
+
+        export_diagram_png(
+            target.to_string_lossy().to_string(),
+            "iVBORw0KGgo=".to_string(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            fs::read(&target).unwrap(),
+            [137, 80, 78, 71, 13, 10, 26, 10]
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn diagram_png_export_rejects_non_png_data() {
+        let dir = temp_test_dir("invalid-diagram-png");
+        fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("diagram.png");
+
+        let error = export_diagram_png(
+            target.to_string_lossy().to_string(),
+            "bm90LXBuZw==".to_string(),
+        )
+        .unwrap_err();
+
+        assert!(error.contains("PNG"));
+        assert!(!target.exists());
+        fs::remove_dir_all(dir).unwrap();
     }
 
     fn temp_test_dir(label: &str) -> PathBuf {

@@ -1,5 +1,6 @@
 /** @vitest-environment jsdom */
-import { describe, expect, it, vi } from "vitest";
+import DOMPurify from "dompurify";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
     createMermaidPreview,
     isSupportedMermaidSource,
@@ -7,6 +8,11 @@ import {
 } from "./mermaidPreview";
 
 describe("mermaidPreview", () => {
+    afterEach(() => {
+        delete document.documentElement.dataset.theme;
+        document.body.innerHTML = "";
+    });
+
     it.each([
         "flowchart LR\nA --> B",
         "stateDiagram-v2\n[*] --> Ready",
@@ -50,13 +56,13 @@ describe("mermaidPreview", () => {
         const applyPreview = vi.fn();
         const preview = createMermaidPreview(mermaid);
 
+        expect(preview("mermaid", "flowchart LR\nA --> B", applyPreview)).toBeUndefined();
         expect(mermaid.initialize).toHaveBeenCalledWith({
             startOnLoad: false,
             securityLevel: "strict",
             theme: "neutral",
             suppressErrorRendering: true,
         });
-        expect(preview("mermaid", "flowchart LR\nA --> B", applyPreview)).toBeUndefined();
         expect(applyPreview).not.toHaveBeenCalled();
         await vi.waitFor(() => {
             const host = applyPreview.mock.calls[0]?.[0] as HTMLElement;
@@ -68,6 +74,120 @@ describe("mermaidPreview", () => {
             "flowchart LR\nA --> B",
         );
         expect(applyPreview).toHaveBeenCalledTimes(1);
+    });
+
+    it("initializes Mermaid lazily for the current app theme and refreshes on change", () => {
+        const mermaid: MermaidRenderer = {
+            initialize: vi.fn(),
+            render: vi.fn(async () => ({ svg: "<svg></svg>" })),
+        };
+        const preview = createMermaidPreview(mermaid);
+
+        expect(mermaid.initialize).not.toHaveBeenCalled();
+        document.documentElement.dataset.theme = "light";
+        preview("mermaid", "flowchart LR\nA --> B", vi.fn());
+        document.documentElement.dataset.theme = "dark";
+        preview("mermaid", "flowchart LR\nA --> C", vi.fn());
+
+        expect(mermaid.initialize).toHaveBeenNthCalledWith(1, {
+            startOnLoad: false,
+            securityLevel: "strict",
+            theme: "neutral",
+            suppressErrorRendering: true,
+        });
+        expect(mermaid.initialize).toHaveBeenNthCalledWith(2, {
+            startOnLoad: false,
+            securityLevel: "strict",
+            theme: "dark",
+            suppressErrorRendering: true,
+        });
+    });
+
+    it("opens rendered diagrams in ProseMirror document order", async () => {
+        const mermaid: MermaidRenderer = {
+            initialize: vi.fn(),
+            render: vi.fn(async (_id, source) => ({
+                svg: `<svg data-source="${source.includes("First") ? "first" : "second"}"></svg>`,
+            })),
+        };
+        const openViewer = vi.fn();
+        const preview = createMermaidPreview(mermaid, openViewer);
+        const firstSlot = (host: HTMLElement | null) =>
+            host && document.body.append(host);
+        const secondSlot = (host: HTMLElement | null) =>
+            host && document.body.prepend(host);
+
+        preview("mermaid", "flowchart LR\nFirst --> End", firstSlot);
+        preview("mermaid", "sequenceDiagram\nSecond->>End: Done", secondSlot);
+        await preview.whenSettled();
+        document.body.addEventListener("click", (event) =>
+            preview.activate(event, [
+                "sequenceDiagram\nSecond->>End: Done",
+                "flowchart LR\nFirst --> End",
+            ]),
+        );
+
+        const firstInDocument = document.body.firstElementChild as HTMLElement;
+        expect(firstInDocument.getAttribute("role")).toBe("button");
+        expect(firstInDocument.tabIndex).toBe(0);
+        firstInDocument.click();
+
+        expect(openViewer).toHaveBeenCalledOnce();
+        expect(openViewer).toHaveBeenLastCalledWith({
+            activeIndex: 0,
+            diagrams: [
+                {
+                    label: "时序图",
+                    source: "sequenceDiagram\nSecond->>End: Done",
+                    svg: '<svg data-source="second"></svg>',
+                },
+                {
+                    label: "流程图",
+                    source: "flowchart LR\nFirst --> End",
+                    svg: '<svg data-source="first"></svg>',
+                },
+            ],
+        });
+    });
+
+    it("opens the viewer after Crepe sanitizes and reconstructs the preview element", async () => {
+        const mermaid: MermaidRenderer = {
+            initialize: vi.fn(),
+            render: vi.fn(async () => ({ svg: '<svg data-source="flow"></svg>' })),
+        };
+        const openViewer = vi.fn();
+        const applyPreview = vi.fn();
+        const preview = createMermaidPreview(mermaid, openViewer);
+
+        preview("mermaid", "flowchart LR\nA --> B", applyPreview);
+        await preview.whenSettled();
+        const rendered = applyPreview.mock.calls[0]?.[0] as HTMLElement;
+        const crepePreview = document.createElement("div");
+        crepePreview.innerHTML = DOMPurify.sanitize(rendered, {
+            ADD_TAGS: ["foreignObject"],
+            ADD_ATTR: ["xmlns"],
+            HTML_INTEGRATION_POINTS: { foreignobject: true },
+        });
+        document.body.append(crepePreview);
+        crepePreview.addEventListener("click", (event) =>
+            preview.activate(event, ["flowchart LR\nA --> B"]),
+        );
+
+        const reconstructed =
+            crepePreview.querySelector<HTMLButtonElement>(".mermaid-preview");
+        expect(reconstructed?.dataset.mermaidPreviewToken).toMatch(/^mermaid-preview-/u);
+        reconstructed?.click();
+
+        expect(openViewer).toHaveBeenCalledWith({
+            activeIndex: 0,
+            diagrams: [
+                {
+                    label: "流程图",
+                    source: "flowchart LR\nA --> B",
+                    svg: '<svg data-source="flow"></svg>',
+                },
+            ],
+        });
     });
 
     it("submits only the latest completed render for the same preview callback", async () => {

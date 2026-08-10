@@ -4,6 +4,7 @@ import { createApp, h, nextTick, ref, type Ref } from "vue";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MoraAIProvider } from "../../ai/openAICompatible";
 import type { MoraEditorHandle } from "./editorTypes";
+import type { MermaidViewerRequest } from "./mermaidPreview";
 import MilkdownEditor from "./MilkdownEditor.vue";
 
 const mocks = vi.hoisted(() => {
@@ -19,15 +20,18 @@ const mocks = vi.hoisted(() => {
         state: {
             doc: {
                 content: { size: 8 },
-                descendants:
-                    vi.fn<
-                        (
-                            visit: (
-                                node: { type: { name: string }; textContent: string },
-                                position: number,
-                            ) => boolean | void,
-                        ) => void
-                    >(),
+                descendants: vi.fn<
+                    (
+                        visit: (
+                            node: {
+                                type: { name: string };
+                                attrs?: { language?: string };
+                                textContent: string;
+                            },
+                            position: number,
+                        ) => boolean | void,
+                    ) => void
+                >(),
                 textBetween: vi.fn(() => "选中文本"),
             },
             selection: { from: 2, to: 5 },
@@ -213,6 +217,7 @@ type MountedEditor = {
     markdown: Ref<string>;
     readonly: Ref<boolean>;
     errors: string[];
+    mermaidRequests: MermaidViewerRequest[];
     updates: string[];
     unmount: () => void;
 };
@@ -251,6 +256,7 @@ function mountEditor(
 ): MountedEditor {
     const host = document.createElement("div");
     const errors: string[] = [];
+    const mermaidRequests: MermaidViewerRequest[] = [];
     const updates: string[] = [];
     const handle = ref<MoraEditorHandle | null>(null);
     const value = ref(markdown);
@@ -266,6 +272,8 @@ function mountEditor(
                     readonly: readonlyValue.value,
                     aiProvider,
                     onAiError: (message: string) => errors.push(message),
+                    onOpenMermaid: (request: MermaidViewerRequest) =>
+                        mermaidRequests.push(request),
                     "onUpdate:modelValue": (updated: string) => {
                         updates.push(updated);
                         value.value = updated;
@@ -284,6 +292,7 @@ function mountEditor(
         markdown: value,
         readonly: readonlyValue,
         errors,
+        mermaidRequests,
         updates,
         unmount: () => {
             app.unmount();
@@ -349,13 +358,24 @@ describe("MilkdownEditor", () => {
             };
             const codeMirrorConfig = options.featureConfigs["code-mirror"];
             const configuredLanguages = codeMirrorConfig.languages ?? [];
+            const configuredLanguageNames = configuredLanguages.map(({ name }) => name);
 
-            expect(configuredLanguages.some(({ name }) => name === "JavaScript")).toBe(true);
-            expect(configuredLanguages.find(({ name }) => name === "mermaid")).toMatchObject({
-                name: "mermaid",
+            expect(configuredLanguages.some(({ name }) => name === "JavaScript")).toBe(
+                true,
+            );
+            expect(
+                configuredLanguages.find(({ name }) => name === "Mermaid"),
+            ).toMatchObject({
+                name: "Mermaid",
                 alias: expect.arrayContaining(["mermaid"]),
                 support: expect.anything(),
             });
+            expect(configuredLanguageNames.indexOf("Mermaid")).toBe(
+                configuredLanguageNames.indexOf("Markdown") + 1,
+            );
+            expect(configuredLanguageNames.indexOf("MS SQL")).toBe(
+                configuredLanguageNames.indexOf("Mermaid") + 1,
+            );
             expect(codeMirrorConfig.previewOnlyByDefault).toBe(true);
             expect(codeMirrorConfig.renderPreview).toEqual(expect.any(Function));
         },
@@ -396,6 +416,80 @@ describe("MilkdownEditor", () => {
         deferred.resolve({ svg: "<svg></svg>" });
         await waiting;
         expect(settled).toBe(true);
+    });
+
+    it("forwards a Mermaid preview activation to its parent", async () => {
+        mocks.mermaidRender.mockResolvedValueOnce({
+            svg: '<svg data-diagram="flowchart"></svg>',
+        });
+        const editor = mountEditor("```mermaid\nflowchart LR\nA --> B\n```");
+        cleanup = editor.unmount;
+        await nextTick();
+
+        const options = mocks.instances[0].options as {
+            featureConfigs: Record<
+                string,
+                {
+                    renderPreview: (
+                        language: string,
+                        source: string,
+                        applyPreview: (value: HTMLElement | null) => void,
+                    ) => void;
+                }
+            >;
+        };
+        options.featureConfigs["code-mirror"].renderPreview(
+            "mermaid",
+            "flowchart LR\nA --> B",
+            (value) => {
+                if (value) editor.host.querySelector(".milkdown-editor")?.append(value);
+            },
+        );
+        await editor.handle.value?.whenReady();
+        await editor.handle.value?.whenSettled();
+        mocks.editorView.state.doc.descendants.mockImplementationOnce((visit) => {
+            visit(
+                {
+                    type: { name: "code_block" },
+                    attrs: { language: "mermaid" },
+                    textContent: "flowchart LR\nA --> B",
+                },
+                0,
+            );
+        });
+
+        editor.host.querySelector<HTMLElement>(".mermaid-preview")?.click();
+
+        expect(editor.mermaidRequests).toEqual([
+            {
+                activeIndex: 0,
+                diagrams: [
+                    {
+                        label: "流程图",
+                        source: "flowchart LR\nA --> B",
+                        svg: '<svg data-diagram="flowchart"></svg>',
+                    },
+                ],
+            },
+        ]);
+
+        editor.mermaidRequests.length = 0;
+        mocks.editorView.state.doc.descendants.mockImplementationOnce((visit) => {
+            visit(
+                {
+                    type: { name: "code_block" },
+                    attrs: { language: "mermaid" },
+                    textContent: "flowchart LR\nA --> B",
+                },
+                0,
+            );
+        });
+        editor.host
+            .querySelector<HTMLElement>(".mermaid-preview")
+            ?.dispatchEvent(
+                new KeyboardEvent("keydown", { bubbles: true, key: "Enter" }),
+            );
+        expect(editor.mermaidRequests).toHaveLength(1);
     });
 
     it("enables Crepe AI with diff review and forwards provider errors", async () => {

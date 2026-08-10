@@ -1,9 +1,18 @@
 <template>
-    <div ref="editorElement" class="milkdown-editor"></div>
+    <div
+        ref="editorElement"
+        class="milkdown-editor"
+        @click="handleEditorClick"
+        @keydown="handleEditorKeydown"
+    ></div>
 </template>
 
 <script setup lang="ts">
-import { LanguageDescription, LanguageSupport, StreamLanguage } from "@codemirror/language";
+import {
+    LanguageDescription,
+    LanguageSupport,
+    StreamLanguage,
+} from "@codemirror/language";
 import { languages as codeLanguages } from "@codemirror/language-data";
 import { Crepe } from "@milkdown/crepe";
 import type { AIProvider } from "@milkdown/crepe/feature/ai";
@@ -33,11 +42,11 @@ import { EditorState, Selection, TextSelection } from "@milkdown/kit/prose/state
 import { getMarkdown, replaceAll, replaceRange } from "@milkdown/kit/utils";
 import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { EditorCommand, ImageUploadHandler, MoraEditorHandle } from "./editorTypes";
-import { createMermaidPreview } from "./mermaidPreview";
+import { createMermaidPreview, type MermaidViewerRequest } from "./mermaidPreview";
 import { normalizeMarkdownHeadingText } from "../../utils/text";
 
 const mermaidLanguage = LanguageDescription.of({
-    name: "mermaid",
+    name: "Mermaid",
     support: new LanguageSupport(
         StreamLanguage.define<null>({
             startState: () => null,
@@ -48,8 +57,18 @@ const mermaidLanguage = LanguageDescription.of({
         }),
     ),
 });
-
-const renderMermaidPreview = createMermaidPreview(mermaid);
+const mermaidLanguageInsertionIndex = codeLanguages.findIndex(
+    ({ name }) =>
+        name.localeCompare(mermaidLanguage.name, "en", { sensitivity: "base" }) > 0,
+);
+const codeBlockLanguages =
+    mermaidLanguageInsertionIndex === -1
+        ? [...codeLanguages, mermaidLanguage]
+        : [
+              ...codeLanguages.slice(0, mermaidLanguageInsertionIndex),
+              mermaidLanguage,
+              ...codeLanguages.slice(mermaidLanguageInsertionIndex),
+          ];
 
 const props = defineProps<{
     documentId: string;
@@ -62,7 +81,11 @@ const props = defineProps<{
 const emit = defineEmits<{
     "update:modelValue": [markdown: string];
     "ai-error": [message: string];
+    "open-mermaid": [request: MermaidViewerRequest];
 }>();
+const renderMermaidPreview = createMermaidPreview(mermaid, (request) =>
+    emit("open-mermaid", request),
+);
 
 const editorElement = ref<HTMLDivElement>();
 let crepe: Crepe | undefined;
@@ -170,7 +193,7 @@ onMounted(() => {
     };
     const featureConfigs = {
         [Crepe.Feature.CodeMirror]: {
-            languages: [...codeLanguages, mermaidLanguage],
+            languages: codeBlockLanguages,
             renderPreview: renderMermaidPreview,
             previewOnlyByDefault: true,
         },
@@ -239,6 +262,7 @@ watch(
 );
 
 onBeforeUnmount(() => {
+    renderMermaidPreview.dispose();
     const instance = crepe;
     if (!instance || disposed) return;
 
@@ -414,6 +438,32 @@ function whenReady(): Promise<void> {
 
 function whenSettled(): Promise<void> {
     return renderMermaidPreview.whenSettled();
+}
+
+function activateMermaidPreview(event: Event): boolean {
+    if (!crepe || !ready || disposed) return false;
+    const sources = crepe.editor.action((ctx) => {
+        const mermaidSources: string[] = [];
+        ctx.get(editorViewCtx).state.doc.descendants((node) => {
+            if (
+                node.type.name === "code_block" &&
+                node.attrs.language?.trim().toLowerCase() === "mermaid"
+            ) {
+                mermaidSources.push(node.textContent);
+            }
+        });
+        return mermaidSources;
+    });
+    return renderMermaidPreview.activate(event, sources);
+}
+
+function handleEditorClick(event: MouseEvent): void {
+    activateMermaidPreview(event);
+}
+
+function handleEditorKeydown(event: KeyboardEvent): void {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    if (activateMermaidPreview(event)) event.preventDefault();
 }
 
 defineExpose<MoraEditorHandle>({

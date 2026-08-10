@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { setTheme } from "@tauri-apps/api/app";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open, save } from "@tauri-apps/plugin-dialog";
@@ -19,6 +20,12 @@ import StatusBar from "./components/StatusBar.vue";
 import TableOfContents from "./components/TableOfContents.vue";
 import WorkspaceSidebar from "./components/WorkspaceSidebar.vue";
 import MoraEditor from "./components/editor/MoraEditor.vue";
+import MermaidViewer from "./components/editor/MermaidViewer.vue";
+import { svgToPngBase64 } from "./components/editor/mermaidExport";
+import type {
+    MermaidDiagramSnapshot,
+    MermaidViewerRequest,
+} from "./components/editor/mermaidPreview";
 import { createOpenAICompatibleProvider } from "./ai/openAICompatible";
 import type {
     EditorCommand,
@@ -130,15 +137,29 @@ const historyItems = ref<HistoryListItem[]>([]);
 const historyLoading = ref(false);
 let historyRequestId = 0;
 const showSettings = ref(false);
+const mermaidViewerRequest = ref<MermaidViewerRequest | null>(null);
+const mermaidExporting = ref(false);
+const mermaidExportError = ref("");
 const aiKeyConfigured = ref(false);
 const aiKeySaving = ref(false);
 let aiKeyStatusRequestId = 0;
 
 const {
     preferences,
+    resolvedTheme,
     update: updatePreferences,
     dispose: disposePreferences,
 } = usePreferences();
+watch(
+    resolvedTheme,
+    (theme) => {
+        if (!tauriRuntime) return;
+        void setTheme(theme === "dark" ? "dark" : "light").catch((error: unknown) => {
+            console.warn("同步原生窗口主题失败", error);
+        });
+    },
+    { immediate: true },
+);
 const aiProvider = createOpenAICompatibleProvider(
     () => ({
         baseUrl: preferences.value.aiBaseUrl,
@@ -171,7 +192,8 @@ const blockingModalOpen = computed(
         showSettings.value ||
         showLeavePrompt.value ||
         showConflictPrompt.value ||
-        showMarkdownResourcesPrompt.value,
+        showMarkdownResourcesPrompt.value ||
+        mermaidViewerRequest.value !== null,
 );
 const savingDocumentIds = new Set<string>();
 let unlistenClose: (() => void) | null = null;
@@ -200,6 +222,45 @@ function imageExtension(mimeType: string): string {
         "image/svg+xml": "svg",
     };
     return extensions[mimeType] ?? "png";
+}
+
+function openMermaidViewer(request: MermaidViewerRequest): void {
+    mermaidExportError.value = "";
+    mermaidViewerRequest.value = request;
+}
+
+function closeMermaidViewer(): void {
+    mermaidViewerRequest.value = null;
+    mermaidExportError.value = "";
+}
+
+watch(
+    [activeDocumentId, editorMode],
+    () => {
+        if (mermaidViewerRequest.value) closeMermaidViewer();
+    },
+    { flush: "sync" },
+);
+
+async function exportMermaidDiagram(diagram: MermaidDiagramSnapshot): Promise<void> {
+    if (mermaidExporting.value) return;
+    mermaidExporting.value = true;
+    mermaidExportError.value = "";
+    try {
+        const path = await save({
+            defaultPath: `${sanitizeFileName(title.value)}-${sanitizeFileName(diagram.label)}.png`,
+            filters: [{ name: "PNG 图像", extensions: ["png"] }],
+        });
+        if (!path) return;
+        const base64 = await svgToPngBase64(diagram.svg, resolvedTheme.value);
+        await invoke("export_diagram_png", { path, base64 });
+        statusMessage.value = "Mermaid 图表已导出";
+    } catch (error) {
+        mermaidExportError.value = stringifyError(error);
+        statusMessage.value = "Mermaid 图表导出失败";
+    } finally {
+        mermaidExporting.value = false;
+    }
 }
 
 async function registerPastedImage(file: File): Promise<string> {
@@ -2317,6 +2378,7 @@ function stringifyError(error: unknown) {
                                 :ai-provider="tauriRuntime ? aiProvider : undefined"
                                 @update:model-value="handleEditorUpdate"
                                 @ai-error="handleAiError"
+                                @open-mermaid="openMermaidViewer"
                             />
                         </div>
                     </div>
@@ -2405,6 +2467,14 @@ function stringifyError(error: unknown) {
             :open="showConflictPrompt"
             :document-name="conflictPromptDocumentName"
             @decide="resolveConflictDecision"
+        />
+        <MermaidViewer
+            :request="mermaidViewerRequest"
+            :document-name="title"
+            :exporting="mermaidExporting"
+            :export-error="mermaidExportError"
+            @close="closeMermaidViewer"
+            @export="exportMermaidDiagram"
         />
         <StatusBar
             :error-message="errorMessage"

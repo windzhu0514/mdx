@@ -14,9 +14,11 @@ import {
 import type { AIProvider } from "@milkdown/crepe/feature/ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { EditorCommand, EditorMode, MoraEditorHandle } from "./editorTypes";
+import type { MermaidViewerRequest } from "./mermaidPreview";
 import MoraEditor from "./MoraEditor.vue";
 
 type ChildHandle = MoraEditorHandle & {
+    emitOpenMermaid(request: MermaidViewerRequest): void;
     emitUpdate(markdown: string): void;
     calls: {
         execute: EditorCommand[];
@@ -41,6 +43,7 @@ const childHandles = vi.hoisted(() => ({
 function createChildHandle(
     label: string,
     emitUpdate: (markdown: string) => void,
+    emitOpenMermaid: (request: MermaidViewerRequest) => void = () => undefined,
 ): ChildHandle {
     const calls: ChildHandle["calls"] = {
         execute: [],
@@ -61,6 +64,7 @@ function createChildHandle(
         cancelAi: () => {
             calls.cancelAi += 1;
         },
+        emitOpenMermaid,
         emitUpdate,
         execute: (command) => calls.execute.push(command),
         focus: () => {
@@ -101,10 +105,12 @@ vi.mock("./MilkdownEditor.vue", () => ({
                 default: undefined,
             },
         },
-        emits: ["update:modelValue", "ai-error"],
+        emits: ["update:modelValue", "ai-error", "open-mermaid"],
         setup(props, { emit, expose }) {
-            const handle = createChildHandle("milkdown", (markdown) =>
-                emit("update:modelValue", markdown),
+            const handle = createChildHandle(
+                "milkdown",
+                (markdown) => emit("update:modelValue", markdown),
+                (request) => emit("open-mermaid", request),
             );
             childHandles.milkdown.push(handle);
             onUnmounted(() => {
@@ -158,6 +164,7 @@ type MountedEditor = {
     mode: Ref<EditorMode>;
     sourcePreview: Ref<boolean>;
     updates: string[];
+    mermaidRequests: MermaidViewerRequest[];
     unmount: () => void;
 };
 
@@ -174,6 +181,7 @@ function mountEditor(
     const previewValue = ref(sourcePreview);
     const documentIdValue = ref(documentId);
     const updates: string[] = [];
+    const mermaidRequests: MermaidViewerRequest[] = [];
     const app = createApp({
         setup() {
             return () =>
@@ -186,6 +194,8 @@ function mountEditor(
                     sourcePreview: previewValue.value,
                     readonly,
                     aiProvider,
+                    onOpenMermaid: (request: MermaidViewerRequest) =>
+                        mermaidRequests.push(request),
                     "onUpdate:modelValue": (markdown: string) => updates.push(markdown),
                 });
         },
@@ -198,6 +208,7 @@ function mountEditor(
         handle,
         host,
         mode: modeValue,
+        mermaidRequests,
         sourcePreview: previewValue,
         updates,
         unmount: () => {
@@ -369,6 +380,23 @@ describe("MoraEditor", () => {
         childHandles.milkdown[0].emitUpdate("# 编辑后");
 
         expect(editor.updates).toEqual(["# 编辑后"]);
+    });
+
+    it("forwards Mermaid viewer requests from editable and readonly previews", async () => {
+        const editor = mountEditor("source", true);
+        cleanup = editor.unmount;
+        await nextTick();
+        const request: MermaidViewerRequest = {
+            activeIndex: 0,
+            diagrams: [
+                { label: "流程图", source: "flowchart LR\nA --> B", svg: "<svg></svg>" },
+            ],
+        };
+
+        childHandles.milkdown[0].emitOpenMermaid(request);
+        childHandles.milkdown[1].emitOpenMermaid(request);
+
+        expect(editor.mermaidRequests).toEqual([request, request]);
     });
 
     it("keeps editable kernels mounted while switching source preview and mode", async () => {
