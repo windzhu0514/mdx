@@ -276,6 +276,24 @@ fn accepts_complete_png_jpeg_and_gif_with_dimensions() {
 }
 
 #[test]
+fn accepts_multi_scan_jpeg_with_an_intervening_huffman_table() {
+    let bytes = multi_scan_jpeg();
+    let mut request = fixture_request("![渐进图](assets/a.png)");
+    request.resources[0].mime_type = "image/jpeg".to_string();
+    request.resources[0].base64 = general_purpose::STANDARD.encode(&bytes);
+    request.resources[0].size = bytes.len() as u64;
+
+    let model = parse_document(&request).unwrap();
+    let Block::Image {
+        image: Some(image), ..
+    } = &model.blocks[0]
+    else {
+        panic!("多扫描 JPEG 应保留图片数据");
+    };
+    assert_eq!((image.width, image.height), (1, 1));
+}
+
+#[test]
 fn rejects_header_valid_but_truncated_images() {
     for (mime_type, bytes) in [
         ("image/png", png_header_only(1, 1)),
@@ -408,6 +426,20 @@ fn jpeg_without_scan() -> Vec<u8> {
     [
         vec![0xff, 0xd8],
         vec![0xff, 0xc0, 0, 11, 8, 0, 1, 0, 1, 1, 1, 0x11, 0],
+    ]
+    .concat()
+}
+
+fn multi_scan_jpeg() -> Vec<u8> {
+    let huffman_table = [vec![0xff, 0xc4, 0, 20, 0, 1], vec![0; 15], vec![0]].concat();
+    [
+        vec![0xff, 0xd8],
+        vec![0xff, 0xc0, 0, 11, 8, 0, 1, 0, 1, 1, 1, 0x11, 0],
+        vec![0xff, 0xda, 0, 8, 1, 1, 0, 0, 0x3f, 0],
+        vec![0x11, 0xff, 0x00, 0x22, 0xff, 0xd0, 0x33],
+        huffman_table,
+        vec![0xff, 0xda, 0, 8, 1, 1, 0, 0, 0x3f, 0],
+        vec![0x44, 0xff, 0x00, 0x55, 0xff, 0xd9],
     ]
     .concat()
 }

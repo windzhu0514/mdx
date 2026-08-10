@@ -496,23 +496,25 @@ fn jpeg_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
 
     let mut offset = 2;
     let mut dimensions = None;
-    while offset < bytes.len() {
-        if *bytes.get(offset)? != 0xff {
-            return None;
-        }
-        while *bytes.get(offset)? == 0xff {
-            offset += 1;
-        }
-        let marker = *bytes.get(offset)?;
-        offset += 1;
+    let mut saw_scan = false;
+    let mut pending_marker = None;
+    while offset < bytes.len() || pending_marker.is_some() {
+        let (marker, marker_end) = match pending_marker.take() {
+            Some(marker) => marker,
+            None => jpeg_marker(bytes, offset)?,
+        };
         if marker == 0xd9 {
-            return None;
+            return (saw_scan && marker_end == bytes.len()).then_some(dimensions?);
         }
-        if matches!(marker, 0x01 | 0xd0..=0xd7) {
+        if marker == 0x01 {
+            offset = marker_end;
             continue;
         }
-        let segment_length = read_u16(bytes, offset)? as usize;
-        let segment_end = offset.checked_add(segment_length)?;
+        if matches!(marker, 0xd0..=0xd8) || marker == 0x00 {
+            return None;
+        }
+        let segment_length = read_u16(bytes, marker_end)? as usize;
+        let segment_end = marker_end.checked_add(segment_length)?;
         if segment_length < 2 || segment_end > bytes.len() {
             return None;
         }
@@ -534,9 +536,9 @@ fn jpeg_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
             if dimensions.is_some() || segment_length < 8 {
                 return None;
             }
-            let height = u16::from_be_bytes([bytes[offset + 3], bytes[offset + 4]]) as u32;
-            let width = u16::from_be_bytes([bytes[offset + 5], bytes[offset + 6]]) as u32;
-            let component_count = bytes[offset + 7] as usize;
+            let height = u16::from_be_bytes([bytes[marker_end + 3], bytes[marker_end + 4]]) as u32;
+            let width = u16::from_be_bytes([bytes[marker_end + 5], bytes[marker_end + 6]]) as u32;
+            let component_count = bytes[marker_end + 7] as usize;
             if width == 0
                 || height == 0
                 || component_count == 0
@@ -547,14 +549,22 @@ fn jpeg_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
             dimensions = Some((width, height));
         }
         if marker == 0xda {
-            let component_count = *bytes.get(offset + 2)? as usize;
+            let component_count = *bytes.get(marker_end + 2)? as usize;
             if dimensions.is_none()
                 || component_count == 0
                 || segment_length != 6 + component_count.checked_mul(2)?
             {
                 return None;
             }
-            return jpeg_scan_to_eoi(bytes, segment_end).and_then(|()| dimensions);
+            let (next_marker, next_offset, scan_has_data) =
+                jpeg_scan_next_marker(bytes, segment_end)?;
+            if !scan_has_data {
+                return None;
+            }
+            saw_scan = true;
+            pending_marker = Some((next_marker, next_offset));
+            offset = next_offset;
+            continue;
         }
         offset = segment_end;
     }
@@ -648,19 +658,38 @@ fn crc32(bytes: &[u8]) -> u32 {
     !crc
 }
 
-fn jpeg_scan_to_eoi(bytes: &[u8], mut offset: usize) -> Option<()> {
+fn jpeg_marker(bytes: &[u8], mut offset: usize) -> Option<(u8, usize)> {
+    if *bytes.get(offset)? != 0xff {
+        return None;
+    }
+    while *bytes.get(offset)? == 0xff {
+        offset = offset.checked_add(1)?;
+    }
+    let marker = *bytes.get(offset)?;
+    (marker != 0x00).then_some((marker, offset.checked_add(1)?))
+}
+
+fn jpeg_scan_next_marker(bytes: &[u8], mut offset: usize) -> Option<(u8, usize, bool)> {
+    let mut saw_data = false;
     while offset < bytes.len() {
         if bytes[offset] != 0xff {
+            saw_data = true;
             offset += 1;
             continue;
         }
-        let marker = *bytes.get(offset.checked_add(1)?)?;
-        offset = offset.checked_add(2)?;
+        offset = offset.checked_add(1)?;
+        let mut marker = *bytes.get(offset)?;
+        while marker == 0xff {
+            offset = offset.checked_add(1)?;
+            marker = *bytes.get(offset)?;
+        }
+        offset = offset.checked_add(1)?;
         match marker {
-            0x00 | 0xd0..=0xd7 => {}
-            0xd9 => return (offset == bytes.len()).then_some(()),
-            0xff => return None,
-            _ => return None,
+            0x00 => {
+                saw_data = true;
+            }
+            0xd0..=0xd7 => saw_data = true,
+            _ => return Some((marker, offset, saw_data)),
         }
     }
     None
