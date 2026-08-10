@@ -4,10 +4,13 @@ use super::{
     Block, DocumentModel, ImageData, ImageFormat, Inline, ListItem, MermaidImage, TableAlignment,
     TableRow,
 };
+use typst::World;
 use typst_as_lib::{typst_kit_options::TypstKitFontOptions, TypstEngine, TypstTemplateMainFile};
 
 const CHINESE_FONT_ERROR: &str = "未找到可用于 PDF 导出的中文字体。";
 const FONT_FALLBACK: &str = "(\"Microsoft YaHei\", \"SimSun\", \"Noto Sans CJK SC\", \"Arial\")";
+const FONT_FAMILIES: [&str; 4] = ["Microsoft YaHei", "SimSun", "Noto Sans CJK SC", "Arial"];
+const CHINESE_FONT_PROBE: &str = "中文测试";
 const HEADER: &str = r#"#set page(paper: "a4", margin: 25mm, numbering: "1")
 #set text(font: ("Microsoft YaHei", "SimSun", "Noto Sans CJK SC", "Arial"), size: 10.5pt, lang: "zh")
 #set par(leading: 0.72em, spacing: 0.75em, justify: false)
@@ -17,10 +20,9 @@ const HEADER: &str = r#"#set page(paper: "a4", margin: 25mm, numbering: "1")
 
 /// Renders the shared document model into PDF bytes without writing a file.
 pub fn render_pdf(model: &DocumentModel) -> Result<Vec<u8>, String> {
-    ensure_chinese_font_available()?;
-
     let rendered = render(model);
     let engine = build_engine(rendered.source, rendered.files);
+    ensure_chinese_font_available(&engine)?;
     let document = engine.compile().output.map_err(format_typst_errors)?;
     typst_pdf::pdf(&document, &Default::default())
         .map_err(|_| "PDF 生成失败：Typst 无法生成 PDF。".to_string())
@@ -34,37 +36,45 @@ pub fn render_typst_source(model: &DocumentModel) -> String {
     render(model).source
 }
 
-fn ensure_chinese_font_available() -> Result<(), String> {
-    let probe = format!("#set text(font: {FONT_FALLBACK}, lang: \"zh\")\n#text(\"中\")");
-    let engine = build_engine(probe, Vec::new());
-    let compiled = engine.compile();
-    if compiled
-        .warnings
-        .iter()
-        .any(|warning| warning.message.contains("glyph"))
-    {
-        return Err(CHINESE_FONT_ERROR.to_string());
-    }
+fn ensure_chinese_font_available(
+    engine: &TypstEngine<TypstTemplateMainFile>,
+) -> Result<(), String> {
+    let supported = engine
+        .with_world(|world| configured_font_covers_chinese(world))
+        .map_err(|_| CHINESE_FONT_ERROR.to_string())?;
+    supported
+        .then_some(())
+        .ok_or_else(|| CHINESE_FONT_ERROR.to_string())
+}
 
-    match compiled.output {
-        Ok(document) => typst_pdf::pdf(&document, &Default::default())
-            .map(|_| ())
-            .map_err(|_| CHINESE_FONT_ERROR.to_string()),
-        Err(_) => Err(CHINESE_FONT_ERROR.to_string()),
-    }
+fn configured_font_covers_chinese(world: &dyn World) -> bool {
+    FONT_FAMILIES.iter().any(|family| {
+        let family = family.to_lowercase();
+        world.book().select_family(&family).any(|index| {
+            world.font(index).is_some_and(|font| {
+                CHINESE_FONT_PROBE
+                    .chars()
+                    .all(|character| font.info().coverage.contains(character as u32))
+            })
+        })
+    })
 }
 
 fn build_engine(
     source: String,
     image_files: Vec<(String, Vec<u8>)>,
 ) -> TypstEngine<TypstTemplateMainFile> {
+    build_engine_with_font_options(source, image_files, TypstKitFontOptions::default())
+}
+
+fn build_engine_with_font_options(
+    source: String,
+    image_files: Vec<(String, Vec<u8>)>,
+    font_options: TypstKitFontOptions,
+) -> TypstEngine<TypstTemplateMainFile> {
     TypstEngine::builder()
         .main_file(source)
-        .search_fonts_with(
-            TypstKitFontOptions::default()
-                .include_system_fonts(true)
-                .include_embedded_fonts(true),
-        )
+        .search_fonts_with(font_options)
         .with_static_file_resolver(
             image_files
                 .iter()
@@ -89,9 +99,13 @@ struct Renderer {
 
 fn render(model: &DocumentModel) -> RenderedDocument {
     let mut renderer = Renderer {
-        source: String::from(HEADER),
+        source: String::new(),
         files: Vec::new(),
     };
+    renderer.source.push_str("#set document(title: \"");
+    renderer.source.push_str(&typst_string(&model.title));
+    renderer.source.push_str("\")\n");
+    renderer.source.push_str(HEADER);
     renderer
         .source
         .push_str("\n#align(center)[#text(size: 22pt, weight: \"bold\")[");
@@ -192,11 +206,13 @@ impl Renderer {
             if row.is_header {
                 self.source.push_str("  table.header(\n");
             }
-            for (index, cell) in row.cells.iter().enumerate() {
+            for index in 0..columns {
                 self.source.push_str("    align(");
                 self.source.push_str(table_alignment(alignments.get(index)));
                 self.source.push_str(")[");
-                self.render_inlines(cell);
+                if let Some(cell) = row.cells.get(index) {
+                    self.render_inlines(cell);
+                }
                 self.source.push_str("],\n");
             }
             if row.is_header {
@@ -355,5 +371,34 @@ fn table_alignment(alignment: Option<&TableAlignment>) -> &'static str {
         Some(TableAlignment::Center) => "center",
         Some(TableAlignment::Right) => "right",
         Some(TableAlignment::Left | TableAlignment::None) | None => "left",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_an_engine_without_system_or_embedded_cjk_fonts() {
+        let engine = build_engine_with_font_options(
+            "#text(\"ASCII only\")".to_string(),
+            Vec::new(),
+            TypstKitFontOptions::default()
+                .include_system_fonts(false)
+                .include_embedded_fonts(false),
+        );
+
+        assert_eq!(
+            ensure_chinese_font_available(&engine).unwrap_err(),
+            CHINESE_FONT_ERROR
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn accepts_the_current_windows_engine_when_a_configured_font_covers_chinese() {
+        let engine = build_engine("#text(\"中文测试\")".to_string(), Vec::new());
+
+        assert!(ensure_chinese_font_available(&engine).is_ok());
     }
 }

@@ -6,9 +6,10 @@ use base64::{engine::general_purpose, Engine as _};
 use document_export::docx::render_docx;
 use document_export::pdf::{render_pdf, render_typst_source};
 use document_export::{
-    parse_document, Block, ExportDocumentRequest, ExportFormat, ExportMermaidDiagram,
-    ExportResource, Inline, ListItem,
+    parse_document, Block, DocumentModel, ExportDocumentRequest, ExportFormat,
+    ExportMermaidDiagram, ExportResource, Inline, ListItem, TableAlignment, TableRow,
 };
+use lopdf::Document as PdfDocument;
 use std::io::{Cursor, Read};
 use zip::ZipArchive;
 
@@ -56,7 +57,7 @@ fn renders_real_docx_with_structure_and_media() {
 fn renders_typst_source_from_the_shared_document_model() {
     let source = render_typst_source(&parse_document(&rich_request()).unwrap());
 
-    assert!(source.starts_with("#set page(paper: \"a4\", margin: 25mm, numbering: \"1\")"));
+    assert!(source.contains("#set page(paper: \"a4\", margin: 25mm, numbering: \"1\")"));
     assert!(source.contains("#heading(level: 1)[#text(\"标题\")]"));
     assert!(source.contains("#table("));
     assert!(source.contains("#emph["));
@@ -76,11 +77,20 @@ fn renders_typst_source_from_the_shared_document_model() {
 
 #[test]
 fn typst_source_escapes_untrusted_text_urls_and_code() {
-    let request = fixture_request(
+    let mut request = fixture_request(
         "# # [heading] \\\\ \"quote\"\n\n# [text] \\\\ \"quote\" [link](https://example.com/\"quoted\")\n\n```rust\n# [code] \\\\ \"quote\"\n```",
     );
+    request.title = "title\") #set page(paper: \"a5\")".to_string();
     let source = render_typst_source(&parse_document(&request).unwrap());
 
+    assert!(source.contains("#set document(title: \"title\\\") #set page(paper: \\\"a5\\\")\")"));
+    assert_eq!(
+        source
+            .lines()
+            .filter(|line| line.starts_with("#set page("))
+            .count(),
+        1
+    );
     assert!(source.contains("#text(\"# \""));
     assert!(source.contains("#text(\"[\")"));
     assert!(source.contains("#text(\"]\")"));
@@ -92,7 +102,8 @@ fn typst_source_escapes_untrusted_text_urls_and_code() {
 
 #[test]
 fn renders_searchable_pdf_with_a4_content() {
-    let request = fixture_request("# Export heading\n\nA searchable paragraph with **bold** text.\n\n- first\n- second\n\n| A | B |\n|---|---|\n| 1 | 2 |");
+    let mut request = fixture_request("# Export heading\n\n中文正文可搜索。\n\n- list item\n\n| Table A | Table B |\n|---|---|\n| cell 1 | cell 2 |");
+    request.title = "PDF 标题".to_string();
     let model = parse_document(&request).unwrap();
     let source = render_typst_source(&model);
     assert!(source.contains("#set page(paper: \"a4\""));
@@ -101,12 +112,74 @@ fn renders_searchable_pdf_with_a4_content() {
     let bytes = render_pdf(&model).unwrap();
     assert!(bytes.starts_with(b"%PDF-"));
     assert!(bytes.len() > 1_000);
-    assert!(
-        bytes
-            .windows(b"Export heading".len())
-            .any(|window| window == b"Export heading"),
-        "PDF 应保留可搜索的文字对象"
-    );
+    let document = PdfDocument::load_mem(&bytes).expect("PDF 必须可被解析器读取");
+    let pages: Vec<_> = document.get_pages().into_keys().collect();
+    let text = document.extract_text(&pages).expect("PDF 必须可提取文本");
+    let normalized = text.split_whitespace().collect::<String>();
+    for expected in [
+        "PDF标题",
+        "Exportheading",
+        "中文正文可搜索。",
+        "listitem",
+        "TableA",
+        "cell2",
+    ] {
+        assert!(
+            normalized.contains(expected),
+            "提取文本缺少 {expected}：{text}"
+        );
+    }
+}
+
+#[test]
+fn writes_unicode_title_to_pdf_metadata() {
+    let mut request = fixture_request("正文");
+    request.title = "中文标题 # [special] \\\"引号”".to_string();
+    let bytes = render_pdf(&parse_document(&request).unwrap()).unwrap();
+
+    let metadata = PdfDocument::load_metadata_mem(&bytes).expect("PDF 元数据必须可读取");
+    assert_eq!(metadata.title.as_deref(), Some(request.title.as_str()));
+}
+
+#[test]
+fn table_renderer_pads_short_rows_before_the_next_row() {
+    let model = DocumentModel {
+        title: "Table padding".to_string(),
+        blocks: vec![Block::Table {
+            alignments: vec![
+                TableAlignment::Left,
+                TableAlignment::Center,
+                TableAlignment::Right,
+            ],
+            rows: vec![
+                TableRow {
+                    is_header: true,
+                    cells: vec![text_cell("H1"), text_cell("H2"), text_cell("H3")],
+                },
+                TableRow {
+                    is_header: false,
+                    cells: vec![text_cell("R1C1")],
+                },
+                TableRow {
+                    is_header: false,
+                    cells: vec![text_cell("R2C1"), text_cell("R2C2")],
+                },
+                TableRow {
+                    is_header: false,
+                    cells: vec![text_cell("R3C1")],
+                },
+            ],
+        }],
+    };
+    let source = render_typst_source(&model);
+
+    assert_eq!(source.matches("    align(").count(), 12);
+    assert_eq!(source.matches("align(left)[]").count(), 0);
+    assert_eq!(source.matches("align(center)[]").count(), 2);
+    assert_eq!(source.matches("align(right)[]").count(), 3);
+    assert!(source.find("R1C1").unwrap() < source.find("R2C1").unwrap());
+    assert!(source.find("R2C2").unwrap() < source.find("R3C1").unwrap());
+    assert!(render_pdf(&model).unwrap().starts_with(b"%PDF-"));
 }
 
 #[test]
@@ -615,6 +688,10 @@ fn assert_nested_task_item(items: &[ListItem]) {
         })
         .expect("外层列表项应包含嵌套列表");
     assert_eq!(nested[0].checked, Some(false));
+}
+
+fn text_cell(value: &str) -> Vec<Inline> {
+    vec![Inline::Text(value.to_string())]
 }
 
 fn assert_inline_image(inline: &Inline, expected_alt: &str) {

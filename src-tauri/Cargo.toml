@@ -33,3 +33,7 @@ pulldown-cmark = "0.13.4"
 docx-rs = "0.4.22"
 typst-as-lib = { version = "0.16.0", features = ["typst-kit-fonts", "typst-kit-embed-fonts"] }
 typst-pdf = "0.15"
+typst = "0.15"
+
+[dev-dependencies]
+lopdf = "0.42.0"
