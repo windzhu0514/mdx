@@ -30,7 +30,7 @@ export type MoraEditorHandle = {
     scrollToHeading(text: string): boolean;
     whenReady(): Promise<void>;
     whenSettled(): Promise<void>;
-    getMermaidDiagrams?(): Promise<MermaidDiagramSnapshot[]>;
+    getMermaidDiagrams(): Promise<MermaidDiagramSnapshot[]>;
     cancelAi(): void;
     releaseDocument(documentId: string): void;
 };

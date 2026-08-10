@@ -389,13 +389,7 @@ describe("MoraEditor", () => {
         cleanup = editor.unmount;
         await nextTick();
 
-        await expect(
-            (
-                editor.handle.value as MoraEditorHandle & {
-                    getMermaidDiagrams(): Promise<unknown>;
-                }
-            ).getMermaidDiagrams(),
-        ).resolves.toEqual([
+        await expect(editor.handle.value?.getMermaidDiagrams()).resolves.toEqual([
             {
                 label: "流程图",
                 source: "flowchart LR\nA --> B",

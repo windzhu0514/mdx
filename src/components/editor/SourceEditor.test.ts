@@ -260,6 +260,18 @@ describe("SourceEditor", () => {
         await expect(readyHandle.whenReady()).resolves.toBeUndefined();
     });
 
+    it("exposes an empty Mermaid export snapshot for the shared editor handle", async () => {
+        const editor = mountEditor("# source only");
+        cleanup = editor.unmount;
+        await nextTick();
+
+        const getMermaidDiagrams = editor.handle.value?.getMermaidDiagrams;
+        expect(getMermaidDiagrams).toEqual(expect.any(Function));
+        if (!getMermaidDiagrams) return;
+
+        await expect(getMermaidDiagrams()).resolves.toEqual([]);
+    });
+
     it("finds the first ATX heading by TOC text and moves the source cursor to it", async () => {
         const editor = mountEditor("# 开始\n正文\n## **目标标题** ##\n结尾");
         cleanup = editor.unmount;

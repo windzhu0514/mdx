@@ -119,7 +119,7 @@ function whenSettled(): Promise<void> {
 }
 
 function getMermaidDiagrams(): Promise<MermaidDiagramSnapshot[]> {
-    return milkdownEditor.value?.getMermaidDiagrams?.() ?? Promise.resolve([]);
+    return milkdownEditor.value?.getMermaidDiagrams() ?? Promise.resolve([]);
 }
 
 function cancelAi(): void {

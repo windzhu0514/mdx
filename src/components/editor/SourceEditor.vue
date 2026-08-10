@@ -9,6 +9,7 @@ import { Compartment, EditorState } from "@codemirror/state";
 import { basicSetup, EditorView } from "codemirror";
 import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { EditorCommand, MoraEditorHandle } from "./editorTypes";
+import type { MermaidDiagramSnapshot } from "./mermaidPreview";
 import { transformSourceSelection } from "./sourceTransforms";
 import { extractMarkdownHeadings, normalizeMarkdownHeadingText } from "../../utils/text";
 
@@ -224,6 +225,10 @@ function execute(command: EditorCommand): void {
     });
 }
 
+function getMermaidDiagrams(): Promise<MermaidDiagramSnapshot[]> {
+    return Promise.resolve([]);
+}
+
 defineExpose<MoraEditorHandle>({
     focus,
     getSelectedText,
@@ -233,6 +238,7 @@ defineExpose<MoraEditorHandle>({
     scrollToHeading,
     whenReady,
     whenSettled,
+    getMermaidDiagrams,
     cancelAi,
     releaseDocument,
 });
