@@ -29,6 +29,7 @@ type ChildHandle = MoraEditorHandle & {
         replaceSelection: string[];
         releaseDocument: string[];
         scrollToHeading: string[];
+        captureMermaidSources: number;
         getMermaidDiagrams: number;
         whenReady: number;
         whenSettled: number;
@@ -55,6 +56,7 @@ function createChildHandle(
         replaceSelection: [],
         releaseDocument: [],
         scrollToHeading: [],
+        captureMermaidSources: 0,
         getMermaidDiagrams: 0,
         whenReady: 0,
         whenSettled: 0,
@@ -82,6 +84,10 @@ function createChildHandle(
         scrollToHeading: (text) => {
             calls.scrollToHeading.push(text);
             return text === "目标标题";
+        },
+        captureMermaidSources: () => {
+            calls.captureMermaidSources += 1;
+            return Promise.resolve(["flowchart LR\nA --> B"]);
         },
         getMermaidDiagrams: () => {
             calls.getMermaidDiagrams += 1;
@@ -399,6 +405,29 @@ describe("MoraEditor", () => {
         expect(childHandles.milkdown[0].calls.getMermaidDiagrams).toBe(1);
         expect(childHandles.milkdown[1].calls.getMermaidDiagrams).toBe(0);
     });
+
+    it.each([
+        ["wysiwyg", false],
+        ["source", false],
+        ["source", true],
+    ] as const)(
+        "captures Mermaid sources from the actual editable Milkdown instance in %s mode",
+        async (mode, sourcePreview) => {
+            const editor = mountEditor(mode, sourcePreview);
+            cleanup = editor.unmount;
+            await nextTick();
+
+            await expect(editor.handle.value?.captureMermaidSources()).resolves.toEqual([
+                "flowchart LR\nA --> B",
+            ]);
+            expect(childHandles.milkdown[0].calls.captureMermaidSources).toBe(1);
+            expect(
+                childHandles.milkdown
+                    .slice(1)
+                    .every((handle) => handle.calls.captureMermaidSources === 0),
+            ).toBe(true);
+        },
+    );
 
     it("forwards a real child update event to its parent", async () => {
         const editor = mountEditor("wysiwyg", false);

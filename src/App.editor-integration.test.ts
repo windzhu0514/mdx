@@ -177,10 +177,23 @@ function lowestEditorStub(kind: "milkdown" | "source") {
 
             expose({
                 cancelAi: controls.cancelAi,
+                captureMermaidSources: async () => {
+                    controls.whenReadyCalls += 1;
+                    await controls.readiness;
+                    controls.whenSettledCalls += 1;
+                    await controls.settlement;
+                    return (mocks.mermaidDiagrams.get(props.documentId) ?? []).map(
+                        (diagram) => diagram.source,
+                    );
+                },
                 execute: vi.fn(),
                 focus: controls.focus,
-                getMermaidDiagrams: () =>
-                    Promise.resolve(mocks.mermaidDiagrams.get(props.documentId) ?? []),
+                getMermaidDiagrams: (sources?: readonly string[]) =>
+                    Promise.resolve(
+                        (mocks.mermaidDiagrams.get(props.documentId) ?? []).filter(
+                            (diagram) => !sources || sources.includes(diagram.source),
+                        ),
+                    ),
                 getSelectedText: vi.fn(() => ""),
                 moveCursor: vi.fn(),
                 replaceSelection: controls.replaceSelection,
@@ -808,6 +821,112 @@ describe("App PDF 打印视图", () => {
         );
         expect(mocks.invoke).not.toHaveBeenCalledWith("save_mdx", expect.anything());
     });
+
+    it("导出 PDF 在同一文档等待 Mermaid 时编辑会取消，避免混合版本", async () => {
+        const host = await mountApp();
+        mocks.milkdown?.emitUpdate(
+            "# 导出前正文\n```mermaid\nflowchart TD\nA --> B\n```",
+        );
+        await nextTick();
+        const targetEditor = mocks.milkdown;
+        const settled = createDeferred<void>();
+        if (targetEditor) {
+            targetEditor.settlement = settled.promise;
+            mocks.mermaidDiagrams.set(targetEditor.documentId(), [
+                { label: "流程图", source: "flowchart TD\nA --> B", svg: "<svg />" },
+            ]);
+        }
+        mocks.saveDialog.mockResolvedValueOnce("C:\\Exports\\draft.pdf");
+
+        findButton(host, "导出 PDF...").click();
+        await vi.waitFor(() => expect(targetEditor?.whenSettledCalls).toBe(1));
+        targetEditor?.emitUpdate("# 导出后正文");
+        await nextTick();
+        settled.resolve();
+
+        await vi.waitFor(() =>
+            expect(host.textContent).toContain("PDF 导出已取消：文档内容已变更"),
+        );
+        expect(mocks.saveDialog).not.toHaveBeenCalled();
+        expect(mocks.invoke).not.toHaveBeenCalledWith(
+            "export_document",
+            expect.anything(),
+        );
+    });
+
+    it.each([
+        ["Word", "docx", "导出 Word...", "C:\\Exports\\draft.docx"],
+        ["PDF", "pdf", "导出 PDF...", "C:\\Exports\\draft.pdf"],
+    ] as const)(
+        "导出 %s 会调用 export_document，并传递同一快照的完整请求",
+        async (_label, format, action, destinationPath) => {
+            const sourcePath = "C:\\notes\\export-source.mdx";
+            const note = createNote(
+                "# 已保存正文\n![图](assets/diagram.png)",
+                sourcePath,
+            );
+            note.meta.assets = [
+                {
+                    id: "image-1",
+                    originalName: "diagram.png",
+                    storedName: "diagram.png",
+                    path: "assets/diagram.png",
+                    type: "image/png",
+                    size: 4,
+                    createdAt: "2026-08-10T00:00:00Z",
+                },
+            ];
+            mocks.openedNotes.set(sourcePath, note);
+            mocks.openDialog.mockResolvedValueOnce(sourcePath);
+            mocks.saveDialog.mockResolvedValueOnce(destinationPath);
+            const host = await mountApp();
+            findButton(host, "打开文件...").click();
+            await vi.waitFor(() =>
+                expect(mocks.invoke).toHaveBeenCalledWith("read_asset", {
+                    path: sourcePath,
+                    assetName: "assets/diagram.png",
+                }),
+            );
+            mocks.milkdown?.emitUpdate(
+                "# 未保存正文\n![图](assets/diagram.png)\n```mermaid\nflowchart TD\nA --> B\n```",
+            );
+            await nextTick();
+            const targetEditor = mocks.milkdown;
+            if (targetEditor) {
+                mocks.mermaidDiagrams.set(targetEditor.documentId(), [
+                    { label: "流程图", source: "flowchart TD\nA --> B", svg: "<svg />" },
+                ]);
+            }
+
+            findButton(host, action).click();
+
+            await vi.waitFor(() =>
+                expect(mocks.invoke).toHaveBeenCalledWith(
+                    "export_document",
+                    expect.objectContaining({
+                        request: expect.objectContaining({
+                            destinationPath,
+                            format,
+                            markdown:
+                                "# 未保存正文\n![图](assets/diagram.png)\n```mermaid\nflowchart TD\nA --> B\n```",
+                            resources: [
+                                expect.objectContaining({
+                                    name: "assets/diagram.png",
+                                    base64: "aW1hZ2U=",
+                                }),
+                            ],
+                            mermaidDiagrams: [
+                                {
+                                    source: "flowchart TD\nA --> B",
+                                    pngBase64: "cG5n",
+                                },
+                            ],
+                        }),
+                    }),
+                ),
+            );
+        },
+    );
 
     it("Markdown 导出等待目标保存时切换文档仍导出原目标路径", async () => {
         const pathA = "C:\\notes\\a.mdx";

@@ -1399,23 +1399,39 @@ async function exportDocument(format: DocumentExportFormat) {
     const label = format === "docx" ? "Word" : "PDF";
     const extension = format === "docx" ? "docx" : "pdf";
     const filterName = format === "docx" ? "Word 文档" : "PDF 文档";
+    const snapshotIsCurrent = () => {
+        const current = documents.value.find(
+            (document) => document.id === snapshot.documentId,
+        );
+        return (
+            activeDocumentId.value === snapshot.documentId &&
+            current?.content === snapshot.markdown &&
+            JSON.stringify(current.resources.exportResources()) ===
+                JSON.stringify(snapshot.resources)
+        );
+    };
+    const cancelIfSnapshotChanged = () => {
+        if (snapshotIsCurrent()) return false;
+        statusMessage.value =
+            activeDocumentId.value === snapshot.documentId
+                ? `${label} 导出已取消：文档内容已变更`
+                : `${label} 导出已取消：活动文档已切换`;
+        return true;
+    };
 
     try {
-        await (editor?.whenSettled() ?? Promise.resolve());
-        if (activeDocumentId.value !== snapshot.documentId) {
-            statusMessage.value = `${label} 导出已取消：活动文档已切换`;
-            return;
-        }
-        const diagrams = await (editor?.getMermaidDiagrams() ?? Promise.resolve([]));
-        if (activeDocumentId.value !== snapshot.documentId) {
-            statusMessage.value = `${label} 导出已取消：活动文档已切换`;
-            return;
-        }
+        const mermaidSources = await (editor?.captureMermaidSources() ??
+            Promise.resolve([]));
+        if (cancelIfSnapshotChanged()) return;
+        const diagrams = await (editor?.getMermaidDiagrams(mermaidSources) ??
+            Promise.resolve([]));
+        if (cancelIfSnapshotChanged()) return;
         const destination = await save({
             defaultPath: `${sanitizeFileName(snapshot.title)}.${extension}`,
             filters: [{ name: filterName, extensions: [extension] }],
         });
         if (!destination) return;
+        if (cancelIfSnapshotChanged()) return;
 
         const request = await prepareDocumentExportRequest({
             destinationPath: destination,
@@ -1425,6 +1441,7 @@ async function exportDocument(format: DocumentExportFormat) {
             diagrams,
             format,
         });
+        if (cancelIfSnapshotChanged()) return;
         await invoke("export_document", { request });
         statusMessage.value = `${label} 导出成功`;
     } catch (error) {

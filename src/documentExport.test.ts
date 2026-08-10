@@ -33,4 +33,38 @@ describe("prepareDocumentExportRequest", () => {
         expect(request.resources[0]).not.toBe(resource);
         expect(convert).toHaveBeenCalledWith("<svg />", "light");
     });
+
+    it("keeps successful Mermaid snapshots when one PNG conversion fails", async () => {
+        const convert = vi
+            .fn<(svg: string, theme: "light") => Promise<string>>()
+            .mockRejectedValueOnce(new Error("canvas unavailable"))
+            .mockResolvedValueOnce("SECOND_PNG");
+
+        const request = await prepareDocumentExportRequest(
+            {
+                format: "pdf",
+                destinationPath: "C:\\Notes\\draft.pdf",
+                title: "草稿",
+                markdown: "```mermaid\nflowchart TD\nA --> B\n```",
+                resources: [],
+                diagrams: [
+                    {
+                        label: "失败图",
+                        source: "flowchart TD\\nA --> B",
+                        svg: "<svg bad />",
+                    },
+                    {
+                        label: "成功图",
+                        source: "flowchart TD\\nC --> D",
+                        svg: "<svg good />",
+                    },
+                ],
+            },
+            convert,
+        );
+
+        expect(request.mermaidDiagrams).toEqual([
+            { source: "flowchart TD\\nC --> D", pngBase64: "SECOND_PNG" },
+        ]);
+    });
 });

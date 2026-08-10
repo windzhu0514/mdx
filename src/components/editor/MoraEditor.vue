@@ -118,8 +118,14 @@ function whenSettled(): Promise<void> {
           : Promise.resolve();
 }
 
-function getMermaidDiagrams(): Promise<MermaidDiagramSnapshot[]> {
-    return milkdownEditor.value?.getMermaidDiagrams() ?? Promise.resolve([]);
+function captureMermaidSources(): Promise<string[]> {
+    return milkdownEditor.value?.captureMermaidSources() ?? Promise.resolve([]);
+}
+
+function getMermaidDiagrams(
+    sources?: readonly string[],
+): Promise<MermaidDiagramSnapshot[]> {
+    return milkdownEditor.value?.getMermaidDiagrams(sources) ?? Promise.resolve([]);
 }
 
 function cancelAi(): void {
@@ -146,6 +152,7 @@ defineExpose<MoraEditorHandle>({
     scrollToHeading,
     whenReady,
     whenSettled,
+    captureMermaidSources,
     getMermaidDiagrams,
     cancelAi,
     releaseDocument,

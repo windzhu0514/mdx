@@ -24,17 +24,24 @@ export async function prepareDocumentExportRequest(
     },
     convert: (svg: string, theme: "light") => Promise<string> = svgToPngBase64,
 ): Promise<DocumentExportRequest> {
+    const mermaidDiagrams: ExportMermaidDiagram[] = [];
+    for (const { source, svg } of input.diagrams) {
+        try {
+            mermaidDiagrams.push({
+                source,
+                pngBase64: await convert(svg, "light"),
+            });
+        } catch {
+            // Rust receives no snapshot for this source and exports its Mermaid code block.
+        }
+    }
+
     return {
         destinationPath: input.destinationPath,
         title: input.title,
         markdown: input.markdown,
         resources: input.resources.map((resource) => ({ ...resource })),
         format: input.format,
-        mermaidDiagrams: await Promise.all(
-            input.diagrams.map(async ({ source, svg }) => ({
-                source,
-                pngBase64: await convert(svg, "light"),
-            })),
-        ),
+        mermaidDiagrams,
     };
 }

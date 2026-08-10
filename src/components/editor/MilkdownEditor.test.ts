@@ -847,6 +847,35 @@ describe("MilkdownEditor", () => {
         expect(settled).toBe(true);
     });
 
+    it("captures Mermaid sources only after its own Crepe instance is ready and settled", async () => {
+        const deferred = createDeferred<void>();
+        mocks.createEditor = () => deferred.promise;
+        const editor = mountEditor("```mermaid\nflowchart LR\nA --> B\n```");
+        cleanup = editor.unmount;
+        await nextTick();
+        mocks.editorView.state.doc.descendants.mockImplementationOnce((visit) => {
+            visit(
+                {
+                    type: { name: "code_block" },
+                    attrs: { language: "mermaid" },
+                    textContent: "flowchart LR\nA --> B",
+                },
+                0,
+            );
+        });
+
+        let captured = false;
+        const waiting = editor.handle.value!.captureMermaidSources().then((sources) => {
+            captured = true;
+            return sources;
+        });
+        await flushPromises();
+        expect(captured).toBe(false);
+
+        deferred.resolve();
+        await expect(waiting).resolves.toEqual(["flowchart LR\nA --> B"]);
+    });
+
     it("keeps rejected Crepe creation observable through readiness while reporting and cleaning up", async () => {
         const deferred = createDeferred<void>();
         const failure = new Error("Crepe 初始化失败");

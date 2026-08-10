@@ -355,10 +355,13 @@ fn image_size_arguments(width: u32, height: u32) -> String {
     const MILLIMETRES_PER_INCH: f64 = 25.4;
     const REFERENCE_DPI: f64 = 96.0;
     const CONTENT_WIDTH_MM: f64 = 160.0;
+    const CONTENT_HEIGHT_MM: f64 = 230.0;
 
     let natural_width = f64::from(width) * MILLIMETRES_PER_INCH / REFERENCE_DPI;
     let natural_height = f64::from(height) * MILLIMETRES_PER_INCH / REFERENCE_DPI;
-    let scale = (CONTENT_WIDTH_MM / natural_width).min(1.0);
+    let scale = (CONTENT_WIDTH_MM / natural_width)
+        .min(CONTENT_HEIGHT_MM / natural_height)
+        .min(1.0);
     format!(
         "width: {:.3}mm, height: {:.3}mm",
         natural_width * scale,
@@ -377,6 +380,13 @@ fn table_alignment(alignment: Option<&TableAlignment>) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn limits_extremely_tall_images_to_the_a4_content_height() {
+        let dimensions = image_size_arguments(1, 1_000_000);
+
+        assert!(dimensions.contains("height: 230.000mm"), "{dimensions}");
+    }
 
     #[test]
     fn rejects_an_engine_without_system_or_embedded_cjk_fonts() {

@@ -461,8 +461,16 @@ function mermaidSources(): string[] {
     });
 }
 
-function getMermaidDiagrams(): Promise<MermaidDiagramSnapshot[]> {
-    return renderMermaidForExport(mermaid, mermaidSources());
+async function captureMermaidSources(): Promise<string[]> {
+    await whenReady();
+    await whenSettled();
+    return mermaidSources();
+}
+
+function getMermaidDiagrams(
+    sources: readonly string[] = mermaidSources(),
+): Promise<MermaidDiagramSnapshot[]> {
+    return renderMermaidForExport(mermaid, sources);
 }
 
 function activateMermaidPreview(event: Event): boolean {
@@ -489,6 +497,7 @@ defineExpose<MoraEditorHandle>({
     scrollToHeading,
     whenReady,
     whenSettled,
+    captureMermaidSources,
     getMermaidDiagrams,
     cancelAi,
     releaseDocument,

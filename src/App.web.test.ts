@@ -410,6 +410,7 @@ vi.mock("./components/editor/MoraEditor.vue", async () => {
                     props.displayValue ?? props.modelValue;
                 expose({
                     cancelAi: mocks.cancelAi,
+                    captureMermaidSources: vi.fn(async () => []),
                     execute: vi.fn(),
                     focus: vi.fn(),
                     getMermaidDiagrams: vi.fn(async () => []),

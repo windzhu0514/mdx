@@ -225,7 +225,13 @@ function execute(command: EditorCommand): void {
     });
 }
 
-function getMermaidDiagrams(): Promise<MermaidDiagramSnapshot[]> {
+function captureMermaidSources(): Promise<string[]> {
+    return Promise.resolve([]);
+}
+
+function getMermaidDiagrams(
+    _sources?: readonly string[],
+): Promise<MermaidDiagramSnapshot[]> {
     return Promise.resolve([]);
 }
 
@@ -238,6 +244,7 @@ defineExpose<MoraEditorHandle>({
     scrollToHeading,
     whenReady,
     whenSettled,
+    captureMermaidSources,
     getMermaidDiagrams,
     cancelAi,
     releaseDocument,
