@@ -87,11 +87,9 @@ export function createMermaidPreview(mermaid: MermaidRenderer): CodeBlockPreview
         host.className = "mermaid-preview";
         host.setAttribute("role", "img");
         host.setAttribute("aria-label", "Mermaid 图表");
-        const renderContainer = document.createElement("div");
-        renderContainer.className = "mermaid-render-container";
 
         const render = mermaid
-            .render(`mora-mermaid-${requestId}`, source, renderContainer)
+            .render(`mora-mermaid-${requestId}`, source)
             .then(({ svg, bindFunctions }) => {
                 if (latestRequestForCallback.get(applyPreview) !== requestId) return;
                 host.innerHTML = svg;

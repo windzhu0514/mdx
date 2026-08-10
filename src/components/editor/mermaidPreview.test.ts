@@ -66,7 +66,6 @@ describe("mermaidPreview", () => {
         expect(mermaid.render).toHaveBeenCalledWith(
             expect.stringMatching(/^mora-mermaid-/u),
             "flowchart LR\nA --> B",
-            expect.any(HTMLElement),
         );
         expect(applyPreview).toHaveBeenCalledTimes(1);
     });
