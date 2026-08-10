@@ -6,11 +6,15 @@ use base64::{engine::general_purpose, Engine as _};
 use document_export::docx::render_docx;
 use document_export::pdf::{render_pdf, render_typst_source};
 use document_export::{
-    parse_document, Block, DocumentModel, ExportDocumentRequest, ExportFormat,
-    ExportMermaidDiagram, ExportResource, Inline, ListItem, TableAlignment, TableRow,
+    export_document_file, parse_document, safe_write_bytes_with_rename, Block, DocumentModel,
+    ExportDocumentRequest, ExportFormat, ExportMermaidDiagram, ExportResource, Inline, ListItem,
+    TableAlignment, TableRow,
 };
 use lopdf::Document as PdfDocument;
+use std::fs;
+use std::io;
 use std::io::{Cursor, Read};
+use tempfile::tempdir;
 use zip::ZipArchive;
 
 fn fixture_request(markdown: &str) -> ExportDocumentRequest {
@@ -38,6 +42,68 @@ fn rich_request() -> ExportDocumentRequest {
     fixture_request(
         "# 标题\n\n###### 六级标题\n\n普通 **粗体** *斜体* ~~删除~~ `代码` 和 [链接](https://example.com)。\\\n第二行 [附件](attachments/report.pdf)\n\n> 引用\n\n1. 有序项\n   - 普通无序项\n     1. 嵌套有序项\n   - [x] 已完成\n   - [ ] 未完成\n\n```rust\nlet value = 1;\n```\n\n---\n\n| 左 | 中 | 右 |\n|:---|:---:|---:|\n| 一 | 二 | 三 |\n\n![块图](assets/a.png)\n\n段落 ![行内图](assets/a.png) 后缀\n\n[![链接图](assets/a.png)](https://example.com/image)\n\n```mermaid\nflowchart TD\nA-->B\n```\n\n![缺图](assets/missing.png)\n\n```mermaid\n未渲染\n```",
     )
+}
+
+#[test]
+fn export_adds_selected_extension_and_replaces_existing_destination() {
+    let dir = tempdir().unwrap();
+    let selected_target = dir.path().join("report");
+    let final_target = dir.path().join("report.docx");
+    fs::write(&final_target, b"old document").unwrap();
+
+    let mut request = fixture_request("# 新文档");
+    request.destination_path = selected_target.to_string_lossy().into_owned();
+    request.format = ExportFormat::Docx;
+
+    let final_path = export_document_file(request).unwrap();
+
+    assert_eq!(final_path, final_target);
+    assert!(fs::read(&final_path).unwrap().starts_with(b"PK"));
+    assert!(!dir.path().join("report.docx.tmp").exists());
+    assert!(!dir.path().join("report.docx.bak").exists());
+}
+
+#[test]
+fn export_replaces_wrong_extension_for_selected_format_case_insensitively() {
+    let dir = tempdir().unwrap();
+    let mut request = fixture_request("PDF 正文");
+    request.destination_path = dir
+        .path()
+        .join("report.DOCX")
+        .to_string_lossy()
+        .into_owned();
+    request.format = ExportFormat::Pdf;
+
+    let final_path = export_document_file(request).unwrap();
+
+    assert_eq!(final_path, dir.path().join("report.pdf"));
+    assert!(fs::read(&final_path).unwrap().starts_with(b"%PDF-"));
+    assert!(!dir.path().join("report.DOCX").exists());
+}
+
+#[test]
+fn failed_promotion_restores_old_bytes_and_cleans_temporary_state() {
+    let dir = tempdir().unwrap();
+    let target = dir.path().join("report.docx");
+    let temporary = dir.path().join("report.docx.tmp");
+    let backup = dir.path().join("report.docx.bak");
+    fs::write(&target, b"old document").unwrap();
+
+    let error = safe_write_bytes_with_rename(&target, b"new document", |from, to| {
+        if from == temporary.as_path() && to == target.as_path() {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "injected promotion failure",
+            ));
+        }
+        fs::rename(from, to)
+    })
+    .unwrap_err();
+
+    assert!(error.contains("已恢复原文件"));
+    assert_eq!(fs::read(&target).unwrap(), b"old document");
+    assert!(!temporary.exists());
+    assert!(!backup.exists());
 }
 
 #[test]

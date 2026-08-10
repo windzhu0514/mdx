@@ -7,4 +7,8 @@ describe("Tauri 主窗口权限", () => {
         expect(capability.permissions).toContain("core:window:allow-close");
         expect(capability.permissions).toContain("core:window:allow-destroy");
     });
+
+    it("保留文档导出选择目标路径所需的系统对话框权限", () => {
+        expect(capability.permissions).toContain("dialog:default");
+    });
 });

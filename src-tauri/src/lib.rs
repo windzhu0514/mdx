@@ -1,5 +1,6 @@
 mod ai;
 mod archive_security;
+mod document_export;
 mod draft_store;
 mod export;
 mod history;
@@ -377,6 +378,11 @@ fn read_mdx(path: &Path) -> Result<MdxNote, String> {
 #[tauri::command]
 fn export_markdown(source_path: String, destination_path: String) -> Result<(), String> {
     export_markdown_file(Path::new(&source_path), Path::new(&destination_path))
+}
+
+#[tauri::command]
+fn export_document(request: document_export::ExportDocumentRequest) -> Result<String, String> {
+    document_export::export_document_file(request).map(|path| path.to_string_lossy().into_owned())
 }
 
 #[tauri::command]
@@ -770,7 +776,7 @@ fn validate_new_mdx_bytes(bytes: &[u8]) -> Result<(), String> {
 }
 
 fn recover_interrupted_save(target_path: &Path) -> Result<(), String> {
-    let backup_path = target_path.with_extension("mdx.bak");
+    let backup_path = document_export::companion_path(target_path, ".bak");
     if !backup_path.exists() {
         return Ok(());
     }
@@ -791,46 +797,8 @@ fn recover_interrupted_save(target_path: &Path) -> Result<(), String> {
 
 fn safe_write_file(target_path: &Path, bytes: &[u8]) -> Result<(), String> {
     validate_new_mdx_bytes(bytes)?;
-
-    let parent = target_path
-        .parent()
-        .ok_or_else(|| "保存路径无效。".to_string())?;
-    fs::create_dir_all(parent).map_err(|err| err.to_string())?;
     recover_interrupted_save(target_path)?;
-
-    let tmp_path = target_path.with_extension("mdx.tmp");
-    let bak_path = target_path.with_extension("mdx.bak");
-    if tmp_path.exists() {
-        fs::remove_file(&tmp_path).map_err(|err| err.to_string())?;
-    }
-
-    let mut temporary = File::create(&tmp_path).map_err(|err| err.to_string())?;
-    temporary.write_all(bytes).map_err(|err| err.to_string())?;
-    temporary.sync_all().map_err(|err| err.to_string())?;
-    drop(temporary);
-
-    if target_path.exists() {
-        fs::rename(target_path, &bak_path).map_err(|err| err.to_string())?;
-        match fs::rename(&tmp_path, target_path) {
-            Ok(()) => {
-                let _ = fs::remove_file(&bak_path);
-                Ok(())
-            }
-            Err(error) => {
-                let restore_result = fs::rename(&bak_path, target_path);
-                if let Err(restore_error) = restore_result {
-                    return Err(format!(
-                        "保存失败且无法恢复原文件：{error}；恢复错误：{restore_error}；临时文件：{}；备份文件：{}",
-                        tmp_path.display(),
-                        bak_path.display()
-                    ));
-                }
-                Err(format!("保存失败，已恢复原文件：{error}"))
-            }
-        }
-    } else {
-        fs::rename(&tmp_path, target_path).map_err(|err| err.to_string())
-    }
+    document_export::safe_write_bytes(target_path, bytes)
 }
 fn ensure_mdx_extension(path: PathBuf) -> PathBuf {
     if path.extension().is_none() {
@@ -894,6 +862,7 @@ pub fn run() {
             validate_mdx,
             import_markdown,
             export_markdown,
+            export_document,
             export_diagram_png,
             import_resource,
             prepare_markdown_resources_command,

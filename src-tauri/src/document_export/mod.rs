@@ -11,6 +11,236 @@ pub use model::{
 use base64::{engine::general_purpose, Engine as _};
 use pulldown_cmark::{Alignment, CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use std::collections::{HashMap, VecDeque};
+use std::fs::{self, File};
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
+
+/// Renders an export request once and writes the selected format to its final destination.
+pub fn export_document_file(request: ExportDocumentRequest) -> Result<PathBuf, String> {
+    let destination = normalize_export_destination(&request.destination_path, request.format)?;
+    validate_destination(&destination)?;
+
+    let model = parse_document(&request)?;
+    let bytes = match request.format {
+        ExportFormat::Docx => docx::render_docx(&model)?,
+        ExportFormat::Pdf => pdf::render_pdf(&model)?,
+    };
+
+    safe_write_bytes(&destination, &bytes)?;
+    Ok(destination)
+}
+
+pub fn safe_write_bytes(target_path: &Path, bytes: &[u8]) -> Result<(), String> {
+    safe_write_bytes_with_rename(target_path, bytes, |from, to| fs::rename(from, to))
+}
+
+/// Uses the same durable replacement sequence as document saves.
+///
+/// The rename callback is intentionally the only injectable seam so tests can exercise recovery
+/// with the real filesystem without mutable global hooks.
+pub(crate) fn safe_write_bytes_with_rename<F>(
+    target_path: &Path,
+    bytes: &[u8],
+    mut rename: F,
+) -> Result<(), String>
+where
+    F: FnMut(&Path, &Path) -> io::Result<()>,
+{
+    validate_destination(target_path)?;
+    let temporary_path = companion_path(target_path, ".tmp");
+    let backup_path = companion_path(target_path, ".bak");
+
+    remove_existing_temporary(&temporary_path)?;
+    recover_interrupted_write(target_path, &backup_path, &mut rename)?;
+
+    if let Err(error) = write_temporary(&temporary_path, bytes) {
+        return Err(cleanup_temporary_error(
+            "写入导出临时文件失败",
+            error,
+            &temporary_path,
+        ));
+    }
+
+    if target_path.exists() {
+        if let Err(error) = rename(target_path, &backup_path) {
+            return Err(cleanup_temporary_error(
+                "备份原导出文件失败",
+                error,
+                &temporary_path,
+            ));
+        }
+
+        match rename(&temporary_path, target_path) {
+            Ok(()) => match fs::remove_file(&backup_path) {
+                Ok(()) => Ok(()),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+                Err(error) => Err(format!(
+                    "导出文件已写入，但删除备份文件失败：{}；备份文件：{}",
+                    error,
+                    backup_path.display()
+                )),
+            },
+            Err(error) => {
+                let restore_result = rename(&backup_path, target_path);
+                let cleanup_error = remove_temporary(&temporary_path).err();
+                match restore_result {
+                    Ok(()) => {
+                        let message = format!("导出保存失败，已恢复原文件：{error}");
+                        Err(append_cleanup_error(message, cleanup_error, &temporary_path))
+                    }
+                    Err(restore_error) => Err(append_cleanup_error(
+                        format!(
+                            "导出保存失败且无法恢复原文件：{error}；恢复错误：{restore_error}；备份文件：{}",
+                            backup_path.display()
+                        ),
+                        cleanup_error,
+                        &temporary_path,
+                    )),
+                }
+            }
+        }
+    } else {
+        match rename(&temporary_path, target_path) {
+            Ok(()) => Ok(()),
+            Err(error) => Err(cleanup_temporary_error(
+                "写入导出文件失败",
+                error,
+                &temporary_path,
+            )),
+        }
+    }
+}
+
+pub(crate) fn companion_path(target_path: &Path, suffix: &str) -> PathBuf {
+    let mut path = target_path.as_os_str().to_os_string();
+    path.push(suffix);
+    PathBuf::from(path)
+}
+
+fn normalize_export_destination(
+    destination_path: &str,
+    format: ExportFormat,
+) -> Result<PathBuf, String> {
+    if destination_path.is_empty() {
+        return Err("导出路径为空。".to_string());
+    }
+
+    let path = PathBuf::from(destination_path);
+    let extension = match format {
+        ExportFormat::Docx => "docx",
+        ExportFormat::Pdf => "pdf",
+    };
+    let has_selected_extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(|value| value.eq_ignore_ascii_case(extension));
+
+    Ok(if has_selected_extension {
+        path
+    } else {
+        path.with_extension(extension)
+    })
+}
+
+fn validate_destination(target_path: &Path) -> Result<&Path, String> {
+    if target_path.as_os_str().is_empty() {
+        return Err("导出路径为空。".to_string());
+    }
+    let parent = target_path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .ok_or_else(|| "导出路径缺少父目录。".to_string())?;
+
+    match fs::metadata(target_path) {
+        Ok(metadata) if metadata.is_dir() => {
+            return Err("导出目标不能是目录。".to_string());
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(format!("无法检查导出目标：{error}"));
+        }
+    }
+
+    fs::create_dir_all(parent).map_err(|error| format!("无法创建导出目录：{error}"))?;
+    Ok(parent)
+}
+
+fn recover_interrupted_write<F>(
+    target_path: &Path,
+    backup_path: &Path,
+    rename: &mut F,
+) -> Result<(), String>
+where
+    F: FnMut(&Path, &Path) -> io::Result<()>,
+{
+    if !backup_path.exists() {
+        return Ok(());
+    }
+    if !target_path.exists() {
+        rename(backup_path, target_path).map_err(|error| {
+            format!(
+                "恢复上次未完成的导出失败：{error}；备份文件：{}",
+                backup_path.display()
+            )
+        })?;
+        return Ok(());
+    }
+
+    Err(format!(
+        "发现未完成的导出备份，已保留当前文件和备份文件：{}",
+        backup_path.display()
+    ))
+}
+
+fn remove_existing_temporary(temporary_path: &Path) -> Result<(), String> {
+    match fs::remove_file(temporary_path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!(
+            "无法清理旧的导出临时文件：{}；临时文件：{}",
+            error,
+            temporary_path.display()
+        )),
+    }
+}
+
+fn write_temporary(temporary_path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let mut temporary = File::create(temporary_path)?;
+    temporary.write_all(bytes)?;
+    temporary.sync_all()?;
+    Ok(())
+}
+
+fn remove_temporary(temporary_path: &Path) -> io::Result<()> {
+    match fs::remove_file(temporary_path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+fn cleanup_temporary_error(context: &str, error: io::Error, temporary_path: &Path) -> String {
+    append_cleanup_error(
+        format!("{context}：{error}"),
+        remove_temporary(temporary_path).err(),
+        temporary_path,
+    )
+}
+
+fn append_cleanup_error(
+    message: String,
+    cleanup_error: Option<io::Error>,
+    temporary_path: &Path,
+) -> String {
+    match cleanup_error {
+        Some(error) => format!(
+            "{message}；清理临时文件失败：{error}；临时文件：{}",
+            temporary_path.display()
+        ),
+        None => message,
+    }
+}
 
 enum BlockFrame {
     Paragraph {
