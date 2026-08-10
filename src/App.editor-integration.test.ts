@@ -17,7 +17,7 @@ type LowestEditorControls = {
     replaceSelection: ReturnType<typeof vi.fn>;
     whenReadyCalls: number;
     whenSettledCalls: number;
-    diagrams: MermaidDiagramSnapshot[];
+    documentId: () => string;
 };
 
 type Deferred<T> = {
@@ -43,6 +43,7 @@ const mocks = vi.hoisted(() => ({
     printTitles: [] as string[],
     nextMilkdownReadiness: undefined as Promise<void> | undefined,
     nextMilkdownSettlement: undefined as Promise<void> | undefined,
+    mermaidDiagrams: new Map<string, MermaidDiagramSnapshot[]>(),
     mermaidPng: vi.fn(async () => "cG5n"),
     invoke: vi.fn(),
     openDialog: vi.fn(),
@@ -139,6 +140,7 @@ function lowestEditorStub(kind: "milkdown" | "source") {
     return defineComponent({
         name: kind === "milkdown" ? "MilkdownEditorStub" : "SourceEditorStub",
         props: {
+            documentId: { type: String, required: true },
             modelValue: { type: String, required: true },
             readonly: { type: Boolean, default: false },
             uploadImage: { type: Function, default: undefined },
@@ -164,7 +166,7 @@ function lowestEditorStub(kind: "milkdown" | "source") {
                 replaceSelection: mocks.replaceSelection,
                 whenReadyCalls: 0,
                 whenSettledCalls: 0,
-                diagrams: [],
+                documentId: () => props.documentId,
             };
             mocks[kind] = controls;
 
@@ -177,7 +179,8 @@ function lowestEditorStub(kind: "milkdown" | "source") {
                 cancelAi: controls.cancelAi,
                 execute: vi.fn(),
                 focus: controls.focus,
-                getMermaidDiagrams: () => Promise.resolve(controls.diagrams),
+                getMermaidDiagrams: () =>
+                    Promise.resolve(mocks.mermaidDiagrams.get(props.documentId) ?? []),
                 getSelectedText: vi.fn(() => ""),
                 moveCursor: vi.fn(),
                 replaceSelection: controls.replaceSelection,
@@ -278,6 +281,7 @@ beforeEach(() => {
     mocks.printTitles = [];
     mocks.nextMilkdownReadiness = undefined;
     mocks.nextMilkdownSettlement = undefined;
+    mocks.mermaidDiagrams.clear();
     mocks.mermaidPng.mockClear();
     mocks.openDialog.mockResolvedValue("C:\\notes\\test.mdx");
     mocks.saveDialog.mockResolvedValue("C:\\notes\\saved.mdx");
@@ -736,7 +740,7 @@ describe("App 编辑器状态集成", () => {
 });
 
 describe("App PDF 打印视图", () => {
-    it("导出 Word 使用开始时的 Markdown、全部资源和 Mermaid 快照，不保存 .mdx", async () => {
+    it("导出 Word 在 Mermaid 等待期间切换文档时取消，不混入新文档图表", async () => {
         const pathA = "C:\\notes\\draft.mdx";
         const pathB = "C:\\notes\\other.mdx";
         const noteA = createNote("# 旧正文\n![图](assets/diagram.png)", pathA);
@@ -774,36 +778,27 @@ describe("App PDF 打印视图", () => {
         const settled = createDeferred<void>();
         if (targetEditor) {
             targetEditor.settlement = settled.promise;
-            targetEditor.diagrams = [
+            mocks.mermaidDiagrams.set(targetEditor.documentId(), [
                 { label: "流程图", source: "flowchart TD\\nA-->B", svg: "<svg />" },
-            ];
+            ]);
         }
 
         findButton(host, "导出 Word...").click();
         await vi.waitFor(() => expect(targetEditor?.whenSettledCalls).toBe(1));
         openDocumentRow(host, "other")?.click();
         await nextTick();
+        if (targetEditor) {
+            mocks.mermaidDiagrams.set(targetEditor.documentId(), [
+                { label: "新文档图", source: "flowchart LR\\nX-->Y", svg: "<svg />" },
+            ]);
+        }
         settled.resolve();
 
         await vi.waitFor(() =>
-            expect(mocks.invoke).toHaveBeenCalledWith("export_document", {
-                request: expect.objectContaining({
-                    format: "docx",
-                    destinationPath: "C:\\Exports\\draft.docx",
-                    title: "draft",
-                    markdown: "# newest",
-                    resources: [
-                        expect.objectContaining({
-                            name: "assets/diagram.png",
-                            base64: "aW1hZ2U=",
-                        }),
-                    ],
-                    mermaidDiagrams: [
-                        { source: "flowchart TD\\nA-->B", pngBase64: expect.any(String) },
-                    ],
-                }),
-            }),
+            expect(host.textContent).toContain("Word 导出已取消：活动文档已切换"),
         );
+        expect(mocks.saveDialog).not.toHaveBeenCalled();
+        expect(mocks.invoke).not.toHaveBeenCalledWith("export_document", expect.anything());
         expect(mocks.invoke).not.toHaveBeenCalledWith("save_mdx", expect.anything());
     });
 

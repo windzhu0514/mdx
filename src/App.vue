@@ -1402,7 +1402,15 @@ async function exportDocument(format: DocumentExportFormat) {
 
     try {
         await (editor?.whenSettled() ?? Promise.resolve());
+        if (activeDocumentId.value !== snapshot.documentId) {
+            statusMessage.value = `${label} 导出已取消：活动文档已切换`;
+            return;
+        }
         const diagrams = await (editor?.getMermaidDiagrams() ?? Promise.resolve([]));
+        if (activeDocumentId.value !== snapshot.documentId) {
+            statusMessage.value = `${label} 导出已取消：活动文档已切换`;
+            return;
+        }
         const destination = await save({
             defaultPath: `${sanitizeFileName(snapshot.title)}.${extension}`,
             filters: [{ name: filterName, extensions: [extension] }],
