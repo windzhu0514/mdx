@@ -34,7 +34,7 @@ fn fixture_request(markdown: &str) -> ExportDocumentRequest {
 
 fn rich_request() -> ExportDocumentRequest {
     fixture_request(
-        "# 标题\n\n###### 六级标题\n\n普通 **粗体** *斜体* ~~删除~~ `代码` 和 [链接](https://example.com)。\\\n第二行 [附件](attachments/report.pdf)\n\n> 引用\n\n1. 有序项\n   - 普通无序项\n     1. 嵌套有序项\n   - [x] 已完成\n   - [ ] 未完成\n\n```rust\nlet value = 1;\n```\n\n---\n\n| 左 | 中 | 右 |\n|:---|:---:|---:|\n| 一 | 二 | 三 |\n\n![块图](assets/a.png)\n\n段落 ![行内图](assets/a.png) 后缀\n\n```mermaid\nflowchart TD\nA-->B\n```\n\n![缺图](assets/missing.png)\n\n```mermaid\n未渲染\n```",
+        "# 标题\n\n###### 六级标题\n\n普通 **粗体** *斜体* ~~删除~~ `代码` 和 [链接](https://example.com)。\\\n第二行 [附件](attachments/report.pdf)\n\n> 引用\n\n1. 有序项\n   - 普通无序项\n     1. 嵌套有序项\n   - [x] 已完成\n   - [ ] 未完成\n\n```rust\nlet value = 1;\n```\n\n---\n\n| 左 | 中 | 右 |\n|:---|:---:|---:|\n| 一 | 二 | 三 |\n\n![块图](assets/a.png)\n\n段落 ![行内图](assets/a.png) 后缀\n\n[![链接图](assets/a.png)](https://example.com/image)\n\n```mermaid\nflowchart TD\nA-->B\n```\n\n![缺图](assets/missing.png)\n\n```mermaid\n未渲染\n```",
     )
 }
 
@@ -57,12 +57,15 @@ fn docx_preserves_model_styles_relationships_and_readable_fallbacks() {
     let mut zip = ZipArchive::new(Cursor::new(bytes)).unwrap();
 
     let content_types = read_zip_entry(&mut zip, "[Content_Types].xml");
+    let custom_properties = read_zip_entry(&mut zip, "docProps/custom.xml");
     let styles = read_zip_entry(&mut zip, "word/styles.xml");
     let numbering = read_zip_entry(&mut zip, "word/numbering.xml");
     let document = read_zip_entry(&mut zip, "word/document.xml");
     let relationships = read_zip_entry(&mut zip, "word/_rels/document.xml.rels");
 
     assert!(content_types.contains("wordprocessingml.document.main+xml"));
+    assert!(custom_properties.contains("name=\"Title\""));
+    assert!(custom_properties.contains("标题"));
     assert!(styles.contains("MoraBody"));
     assert!(styles.contains("MoraQuote"));
     assert!(styles.contains("MoraCode"));
@@ -84,19 +87,86 @@ fn docx_preserves_model_styles_relationships_and_readable_fallbacks() {
     assert!(document.contains("let value = 1;"));
     assert!(document.contains("附件：report.pdf"));
     assert!(document.contains("[图片不可用：assets/missing.png]"));
-    assert!(document.contains("未渲染"));
+    let mermaid_fallback = paragraph_xml(&document, "未渲染");
+    assert!(mermaid_fallback.contains("mermaid"));
+    assert!(mermaid_fallback.contains("MoraCode"));
     assert!(document.contains("标题"));
     assert!(document.contains("六级标题"));
     assert!(document.contains("引用"));
     assert!(styles.contains("w:pBdr"));
     assert!(relationships.contains("https://example.com"));
     assert!(relationships.contains("TargetMode=\"External\""));
-    assert!(
+    assert_eq!(
         zip.file_names()
-            .filter(|name| name.starts_with("word/media/"))
-            .count()
-            >= 3
+            .filter(|name| name.starts_with("word/media/") && !name.ends_with('/'))
+            .count(),
+        2,
+        "重复 assets 图片应复用同一 media，Mermaid 使用独立 media"
     );
+    let image_hyperlink = document
+        .split("</w:hyperlink>")
+        .find(|paragraph| paragraph.contains("r:embed"))
+        .expect("图片链接应保留 hyperlink 容器和 drawing");
+    assert!(image_hyperlink.contains("<w:hyperlink"));
+    let image_relationship = xml_attribute(image_hyperlink, "r:embed");
+    assert!(relationships.contains(&format!("Id=\"{image_relationship}\"")));
+}
+
+#[test]
+fn docx_uses_distinct_numbering_instances_for_ordered_lists_and_starts() {
+    let request = fixture_request(
+        "1. 第一组\n\n列表之间的正文\n\n5. 第二组从五开始\n\n- 无序外层\n  1. 无序中的有序\n\n1. 有序外层\n   - 有序中的无序",
+    );
+    let bytes = render_docx(&parse_document(&request).unwrap()).unwrap();
+    let mut zip = ZipArchive::new(Cursor::new(bytes)).unwrap();
+    let document = read_zip_entry(&mut zip, "word/document.xml");
+    let numbering = read_zip_entry(&mut zip, "word/numbering.xml");
+
+    let first_list_id = paragraph_numbering_id(&document, "第一组");
+    let started_list_id = paragraph_numbering_id(&document, "第二组从五开始");
+    assert_ne!(
+        first_list_id, started_list_id,
+        "独立有序列表必须使用不同 numId"
+    );
+    assert_eq!(paragraph_indent_level(&document, "无序外层"), 0);
+    assert_eq!(paragraph_indent_level(&document, "无序中的有序"), 1);
+    assert_eq!(paragraph_indent_level(&document, "有序中的无序"), 1);
+    assert_ne!(
+        paragraph_numbering_id(&document, "无序外层"),
+        paragraph_numbering_id(&document, "无序中的有序"),
+        "无序嵌套的有序列表必须有其独立 numId"
+    );
+    let started_numbering = numbering_instance(&numbering, started_list_id);
+    assert!(started_numbering.contains("w:ilvl=\"0\""));
+    assert!(started_numbering.contains("w:startOverride w:val=\"5\""));
+    let ordered_abstract = abstract_numbering(&numbering, 2);
+    assert!(ordered_abstract.contains("w:ilvl=\"1\""));
+    assert!(ordered_abstract.contains("w:lvlText w:val=\"%2.\""));
+    assert!(!ordered_abstract.contains("%1.%2"));
+}
+
+#[test]
+fn docx_returns_a_path_and_format_error_when_non_png_decoder_panics() {
+    let mut request = fixture_request("![损坏 JPEG](assets/a.png)");
+    let jpeg = valid_jpeg();
+    request.resources[0].mime_type = "image/jpeg".to_string();
+    request.resources[0].base64 = general_purpose::STANDARD.encode(&jpeg);
+    request.resources[0].size = jpeg.len() as u64;
+    let model = parse_document(&request).unwrap();
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| render_docx(&model)));
+
+    assert!(result.is_ok(), "render_docx 不得因非 PNG 图片 unwind");
+    let error = result.unwrap().unwrap_err();
+    assert!(error.contains("assets/a.png"));
+    assert!(error.contains("JPEG"));
+}
+
+#[test]
+fn parser_carries_request_title_into_the_document_model() {
+    let model = parse_document(&fixture_request("正文")).unwrap();
+
+    assert_eq!(model.title, "标题");
 }
 
 fn read_zip_entry(zip: &mut ZipArchive<Cursor<Vec<u8>>>, name: &str) -> String {
@@ -104,6 +174,52 @@ fn read_zip_entry(zip: &mut ZipArchive<Cursor<Vec<u8>>>, name: &str) -> String {
     let mut xml = String::new();
     entry.read_to_string(&mut xml).unwrap();
     xml
+}
+
+fn xml_attribute(xml: &str, attribute: &str) -> String {
+    xml.split_once(&format!("{attribute}=\""))
+        .and_then(|(_, value)| value.split_once('"').map(|(value, _)| value.to_string()))
+        .unwrap_or_else(|| panic!("缺少 XML 属性 {attribute}"))
+}
+
+fn paragraph_xml<'a>(document: &'a str, text: &str) -> &'a str {
+    document
+        .split("</w:p>")
+        .find(|paragraph| paragraph.contains(text))
+        .unwrap_or_else(|| panic!("缺少段落文本 {text}"))
+}
+
+fn paragraph_numbering_id(document: &str, text: &str) -> usize {
+    numbering_value(paragraph_xml(document, text), "w:numId")
+}
+
+fn paragraph_indent_level(document: &str, text: &str) -> usize {
+    numbering_value(paragraph_xml(document, text), "w:ilvl")
+}
+
+fn numbering_value(paragraph: &str, element: &str) -> usize {
+    paragraph
+        .split_once(&format!("<{element}"))
+        .map(|(_, value)| xml_attribute(value, "w:val"))
+        .unwrap_or_else(|| panic!("缺少编号元素 {element}"))
+        .parse()
+        .unwrap()
+}
+
+fn numbering_instance(numbering: &str, number_id: usize) -> &str {
+    let start = format!("<w:num w:numId=\"{number_id}\">");
+    numbering
+        .split_once(&start)
+        .and_then(|(_, value)| value.split_once("</w:num>").map(|(value, _)| value))
+        .unwrap_or_else(|| panic!("缺少编号实例 {number_id}"))
+}
+
+fn abstract_numbering(numbering: &str, abstract_id: usize) -> &str {
+    let start = format!("<w:abstractNum w:abstractNumId=\"{abstract_id}\">");
+    numbering
+        .split_once(&start)
+        .and_then(|(_, value)| value.split_once("</w:abstractNum>").map(|(value, _)| value))
+        .unwrap_or_else(|| panic!("缺少抽象编号 {abstract_id}"))
 }
 
 #[test]

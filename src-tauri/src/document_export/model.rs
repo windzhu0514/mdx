@@ -40,6 +40,7 @@ pub struct ExportMermaidDiagram {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct DocumentModel {
+    pub title: String,
     pub blocks: Vec<Block>,
 }
 

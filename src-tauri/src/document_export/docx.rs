@@ -1,4 +1,6 @@
-use super::{Block, DocumentModel, ImageData, Inline, ListItem, MermaidImage, TableAlignment};
+use super::{
+    Block, DocumentModel, ImageData, ImageFormat, Inline, ListItem, MermaidImage, TableAlignment,
+};
 use docx_rs::*;
 use std::io::Cursor;
 
@@ -9,9 +11,10 @@ const CONTENT_WIDTH_TWIPS: usize = 9_026;
 const MAX_IMAGE_EMU: u64 = 5_733_288;
 
 const BULLET_NUMBERING_ID: usize = 1;
-const ORDERED_NUMBERING_ID: usize = 2;
 const TASK_CHECKED_NUMBERING_ID: usize = 3;
 const TASK_UNCHECKED_NUMBERING_ID: usize = 4;
+const ORDERED_ABSTRACT_NUMBERING_ID: usize = 2;
+const FIRST_DYNAMIC_NUMBERING_ID: usize = 5;
 
 pub fn render_docx(model: &DocumentModel) -> Result<Vec<u8>, String> {
     let mut document = Docx::new()
@@ -23,15 +26,23 @@ pub fn render_docx(model: &DocumentModel) -> Result<Vec<u8>, String> {
                 .bottom(PAGE_MARGIN_TWIPS)
                 .left(PAGE_MARGIN_TWIPS),
         )
-        .default_size(21);
+        .default_size(21)
+        .custom_property("Title", model.title.clone());
 
     for style in document_styles() {
         document = document.add_style(style);
     }
     document = add_numbering_definitions(document);
 
-    let mut renderer = Renderer { document };
+    let mut renderer = Renderer {
+        document,
+        next_numbering_id: FIRST_DYNAMIC_NUMBERING_ID,
+        image_error: None,
+    };
     renderer.render_blocks(&model.blocks, false);
+    if let Some(error) = renderer.image_error {
+        return Err(error);
+    }
 
     let mut cursor = Cursor::new(Vec::new());
     renderer
@@ -44,6 +55,8 @@ pub fn render_docx(model: &DocumentModel) -> Result<Vec<u8>, String> {
 
 struct Renderer {
     document: Docx,
+    next_numbering_id: usize,
+    image_error: Option<String>,
 }
 
 impl Renderer {
@@ -70,8 +83,10 @@ impl Renderer {
                 self.add_inline_paragraph(content, heading_style(*level));
             }
             Block::Quote(blocks) => self.render_blocks(blocks, true),
-            Block::List { start, items } => self.render_list(items, start.is_some(), 0, quote),
-            Block::Code { source, .. } => self.add_code_paragraph(source, quote),
+            Block::List { start, items } => self.render_list_block(*start, items, 0, quote),
+            Block::Code { language, source } => {
+                self.add_code_paragraph(source, (language == "mermaid").then_some("mermaid"), quote)
+            }
             Block::Table { alignments, rows } => self.add_table(alignments, rows),
             Block::Image { path, image, .. } => {
                 self.add_image_paragraph(path, image.as_ref(), quote)
@@ -80,14 +95,42 @@ impl Renderer {
                 if let Some(image) = image {
                     self.add_mermaid_paragraph(image, quote);
                 } else {
-                    self.add_code_paragraph(source, quote);
+                    self.add_code_paragraph(source, Some("mermaid"), quote);
                 }
             }
             Block::Rule => self.add_rule(),
         }
     }
 
-    fn render_list(&mut self, items: &[ListItem], ordered: bool, depth: usize, quote: bool) {
+    fn render_list_block(
+        &mut self,
+        start: Option<u64>,
+        items: &[ListItem],
+        depth: usize,
+        quote: bool,
+    ) {
+        let ordered_numbering_id = start.map(|start| self.add_ordered_numbering(depth, start));
+        self.render_list(items, ordered_numbering_id, depth, quote);
+    }
+
+    fn add_ordered_numbering(&mut self, depth: usize, start: u64) -> usize {
+        let number_id = self.next_numbering_id;
+        self.next_numbering_id += 1;
+        let document = std::mem::replace(&mut self.document, Docx::new());
+        self.document = document.add_numbering(
+            Numbering::new(number_id, ORDERED_ABSTRACT_NUMBERING_ID)
+                .add_override(LevelOverride::new(depth.min(8)).start(start as usize)),
+        );
+        number_id
+    }
+
+    fn render_list(
+        &mut self,
+        items: &[ListItem],
+        ordered_numbering_id: Option<usize>,
+        depth: usize,
+        quote: bool,
+    ) {
         for item in items {
             let mut emitted_marker = false;
             for block in &item.blocks {
@@ -96,7 +139,7 @@ impl Renderer {
                         Block::Paragraph(inlines) => {
                             self.add_list_paragraph(
                                 inlines,
-                                list_numbering_id(ordered, item.checked),
+                                list_numbering_id(ordered_numbering_id, item.checked),
                                 depth,
                                 quote,
                             );
@@ -107,7 +150,7 @@ impl Renderer {
                             self.add_list_image_paragraph(
                                 path,
                                 image.as_ref(),
-                                list_numbering_id(ordered, item.checked),
+                                list_numbering_id(ordered_numbering_id, item.checked),
                                 depth,
                                 quote,
                             );
@@ -119,7 +162,7 @@ impl Renderer {
                         } => {
                             self.add_list_mermaid_paragraph(
                                 image,
-                                list_numbering_id(ordered, item.checked),
+                                list_numbering_id(ordered_numbering_id, item.checked),
                                 depth,
                                 quote,
                             );
@@ -129,7 +172,7 @@ impl Renderer {
                         _ => {
                             self.add_list_paragraph(
                                 &[],
-                                list_numbering_id(ordered, item.checked),
+                                list_numbering_id(ordered_numbering_id, item.checked),
                                 depth,
                                 quote,
                             );
@@ -140,7 +183,7 @@ impl Renderer {
 
                 match block {
                     Block::List { start, items } => {
-                        self.render_list(items, start.is_some(), depth.saturating_add(1), quote)
+                        self.render_list_block(*start, items, depth.saturating_add(1), quote)
                     }
                     _ => self.render_block(block, quote),
                 }
@@ -149,7 +192,7 @@ impl Renderer {
             if !emitted_marker {
                 self.add_list_paragraph(
                     &[],
-                    list_numbering_id(ordered, item.checked),
+                    list_numbering_id(ordered_numbering_id, item.checked),
                     depth,
                     quote,
                 );
@@ -162,6 +205,7 @@ impl Renderer {
             Paragraph::new().style(style),
             inlines,
             InlineFormat::default(),
+            &mut self.image_error,
         );
         self.push_paragraph(paragraph);
     }
@@ -180,20 +224,25 @@ impl Renderer {
             ),
             inlines,
             InlineFormat::default(),
+            &mut self.image_error,
         );
         self.push_paragraph(paragraph);
     }
 
     fn add_image_paragraph(&mut self, path: &str, image: Option<&ImageData>, quote: bool) {
-        let paragraph =
-            add_image_to_paragraph(Paragraph::new().style(paragraph_style(quote)), path, image);
+        let paragraph = add_image_to_paragraph(
+            Paragraph::new().style(paragraph_style(quote)),
+            path,
+            image,
+            &mut self.image_error,
+        );
         self.push_paragraph(paragraph);
     }
 
     fn add_mermaid_paragraph(&mut self, image: &MermaidImage, quote: bool) {
         let paragraph = Paragraph::new()
             .style(paragraph_style(quote))
-            .add_run(image_run(&image.bytes, image.width, image.height));
+            .add_run(mermaid_image_run(image));
         self.push_paragraph(paragraph);
     }
 
@@ -212,6 +261,7 @@ impl Renderer {
             ),
             path,
             image,
+            &mut self.image_error,
         );
         self.push_paragraph(paragraph);
     }
@@ -229,13 +279,18 @@ impl Renderer {
                 NumberingId::new(numbering_id),
                 IndentLevel::new(depth.min(8)),
             )
-            .add_run(image_run(&image.bytes, image.width, image.height));
+            .add_run(mermaid_image_run(image));
         self.push_paragraph(paragraph);
     }
 
-    fn add_code_paragraph(&mut self, source: &str, quote: bool) {
+    fn add_code_paragraph(&mut self, source: &str, language: Option<&str>, quote: bool) {
         let style = if quote { "MoraQuoteCode" } else { "MoraCode" };
-        self.push_paragraph(Paragraph::new().style(style).add_run(code_run(source)));
+        let labeled_source = language.map(|language| format!("{language}\n{source}"));
+        self.push_paragraph(
+            Paragraph::new()
+                .style(style)
+                .add_run(code_run(labeled_source.as_deref().unwrap_or(source))),
+        );
     }
 
     fn add_rule(&mut self) {
@@ -272,6 +327,7 @@ impl Renderer {
                                 bold: row.is_header,
                                 ..InlineFormat::default()
                             },
+                            &mut self.image_error,
                         );
                         if let Some(alignment) = alignments.get(index).and_then(table_alignment) {
                             paragraph = paragraph.align(alignment);
@@ -303,14 +359,24 @@ struct InlineFormat {
     code: bool,
 }
 
-fn append_inlines(mut paragraph: Paragraph, inlines: &[Inline], format: InlineFormat) -> Paragraph {
+fn append_inlines(
+    mut paragraph: Paragraph,
+    inlines: &[Inline],
+    format: InlineFormat,
+    image_error: &mut Option<String>,
+) -> Paragraph {
     for inline in inlines {
-        paragraph = append_inline(paragraph, inline, format);
+        paragraph = append_inline(paragraph, inline, format, image_error);
     }
     paragraph
 }
 
-fn append_inline(paragraph: Paragraph, inline: &Inline, format: InlineFormat) -> Paragraph {
+fn append_inline(
+    paragraph: Paragraph,
+    inline: &Inline,
+    format: InlineFormat,
+    image_error: &mut Option<String>,
+) -> Paragraph {
     match inline {
         Inline::Text(value) => paragraph.add_run(formatted_run(value, format)),
         Inline::Emphasis(content) => append_inlines(
@@ -320,6 +386,7 @@ fn append_inline(paragraph: Paragraph, inline: &Inline, format: InlineFormat) ->
                 italic: true,
                 ..format
             },
+            image_error,
         ),
         Inline::Strong(content) => append_inlines(
             paragraph,
@@ -328,6 +395,7 @@ fn append_inline(paragraph: Paragraph, inline: &Inline, format: InlineFormat) ->
                 bold: true,
                 ..format
             },
+            image_error,
         ),
         Inline::Strike(content) => append_inlines(
             paragraph,
@@ -336,6 +404,7 @@ fn append_inline(paragraph: Paragraph, inline: &Inline, format: InlineFormat) ->
                 strike: true,
                 ..format
             },
+            image_error,
         ),
         Inline::Code(value) => paragraph.add_run(formatted_run(
             value,
@@ -347,12 +416,12 @@ fn append_inline(paragraph: Paragraph, inline: &Inline, format: InlineFormat) ->
         Inline::Link { label, destination } => {
             let mut hyperlink = Hyperlink::new(destination, HyperlinkType::External);
             for child in label {
-                hyperlink = append_inline_to_hyperlink(hyperlink, child, format);
+                hyperlink = append_inline_to_hyperlink(hyperlink, child, format, image_error);
             }
             paragraph.add_hyperlink(hyperlink)
         }
         Inline::Image { path, image, .. } => {
-            add_image_to_paragraph(paragraph, path, image.as_ref())
+            add_image_to_paragraph(paragraph, path, image.as_ref(), image_error)
         }
         Inline::HardBreak => paragraph.add_run(Run::new().add_break(BreakType::TextWrapping)),
     }
@@ -362,6 +431,7 @@ fn append_inline_to_hyperlink(
     hyperlink: Hyperlink,
     inline: &Inline,
     format: InlineFormat,
+    image_error: &mut Option<String>,
 ) -> Hyperlink {
     match inline {
         Inline::Text(value) => hyperlink.add_run(formatted_run(value, format)),
@@ -372,6 +442,7 @@ fn append_inline_to_hyperlink(
                 italic: true,
                 ..format
             },
+            image_error,
         ),
         Inline::Strong(content) => append_hyperlink_inlines(
             hyperlink,
@@ -380,6 +451,7 @@ fn append_inline_to_hyperlink(
                 bold: true,
                 ..format
             },
+            image_error,
         ),
         Inline::Strike(content) => append_hyperlink_inlines(
             hyperlink,
@@ -388,6 +460,7 @@ fn append_inline_to_hyperlink(
                 strike: true,
                 ..format
             },
+            image_error,
         ),
         Inline::Code(value) => hyperlink.add_run(formatted_run(
             value,
@@ -396,9 +469,11 @@ fn append_inline_to_hyperlink(
                 ..format
             },
         )),
-        Inline::Link { label, .. } => append_hyperlink_inlines(hyperlink, label, format),
+        Inline::Link { label, .. } => {
+            append_hyperlink_inlines(hyperlink, label, format, image_error)
+        }
         Inline::Image { path, image, .. } => {
-            hyperlink.add_run(image_or_fallback_run(path, image.as_ref()))
+            hyperlink.add_run(image_or_fallback_run(path, image.as_ref(), image_error))
         }
         Inline::HardBreak => hyperlink.add_run(Run::new().add_break(BreakType::TextWrapping)),
     }
@@ -408,9 +483,10 @@ fn append_hyperlink_inlines(
     mut hyperlink: Hyperlink,
     inlines: &[Inline],
     format: InlineFormat,
+    image_error: &mut Option<String>,
 ) -> Hyperlink {
     for inline in inlines {
-        hyperlink = append_inline_to_hyperlink(hyperlink, inline, format);
+        hyperlink = append_inline_to_hyperlink(hyperlink, inline, format, image_error);
     }
     hyperlink
 }
@@ -419,19 +495,61 @@ fn add_image_to_paragraph(
     paragraph: Paragraph,
     path: &str,
     image: Option<&ImageData>,
+    image_error: &mut Option<String>,
 ) -> Paragraph {
-    paragraph.add_run(image_or_fallback_run(path, image))
+    paragraph.add_run(image_or_fallback_run(path, image, image_error))
 }
 
-fn image_or_fallback_run(path: &str, image: Option<&ImageData>) -> Run {
-    image
-        .map(|image| image_run(&image.bytes, image.width, image.height))
-        .unwrap_or_else(|| Run::new().add_text(format!("[图片不可用：{path}]")))
+fn image_or_fallback_run(
+    path: &str,
+    image: Option<&ImageData>,
+    image_error: &mut Option<String>,
+) -> Run {
+    match image {
+        Some(image) => match image_run(path, image) {
+            Ok(run) => run,
+            Err(error) => {
+                image_error.get_or_insert(error);
+                Run::new().add_text(format!("[图片不可用：{path}]"))
+            }
+        },
+        None => Run::new().add_text(format!("[图片不可用：{path}]")),
+    }
 }
 
-fn image_run(bytes: &[u8], width: u32, height: u32) -> Run {
-    let (width_emu, height_emu) = image_size_emu(width, height);
-    Run::new().add_image(Pic::new(bytes).size(width_emu, height_emu))
+fn image_run(path: &str, image: &ImageData) -> Result<Run, String> {
+    let (width_emu, height_emu) = image_size_emu(image.width, image.height);
+    let picture = match image.format {
+        ImageFormat::Png => {
+            Pic::new_with_dimensions(image.bytes.clone(), image.width, image.height)
+        }
+        ImageFormat::Jpeg | ImageFormat::Gif => {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| Pic::new(&image.bytes)))
+                .map_err(|_| {
+                    format!(
+                        "图片「{path}」的 {} 数据无法由 DOCX 图片解码器读取。",
+                        image_format_name(&image.format)
+                    )
+                })?
+        }
+    };
+    Ok(Run::new().add_image(picture.size(width_emu, height_emu)))
+}
+
+fn mermaid_image_run(image: &MermaidImage) -> Run {
+    let (width_emu, height_emu) = image_size_emu(image.width, image.height);
+    Run::new().add_image(
+        Pic::new_with_dimensions(image.bytes.clone(), image.width, image.height)
+            .size(width_emu, height_emu),
+    )
+}
+
+fn image_format_name(format: &ImageFormat) -> &'static str {
+    match format {
+        ImageFormat::Png => "PNG",
+        ImageFormat::Jpeg => "JPEG",
+        ImageFormat::Gif => "GIF",
+    }
 }
 
 fn image_size_emu(width: u32, height: u32) -> (u32, u32) {
@@ -502,12 +620,11 @@ fn table_alignment(alignment: &TableAlignment) -> Option<AlignmentType> {
     }
 }
 
-fn list_numbering_id(ordered: bool, checked: Option<bool>) -> usize {
+fn list_numbering_id(ordered_numbering_id: Option<usize>, checked: Option<bool>) -> usize {
     match checked {
         Some(true) => TASK_CHECKED_NUMBERING_ID,
         Some(false) => TASK_UNCHECKED_NUMBERING_ID,
-        None if ordered => ORDERED_NUMBERING_ID,
-        None => BULLET_NUMBERING_ID,
+        None => ordered_numbering_id.unwrap_or(BULLET_NUMBERING_ID),
     }
 }
 
@@ -518,7 +635,6 @@ fn add_numbering_definitions(document: Docx) -> Docx {
         .add_abstract_numbering(numbering_definition(3, "bullet", "☑"))
         .add_abstract_numbering(numbering_definition(4, "bullet", "☐"))
         .add_numbering(Numbering::new(BULLET_NUMBERING_ID, 1))
-        .add_numbering(Numbering::new(ORDERED_NUMBERING_ID, 2))
         .add_numbering(Numbering::new(TASK_CHECKED_NUMBERING_ID, 3))
         .add_numbering(Numbering::new(TASK_UNCHECKED_NUMBERING_ID, 4))
 }
@@ -535,11 +651,7 @@ fn numbering_definition(id: usize, format: &str, text: &str) -> AbstractNumberin
 
 fn ordered_numbering_definition(id: usize) -> AbstractNumbering {
     (0..9).fold(AbstractNumbering::new(id), |numbering, level| {
-        let text = (1..=level + 1)
-            .map(|part| format!("%{part}"))
-            .collect::<Vec<_>>()
-            .join(".")
-            + ".";
+        let text = format!("%{}.", level + 1);
         numbering.add_level(numbering_level(
             level,
             NumberFormat::new("decimal"),

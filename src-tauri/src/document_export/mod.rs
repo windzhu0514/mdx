@@ -119,7 +119,10 @@ pub fn parse_document(request: &ExportDocumentRequest) -> Result<DocumentModel, 
         return Err("Markdown 结构未正常结束。".to_string());
     }
 
-    Ok(DocumentModel { blocks })
+    Ok(DocumentModel {
+        title: request.title.clone(),
+        blocks,
+    })
 }
 
 fn start_tag(
