@@ -6,6 +6,7 @@ import {
     isSupportedMermaidSource,
     type MermaidRenderer,
 } from "./mermaidPreview";
+import * as mermaidPreview from "./mermaidPreview";
 
 describe("mermaidPreview", () => {
     afterEach(() => {
@@ -101,6 +102,33 @@ describe("mermaidPreview", () => {
             theme: "dark",
             suppressErrorRendering: true,
         });
+    });
+
+    it("renders export diagrams with neutral theme and restores the application theme", async () => {
+        const renderer: MermaidRenderer = {
+            initialize: vi.fn(),
+            render: vi.fn(async () => ({ svg: "<svg />" })),
+        };
+        document.documentElement.dataset.theme = "dark";
+        const diagrams = await (
+            mermaidPreview as typeof mermaidPreview & {
+                renderMermaidForExport(
+                    mermaid: MermaidRenderer,
+                    sources: readonly string[],
+                ): Promise<unknown>;
+            }
+        ).renderMermaidForExport(renderer, ["flowchart TD\nA-->B"]);
+
+        expect(renderer.initialize).toHaveBeenNthCalledWith(
+            1,
+            expect.objectContaining({ theme: "neutral" }),
+        );
+        expect(renderer.initialize).toHaveBeenLastCalledWith(
+            expect.objectContaining({ theme: "dark" }),
+        );
+        expect(diagrams).toMatchObject([
+            { source: "flowchart TD\nA-->B", svg: "<svg />" },
+        ]);
     });
 
     it("opens rendered diagrams in ProseMirror document order", async () => {

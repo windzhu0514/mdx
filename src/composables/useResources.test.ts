@@ -48,6 +48,35 @@ describe("resource session", () => {
         expect(session.newResources()).toHaveLength(0);
     });
 
+    it("exports loaded and new resources without exposing mutable session state", () => {
+        const session = createResourceSession();
+        session.registerLoaded({ ...newImage, isNew: false });
+        const exported = (
+            session as typeof session & {
+                exportResources(): Array<{ base64: string }>;
+            }
+        ).exportResources();
+
+        expect(exported).toEqual([
+            {
+                name: "assets/a.png",
+                originalName: "a.png",
+                mimeType: "image/png",
+                size: 1,
+                kind: "asset",
+                base64: "YQ==",
+            },
+        ]);
+        exported[0]!.base64 = "changed";
+        expect(
+            (
+                session as typeof session & {
+                    exportResources(): Array<{ base64: string }>;
+                }
+            ).exportResources()[0]!.base64,
+        ).toBe("YQ==");
+    });
+
     it("keeps the persisted path while showing an object URL", () => {
         const session = createResourceSession();
         session.registerLoaded({ ...newImage, isNew: false });

@@ -1,3 +1,5 @@
+import type { MermaidDiagramSnapshot } from "./mermaidPreview";
+
 export type EditorMode = "wysiwyg" | "source";
 
 export type EditorCommand =
@@ -28,6 +30,7 @@ export type MoraEditorHandle = {
     scrollToHeading(text: string): boolean;
     whenReady(): Promise<void>;
     whenSettled(): Promise<void>;
+    getMermaidDiagrams?(): Promise<MermaidDiagramSnapshot[]>;
     cancelAi(): void;
     releaseDocument(documentId: string): void;
 };

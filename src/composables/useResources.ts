@@ -47,14 +47,11 @@ export function createResourceSession() {
     function newResources(): ResourceSaveData[] {
         return Array.from(resources.values())
             .filter((resource) => resource.isNew)
-            .map((resource) => ({
-                name: resource.path,
-                originalName: resource.originalName,
-                mimeType: resource.mimeType,
-                size: resource.size,
-                kind: resource.kind,
-                base64: resource.base64,
-            }));
+            .map(toResourceSaveData);
+    }
+
+    function exportResources(): ResourceSaveData[] {
+        return Array.from(resources.values(), toResourceSaveData);
     }
 
     function markSaved() {
@@ -99,9 +96,21 @@ export function createResourceSession() {
         displayMarkdown,
         persistedMarkdown,
         newResources,
+        exportResources,
         markSaved,
         snapshot,
         restore,
         clear,
+    };
+}
+
+function toResourceSaveData(resource: PendingResource): ResourceSaveData {
+    return {
+        name: resource.path,
+        originalName: resource.originalName,
+        mimeType: resource.mimeType,
+        size: resource.size,
+        kind: resource.kind,
+        base64: resource.base64,
     };
 }

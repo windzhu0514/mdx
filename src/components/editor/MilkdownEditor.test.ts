@@ -418,6 +418,45 @@ describe("MilkdownEditor", () => {
         expect(settled).toBe(true);
     });
 
+    it("exports Mermaid diagrams from the current ProseMirror document", async () => {
+        mocks.mermaidRender.mockResolvedValueOnce({ svg: '<svg data-export="flow"></svg>' });
+        const editor = mountEditor("```mermaid\nflowchart LR\nA --> B\n```");
+        cleanup = editor.unmount;
+        await nextTick();
+        mocks.editorView.state.doc.descendants.mockImplementationOnce((visit) => {
+            visit(
+                {
+                    type: { name: "code_block" },
+                    attrs: { language: "mermaid" },
+                    textContent: "flowchart LR\nA --> B",
+                },
+                0,
+            );
+            visit(
+                {
+                    type: { name: "code_block" },
+                    attrs: { language: "typescript" },
+                    textContent: "const ignored = true;",
+                },
+                1,
+            );
+        });
+
+        await expect(
+            (
+                editor.handle.value as MoraEditorHandle & {
+                    getMermaidDiagrams(): Promise<unknown>;
+                }
+            ).getMermaidDiagrams(),
+        ).resolves.toMatchObject([
+            {
+                label: "流程图",
+                source: "flowchart LR\nA --> B",
+                svg: '<svg data-export="flow"></svg>',
+            },
+        ]);
+    });
+
     it("forwards a Mermaid preview activation to its parent", async () => {
         mocks.mermaidRender.mockResolvedValueOnce({
             svg: '<svg data-diagram="flowchart"></svg>',

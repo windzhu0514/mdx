@@ -29,6 +29,7 @@ type ChildHandle = MoraEditorHandle & {
         replaceSelection: string[];
         releaseDocument: string[];
         scrollToHeading: string[];
+        getMermaidDiagrams: number;
         whenReady: number;
         whenSettled: number;
         unmounted: number;
@@ -54,6 +55,7 @@ function createChildHandle(
         replaceSelection: [],
         releaseDocument: [],
         scrollToHeading: [],
+        getMermaidDiagrams: 0,
         whenReady: 0,
         whenSettled: 0,
         unmounted: 0,
@@ -80,6 +82,16 @@ function createChildHandle(
         scrollToHeading: (text) => {
             calls.scrollToHeading.push(text);
             return text === "目标标题";
+        },
+        getMermaidDiagrams: () => {
+            calls.getMermaidDiagrams += 1;
+            return Promise.resolve([
+                {
+                    label: "流程图",
+                    source: "flowchart LR\nA --> B",
+                    svg: "<svg></svg>",
+                },
+            ]);
         },
         whenReady: () => {
             calls.whenReady += 1;
@@ -370,6 +382,28 @@ describe("MoraEditor", () => {
 
         await expect(editor.handle.value?.whenSettled()).resolves.toBeUndefined();
         expect(childHandles.milkdown[0].calls.whenSettled).toBe(1);
+    });
+
+    it("exports Mermaid diagrams through the always-mounted editable Milkdown editor", async () => {
+        const editor = mountEditor("source", true);
+        cleanup = editor.unmount;
+        await nextTick();
+
+        await expect(
+            (
+                editor.handle.value as MoraEditorHandle & {
+                    getMermaidDiagrams(): Promise<unknown>;
+                }
+            ).getMermaidDiagrams(),
+        ).resolves.toEqual([
+            {
+                label: "流程图",
+                source: "flowchart LR\nA --> B",
+                svg: "<svg></svg>",
+            },
+        ]);
+        expect(childHandles.milkdown[0].calls.getMermaidDiagrams).toBe(1);
+        expect(childHandles.milkdown[1].calls.getMermaidDiagrams).toBe(0);
     });
 
     it("forwards a real child update event to its parent", async () => {

@@ -47,7 +47,7 @@ import type {
 } from "./editorTypes";
 import MilkdownEditor from "./MilkdownEditor.vue";
 import SourceEditor from "./SourceEditor.vue";
-import type { MermaidViewerRequest } from "./mermaidPreview";
+import type { MermaidDiagramSnapshot, MermaidViewerRequest } from "./mermaidPreview";
 
 const props = defineProps<{
     documentId: string;
@@ -118,6 +118,10 @@ function whenSettled(): Promise<void> {
           : Promise.resolve();
 }
 
+function getMermaidDiagrams(): Promise<MermaidDiagramSnapshot[]> {
+    return milkdownEditor.value?.getMermaidDiagrams?.() ?? Promise.resolve([]);
+}
+
 function cancelAi(): void {
     milkdownEditor.value?.cancelAi();
 }
@@ -142,6 +146,7 @@ defineExpose<MoraEditorHandle>({
     scrollToHeading,
     whenReady,
     whenSettled,
+    getMermaidDiagrams,
     cancelAi,
     releaseDocument,
 });

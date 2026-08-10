@@ -42,7 +42,12 @@ import { EditorState, Selection, TextSelection } from "@milkdown/kit/prose/state
 import { getMarkdown, replaceAll, replaceRange } from "@milkdown/kit/utils";
 import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { EditorCommand, ImageUploadHandler, MoraEditorHandle } from "./editorTypes";
-import { createMermaidPreview, type MermaidViewerRequest } from "./mermaidPreview";
+import {
+    createMermaidPreview,
+    renderMermaidForExport,
+    type MermaidDiagramSnapshot,
+    type MermaidViewerRequest,
+} from "./mermaidPreview";
 import { normalizeMarkdownHeadingText } from "../../utils/text";
 
 const mermaidLanguage = LanguageDescription.of({
@@ -440,9 +445,9 @@ function whenSettled(): Promise<void> {
     return renderMermaidPreview.whenSettled();
 }
 
-function activateMermaidPreview(event: Event): boolean {
-    if (!crepe || !ready || disposed) return false;
-    const sources = crepe.editor.action((ctx) => {
+function mermaidSources(): string[] {
+    if (!crepe || !ready || disposed) return [];
+    return crepe.editor.action((ctx) => {
         const mermaidSources: string[] = [];
         ctx.get(editorViewCtx).state.doc.descendants((node) => {
             if (
@@ -454,6 +459,15 @@ function activateMermaidPreview(event: Event): boolean {
         });
         return mermaidSources;
     });
+}
+
+function getMermaidDiagrams(): Promise<MermaidDiagramSnapshot[]> {
+    return renderMermaidForExport(mermaid, mermaidSources());
+}
+
+function activateMermaidPreview(event: Event): boolean {
+    if (!crepe || !ready || disposed) return false;
+    const sources = mermaidSources();
     return renderMermaidPreview.activate(event, sources);
 }
 
@@ -475,6 +489,7 @@ defineExpose<MoraEditorHandle>({
     scrollToHeading,
     whenReady,
     whenSettled,
+    getMermaidDiagrams,
     cancelAi,
     releaseDocument,
 });

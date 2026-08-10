@@ -92,6 +92,39 @@ function mermaidDiagramLabel(source: string): string {
     return "Mermaid 图表";
 }
 
+export async function renderMermaidForExport(
+    mermaid: MermaidRenderer,
+    sources: readonly string[],
+): Promise<MermaidDiagramSnapshot[]> {
+    const restoreTheme = document.documentElement.dataset.theme === "dark" ? "dark" : "neutral";
+    mermaid.initialize({
+        startOnLoad: false,
+        securityLevel: "strict",
+        theme: "neutral",
+        suppressErrorRendering: true,
+    });
+    try {
+        const diagrams: MermaidDiagramSnapshot[] = [];
+        for (const [index, source] of sources.entries()) {
+            if (!isSupportedMermaidSource(source)) continue;
+            try {
+                const { svg } = await mermaid.render(`mora-export-mermaid-${index}`, source);
+                diagrams.push({ label: mermaidDiagramLabel(source), source, svg });
+            } catch {
+                // Missing entries deliberately fall back to code blocks in Rust.
+            }
+        }
+        return diagrams;
+    } finally {
+        mermaid.initialize({
+            startOnLoad: false,
+            securityLevel: "strict",
+            theme: restoreTheme,
+            suppressErrorRendering: true,
+        });
+    }
+}
+
 export function createMermaidPreview(
     mermaid: MermaidRenderer,
     openViewer?: (request: MermaidViewerRequest) => void,
