@@ -442,13 +442,7 @@ describe("MilkdownEditor", () => {
             );
         });
 
-        await expect(
-            (
-                editor.handle.value as MoraEditorHandle & {
-                    getMermaidDiagrams(): Promise<unknown>;
-                }
-            ).getMermaidDiagrams(),
-        ).resolves.toMatchObject([
+        await expect(editor.handle.value!.getMermaidDiagrams()).resolves.toMatchObject([
             {
                 label: "流程图",
                 source: "flowchart LR\nA --> B",
