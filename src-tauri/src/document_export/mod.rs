@@ -17,8 +17,8 @@ use std::path::{Path, PathBuf};
 
 /// Renders an export request once and writes the selected format to its final destination.
 pub fn export_document_file(request: ExportDocumentRequest) -> Result<PathBuf, String> {
+    validate_raw_destination(&request.destination_path)?;
     let destination = normalize_export_destination(&request.destination_path, request.format)?;
-    validate_destination(&destination)?;
 
     let model = parse_document(&request)?;
     let bytes = match request.format {
@@ -121,7 +121,7 @@ fn normalize_export_destination(
     destination_path: &str,
     format: ExportFormat,
 ) -> Result<PathBuf, String> {
-    if destination_path.is_empty() {
+    if destination_path.trim().is_empty() {
         return Err("导出路径为空。".to_string());
     }
 
@@ -140,6 +140,19 @@ fn normalize_export_destination(
     } else {
         path.with_extension(extension)
     })
+}
+
+fn validate_raw_destination(destination_path: &str) -> Result<(), String> {
+    if destination_path.trim().is_empty() {
+        return Err("导出路径为空。".to_string());
+    }
+
+    match fs::metadata(destination_path) {
+        Ok(metadata) if metadata.is_dir() => Err("导出目标不能是目录。".to_string()),
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("无法检查导出目标：{error}")),
+    }
 }
 
 fn validate_destination(target_path: &Path) -> Result<&Path, String> {

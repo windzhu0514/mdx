@@ -82,6 +82,65 @@ fn export_replaces_wrong_extension_for_selected_format_case_insensitively() {
 }
 
 #[test]
+fn export_rejects_an_existing_extensionless_directory_before_normalizing() {
+    let dir = tempdir().unwrap();
+    let selected_directory = dir.path().join("report");
+    fs::create_dir(&selected_directory).unwrap();
+
+    let mut request = fixture_request("正文");
+    request.destination_path = selected_directory.to_string_lossy().into_owned();
+    request.format = ExportFormat::Docx;
+
+    let error = export_document_file(request).unwrap_err();
+
+    assert!(error.contains("目录"));
+    assert!(!dir.path().join("report.docx").exists());
+}
+
+#[test]
+fn export_rejects_an_existing_wrong_extension_directory_before_normalizing() {
+    let dir = tempdir().unwrap();
+    let selected_directory = dir.path().join("report.txt");
+    fs::create_dir(&selected_directory).unwrap();
+
+    let mut request = fixture_request("正文");
+    request.destination_path = selected_directory.to_string_lossy().into_owned();
+    request.format = ExportFormat::Pdf;
+
+    let error = export_document_file(request).unwrap_err();
+
+    assert!(error.contains("目录"));
+    assert!(!dir.path().join("report.pdf").exists());
+}
+
+#[test]
+fn export_rejects_empty_or_whitespace_destination_before_extension_normalization() {
+    for destination_path in ["", " \t "] {
+        let mut request = fixture_request("正文");
+        request.destination_path = destination_path.to_string();
+        request.format = ExportFormat::Pdf;
+
+        let error = export_document_file(request).unwrap_err();
+
+        assert!(error.contains("导出路径为空"), "实际错误：{error}");
+    }
+}
+
+#[test]
+fn parse_failure_does_not_create_a_missing_destination_parent() {
+    let dir = tempdir().unwrap();
+    let missing_parent = dir.path().join("not-created").join("nested");
+    let mut request = fixture_request("正文");
+    request.destination_path = missing_parent.join("report").to_string_lossy().into_owned();
+    request.resources[0].base64 = "not-base64".to_string();
+
+    let error = export_document_file(request).unwrap_err();
+
+    assert!(error.contains("Base64"));
+    assert!(!missing_parent.exists());
+}
+
+#[test]
 fn failed_promotion_restores_old_bytes_and_cleans_temporary_state() {
     let dir = tempdir().unwrap();
     let target = dir.path().join("report.docx");
