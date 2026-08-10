@@ -22,6 +22,10 @@ import WorkspaceSidebar from "./components/WorkspaceSidebar.vue";
 import MoraEditor from "./components/editor/MoraEditor.vue";
 import MermaidViewer from "./components/editor/MermaidViewer.vue";
 import { svgToPngBase64 } from "./components/editor/mermaidExport";
+import {
+    prepareDocumentExportRequest,
+    type DocumentExportFormat,
+} from "./documentExport";
 import type {
     MermaidDiagramSnapshot,
     MermaidViewerRequest,
@@ -427,9 +431,21 @@ const fileMenu = computed<MarkdownCommand[]>(() => [
         disabled: !activeDocument.value,
     },
     {
+        id: "file.export-word",
+        label: "导出 Word...",
+        action: () => exportDocument("docx"),
+        disabled: !activeDocument.value,
+    },
+    {
         id: "file.export-pdf",
-        label: "导出 PDF / 打印...",
-        action: exportPdf,
+        label: "导出 PDF...",
+        action: () => exportDocument("pdf"),
+        disabled: !activeDocument.value,
+    },
+    {
+        id: "file.print",
+        label: "打印...",
+        action: printDocument,
         disabled: !activeDocument.value,
     },
 ]);
@@ -1369,7 +1385,47 @@ async function exportMarkdown() {
     });
 }
 
-async function exportPdf() {
+async function exportDocument(format: DocumentExportFormat) {
+    const target = activeDocument.value;
+    const editor = editorRef.value;
+    if (!target) return;
+
+    const snapshot = {
+        documentId: target.id,
+        title: target.path ? documentNameFromPath(target.path) : target.displayName,
+        markdown: target.content,
+        resources: target.resources.exportResources(),
+    };
+    const label = format === "docx" ? "Word" : "PDF";
+    const extension = format === "docx" ? "docx" : "pdf";
+    const filterName = format === "docx" ? "Word 文档" : "PDF 文档";
+
+    try {
+        await (editor?.whenSettled() ?? Promise.resolve());
+        const diagrams = await (editor?.getMermaidDiagrams() ?? Promise.resolve([]));
+        const destination = await save({
+            defaultPath: `${sanitizeFileName(snapshot.title)}.${extension}`,
+            filters: [{ name: filterName, extensions: [extension] }],
+        });
+        if (!destination) return;
+
+        const request = await prepareDocumentExportRequest({
+            destinationPath: destination,
+            title: snapshot.title,
+            markdown: snapshot.markdown,
+            resources: snapshot.resources,
+            diagrams,
+            format,
+        });
+        await invoke("export_document", { request });
+        statusMessage.value = `${label} 导出成功`;
+    } catch (error) {
+        errorMessage.value = stringifyError(error);
+        statusMessage.value = `${label} 导出失败`;
+    }
+}
+
+async function printDocument() {
     if (printing) return;
     const targetId = activeDocumentId.value;
     if (!targetId) return;

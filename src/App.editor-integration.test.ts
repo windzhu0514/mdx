@@ -3,6 +3,7 @@
 import { createApp, defineComponent, h, nextTick, watch } from "vue";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MdxMetadata, MdxNote, ResourceSaveData } from "./types/mdx";
+import type { MermaidDiagramSnapshot } from "./components/editor/mermaidPreview";
 import type { HistoryListItem, HistorySnapshot } from "./types/history";
 import { countNonWhitespaceCharacters } from "./utils/text";
 
@@ -16,6 +17,7 @@ type LowestEditorControls = {
     replaceSelection: ReturnType<typeof vi.fn>;
     whenReadyCalls: number;
     whenSettledCalls: number;
+    diagrams: MermaidDiagramSnapshot[];
 };
 
 type Deferred<T> = {
@@ -41,6 +43,7 @@ const mocks = vi.hoisted(() => ({
     printTitles: [] as string[],
     nextMilkdownReadiness: undefined as Promise<void> | undefined,
     nextMilkdownSettlement: undefined as Promise<void> | undefined,
+    mermaidPng: vi.fn(async () => "cG5n"),
     invoke: vi.fn(),
     openDialog: vi.fn(),
     saveDialog: vi.fn(),
@@ -128,6 +131,10 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
     save: mocks.saveDialog,
 }));
 
+vi.mock("./components/editor/mermaidExport", () => ({
+    svgToPngBase64: mocks.mermaidPng,
+}));
+
 function lowestEditorStub(kind: "milkdown" | "source") {
     return defineComponent({
         name: kind === "milkdown" ? "MilkdownEditorStub" : "SourceEditorStub",
@@ -157,6 +164,7 @@ function lowestEditorStub(kind: "milkdown" | "source") {
                 replaceSelection: mocks.replaceSelection,
                 whenReadyCalls: 0,
                 whenSettledCalls: 0,
+                diagrams: [],
             };
             mocks[kind] = controls;
 
@@ -169,6 +177,7 @@ function lowestEditorStub(kind: "milkdown" | "source") {
                 cancelAi: controls.cancelAi,
                 execute: vi.fn(),
                 focus: controls.focus,
+                getMermaidDiagrams: () => Promise.resolve(controls.diagrams),
                 getSelectedText: vi.fn(() => ""),
                 moveCursor: vi.fn(),
                 replaceSelection: controls.replaceSelection,
@@ -269,6 +278,7 @@ beforeEach(() => {
     mocks.printTitles = [];
     mocks.nextMilkdownReadiness = undefined;
     mocks.nextMilkdownSettlement = undefined;
+    mocks.mermaidPng.mockClear();
     mocks.openDialog.mockResolvedValue("C:\\notes\\test.mdx");
     mocks.saveDialog.mockResolvedValue("C:\\notes\\saved.mdx");
     mocks.invoke.mockImplementation(async (command: string, args?: unknown) => {
@@ -726,6 +736,77 @@ describe("App 编辑器状态集成", () => {
 });
 
 describe("App PDF 打印视图", () => {
+    it("导出 Word 使用开始时的 Markdown、全部资源和 Mermaid 快照，不保存 .mdx", async () => {
+        const pathA = "C:\\notes\\draft.mdx";
+        const pathB = "C:\\notes\\other.mdx";
+        const noteA = createNote("# 旧正文\n![图](assets/diagram.png)", pathA);
+        noteA.meta.assets = [
+            {
+                id: "image-1",
+                originalName: "diagram.png",
+                storedName: "diagram.png",
+                path: "assets/diagram.png",
+                type: "image/png",
+                size: 4,
+                createdAt: "2026-08-10T00:00:00Z",
+            },
+        ];
+        mocks.openedNotes.set(pathA, noteA);
+        mocks.openedNotes.set(pathB, createNote("# 另一篇", pathB));
+        mocks.openDialog.mockResolvedValueOnce([pathA, pathB]);
+        mocks.saveDialog.mockResolvedValueOnce("C:\\Exports\\draft.docx");
+        const host = await mountApp();
+        findButton(host, "打开文件...").click();
+        await vi.waitFor(() =>
+            expect(host.querySelector(".menu-document-name")?.textContent).toContain("other"),
+        );
+        openDocumentRow(host, "draft")?.click();
+        await vi.waitFor(() => expect(editorValue(host, "milkdown")).toContain("# 旧正文"));
+        await vi.waitFor(() =>
+            expect(mocks.invoke).toHaveBeenCalledWith("read_asset", {
+                path: pathA,
+                assetName: "assets/diagram.png",
+            }),
+        );
+        mocks.milkdown?.emitUpdate("# newest");
+        await nextTick();
+        const targetEditor = mocks.milkdown;
+        const settled = createDeferred<void>();
+        if (targetEditor) {
+            targetEditor.settlement = settled.promise;
+            targetEditor.diagrams = [
+                { label: "流程图", source: "flowchart TD\\nA-->B", svg: "<svg />" },
+            ];
+        }
+
+        findButton(host, "导出 Word...").click();
+        await vi.waitFor(() => expect(targetEditor?.whenSettledCalls).toBe(1));
+        openDocumentRow(host, "other")?.click();
+        await nextTick();
+        settled.resolve();
+
+        await vi.waitFor(() =>
+            expect(mocks.invoke).toHaveBeenCalledWith("export_document", {
+                request: expect.objectContaining({
+                    format: "docx",
+                    destinationPath: "C:\\Exports\\draft.docx",
+                    title: "draft",
+                    markdown: "# newest",
+                    resources: [
+                        expect.objectContaining({
+                            name: "assets/diagram.png",
+                            base64: "aW1hZ2U=",
+                        }),
+                    ],
+                    mermaidDiagrams: [
+                        { source: "flowchart TD\\nA-->B", pngBase64: expect.any(String) },
+                    ],
+                }),
+            }),
+        );
+        expect(mocks.invoke).not.toHaveBeenCalledWith("save_mdx", expect.anything());
+    });
+
     it("Markdown 导出等待目标保存时切换文档仍导出原目标路径", async () => {
         const pathA = "C:\\notes\\a.mdx";
         const pathB = "C:\\notes\\b.mdx";
@@ -781,7 +862,7 @@ describe("App PDF 打印视图", () => {
         const readiness = createDeferred<void>();
         if (targetEditor) targetEditor.readiness = readiness.promise;
 
-        findButton(host, "导出 PDF / 打印...").click();
+        findButton(host, "打印...").click();
         await vi.waitFor(() => expect(targetEditor?.whenReadyCalls).toBe(1));
         openDocumentRow(host, "pdf-b")?.click();
         await nextTick();
@@ -803,7 +884,7 @@ describe("App PDF 打印视图", () => {
             ),
         );
 
-        findButton(host, "导出 PDF / 打印...").click();
+        findButton(host, "打印...").click();
         await vi.waitFor(() => expect(window.print).toHaveBeenCalledTimes(1));
 
         expect(mocks.printTitles).toEqual(["项目计划"]);
@@ -823,8 +904,8 @@ describe("App PDF 打印视图", () => {
 
         const deferred = createDeferred<void>();
         if (editableMilkdown) editableMilkdown.readiness = deferred.promise;
-        findButton(host, "导出 PDF / 打印...").click();
-        findButton(host, "导出 PDF / 打印...").click();
+        findButton(host, "打印...").click();
+        findButton(host, "打印...").click();
         await vi.waitFor(() => expect(editableMilkdown?.whenReadyCalls).toBe(1));
 
         deferred.reject(new Error("Crepe 初始化失败"));
@@ -838,7 +919,7 @@ describe("App PDF 打印视图", () => {
         expect(host.textContent).not.toContain("未保存");
 
         if (editableMilkdown) editableMilkdown.readiness = Promise.resolve();
-        findButton(host, "导出 PDF / 打印...").click();
+        findButton(host, "打印...").click();
         await vi.waitFor(() => expect(window.print).toHaveBeenCalledTimes(1));
     });
 
@@ -852,7 +933,7 @@ describe("App PDF 打印视图", () => {
 
         const deferred = createDeferred<void>();
         if (mocks.milkdown) mocks.milkdown.readiness = deferred.promise;
-        findButton(host, "导出 PDF / 打印...").click();
+        findButton(host, "打印...").click();
         await vi.waitFor(() => expect(mocks.milkdown?.whenReadyCalls).toBe(1));
 
         expect(window.print).not.toHaveBeenCalled();
@@ -872,7 +953,7 @@ describe("App PDF 打印视图", () => {
         const mermaidSettlement = createDeferred<void>();
         if (mocks.milkdown) mocks.milkdown.settlement = mermaidSettlement.promise;
 
-        findButton(host, "导出 PDF / 打印...").click();
+        findButton(host, "打印...").click();
         await vi.waitFor(() => expect(mocks.milkdown?.whenSettledCalls).toBe(1));
         expect(window.print).not.toHaveBeenCalled();
 
@@ -888,7 +969,7 @@ describe("App PDF 打印视图", () => {
         findButton(host, mode).click();
         await nextTick();
 
-        findButton(host, "导出 PDF / 打印...").click();
+        findButton(host, "打印...").click();
         await vi.waitFor(() => expect(window.print).toHaveBeenCalledTimes(1));
 
         const printed = mocks.printSnapshots[0];

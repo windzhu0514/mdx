@@ -412,11 +412,14 @@ vi.mock("./components/editor/MoraEditor.vue", async () => {
                     cancelAi: mocks.cancelAi,
                     execute: vi.fn(),
                     focus: vi.fn(),
+                    getMermaidDiagrams: vi.fn(async () => []),
                     getSelectedText: vi.fn(() => ""),
                     moveCursor: vi.fn(),
                     replaceSelection: vi.fn(),
                     releaseDocument: mocks.releaseDocument,
                     scrollToHeading: vi.fn(() => false),
+                    whenReady: vi.fn(async () => undefined),
+                    whenSettled: vi.fn(async () => undefined),
                 });
                 return () => h("div", { class: "mora-editor-stub" });
             },
@@ -718,6 +721,47 @@ afterEach(() => {
 });
 
 describe("App Web 预览启动", () => {
+    it("按 Markdown、Word、PDF、打印顺序提供导出，并在取消时不调用 Tauri", async () => {
+        const host = await mountApp();
+        findButton(host, "新建文档")?.click();
+        await nextTick();
+
+        const fileMenu = host.querySelector(".menu-bar .menu-group .menu-popup");
+        const labels = Array.from(fileMenu?.querySelectorAll("button") ?? []).map(
+            (button) => button.querySelector("span")?.textContent?.trim(),
+        );
+        expect(labels).toEqual(
+            expect.arrayContaining([
+                "导出 Markdown...",
+                "导出 Word...",
+                "导出 PDF...",
+                "打印...",
+            ]),
+        );
+        expect(labels.indexOf("导出 Markdown...")).toBeLessThan(
+            labels.indexOf("导出 Word..."),
+        );
+        expect(labels.indexOf("导出 Word...")).toBeLessThan(labels.indexOf("导出 PDF..."));
+        expect(labels.indexOf("导出 PDF...")).toBeLessThan(labels.indexOf("打印..."));
+
+        mocks.saveDialog.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+        const invokeCallsBeforeExport = mocks.invoke.mock.calls.length;
+        findButton(host, "导出 Word...")?.click();
+        await vi.waitFor(() => expect(mocks.saveDialog).toHaveBeenCalledTimes(1));
+        findButton(host, "导出 PDF...")?.click();
+        await vi.waitFor(() => expect(mocks.saveDialog).toHaveBeenCalledTimes(2));
+
+        expect(mocks.saveDialog).toHaveBeenNthCalledWith(1, {
+            defaultPath: "未命名文档 1.docx",
+            filters: [{ name: "Word 文档", extensions: ["docx"] }],
+        });
+        expect(mocks.saveDialog).toHaveBeenNthCalledWith(2, {
+            defaultPath: "未命名文档 1.pdf",
+            filters: [{ name: "PDF 文档", extensions: ["pdf"] }],
+        });
+        expect(mocks.invoke.mock.calls).toHaveLength(invokeCallsBeforeExport);
+    });
+
     it("在 Tauri 中把当前深色主题同步给原生窗口", async () => {
         mocks.isTauri.mockReturnValue(true);
         localStorage.setItem("mora.preferences.v1", JSON.stringify({ theme: "dark" }));
