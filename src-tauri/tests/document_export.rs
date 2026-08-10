@@ -4,6 +4,7 @@ mod document_export;
 
 use base64::{engine::general_purpose, Engine as _};
 use document_export::docx::render_docx;
+use document_export::pdf::{render_pdf, render_typst_source};
 use document_export::{
     parse_document, Block, ExportDocumentRequest, ExportFormat, ExportMermaidDiagram,
     ExportResource, Inline, ListItem,
@@ -49,6 +50,91 @@ fn renders_real_docx_with_structure_and_media() {
     assert!(document_xml.contains("<w:tbl"));
     assert!(document_xml.contains("w:numId"));
     assert!(zip.file_names().any(|name| name.starts_with("word/media/")));
+}
+
+#[test]
+fn renders_typst_source_from_the_shared_document_model() {
+    let source = render_typst_source(&parse_document(&rich_request()).unwrap());
+
+    assert!(source.starts_with("#set page(paper: \"a4\", margin: 25mm, numbering: \"1\")"));
+    assert!(source.contains("#heading(level: 1)[#text(\"标题\")]"));
+    assert!(source.contains("#table("));
+    assert!(source.contains("#emph["));
+    assert!(source.contains("#strong["));
+    assert!(source.contains("#strike["));
+    assert!(source.contains("#quote["));
+    assert!(source.contains("#enum(start: 1)["));
+    assert!(source.contains("#list["));
+    assert!(source.contains("#linebreak()"));
+    assert!(source.contains("#line(length: 100%)"));
+    assert!(source.contains("附件：report.pdf"));
+    assert!(source.contains("#image(\"mora-image-0.png\""));
+    assert!(source.contains("#link(\"https://example.com\")"));
+    assert!(source.contains("[图片不可用：assets/missing.png]"));
+    assert!(source.contains("#raw(\"未渲染\", block: true, lang: \"mermaid\")"));
+}
+
+#[test]
+fn typst_source_escapes_untrusted_text_urls_and_code() {
+    let request = fixture_request(
+        "# # [heading] \\\\ \"quote\"\n\n# [text] \\\\ \"quote\" [link](https://example.com/\"quoted\")\n\n```rust\n# [code] \\\\ \"quote\"\n```",
+    );
+    let source = render_typst_source(&parse_document(&request).unwrap());
+
+    assert!(source.contains("#text(\"# \""));
+    assert!(source.contains("#text(\"[\")"));
+    assert!(source.contains("#text(\"]\")"));
+    assert!(source.contains("quote\\\""));
+    assert!(source.contains("#link(\"https://example.com/\\\"quoted\\\"\")"));
+    assert!(source
+        .contains("#raw(\"# [code] \\\\\\\\ \\\"quote\\\"\\n\", block: true, lang: \"rust\")"));
+}
+
+#[test]
+fn renders_searchable_pdf_with_a4_content() {
+    let request = fixture_request("# Export heading\n\nA searchable paragraph with **bold** text.\n\n- first\n- second\n\n| A | B |\n|---|---|\n| 1 | 2 |");
+    let model = parse_document(&request).unwrap();
+    let source = render_typst_source(&model);
+    assert!(source.contains("#set page(paper: \"a4\""));
+    assert!(source.contains("Export heading"));
+
+    let bytes = render_pdf(&model).unwrap();
+    assert!(bytes.starts_with(b"%PDF-"));
+    assert!(bytes.len() > 1_000);
+    assert!(
+        bytes
+            .windows(b"Export heading".len())
+            .any(|window| window == b"Export heading"),
+        "PDF 应保留可搜索的文字对象"
+    );
+}
+
+#[test]
+fn compiles_images_through_the_static_typst_resolver() {
+    let model = parse_document(&fixture_request("![asset](assets/a.png)")).unwrap();
+    let source = render_typst_source(&model);
+
+    assert!(source.contains("#image(\"mora-image-0.png\""));
+    assert!(render_pdf(&model).unwrap().starts_with(b"%PDF-"));
+}
+
+#[test]
+fn compiles_the_complete_shared_model_without_reparsing_markdown() {
+    let model = parse_document(&rich_request()).unwrap();
+
+    let bytes = render_pdf(&model).unwrap();
+
+    assert!(bytes.starts_with(b"%PDF-"));
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn renders_chinese_pdf_when_windows_fonts_are_available() {
+    let model = parse_document(&fixture_request("# 中文标题\n\n可搜索中文正文。")).unwrap();
+
+    let bytes = render_pdf(&model).unwrap();
+
+    assert!(bytes.starts_with(b"%PDF-"));
 }
 
 #[test]

@@ -1,5 +1,6 @@
 pub mod docx;
 mod model;
+pub mod pdf;
 
 pub use model::{
     Block, DocumentModel, ExportDocumentRequest, ExportFormat, ExportMermaidDiagram,
