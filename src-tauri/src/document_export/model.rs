@@ -66,11 +66,11 @@ pub enum Block {
     Image {
         alt: String,
         path: String,
-        bytes: Option<Vec<u8>>,
+        image: Option<ImageData>,
     },
     Mermaid {
         source: String,
-        image: Option<Vec<u8>>,
+        image: Option<MermaidImage>,
     },
     Rule,
 }
@@ -95,6 +95,34 @@ pub struct TableRow {
     pub cells: Vec<Vec<Inline>>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ImageFormat {
+    Png,
+    Jpeg,
+    Gif,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ImageData {
+    pub path: String,
+    pub original_name: String,
+    pub mime_type: String,
+    pub kind: String,
+    pub declared_size: u64,
+    pub bytes: Vec<u8>,
+    pub format: ImageFormat,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct MermaidImage {
+    pub bytes: Vec<u8>,
+    pub format: ImageFormat,
+    pub width: u32,
+    pub height: u32,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Inline {
     Text(String),
@@ -105,6 +133,11 @@ pub enum Inline {
     Link {
         label: Vec<Inline>,
         destination: String,
+    },
+    Image {
+        alt: String,
+        path: String,
+        image: Option<ImageData>,
     },
     HardBreak,
 }

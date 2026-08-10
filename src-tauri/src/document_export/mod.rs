@@ -2,7 +2,8 @@ mod model;
 
 pub use model::{
     Block, DocumentModel, ExportDocumentRequest, ExportFormat, ExportMermaidDiagram,
-    ExportResource, Inline, ListItem, TableAlignment, TableRow,
+    ExportResource, ImageData, ImageFormat, Inline, ListItem, MermaidImage, TableAlignment,
+    TableRow,
 };
 
 use base64::{engine::general_purpose, Engine as _};
@@ -59,6 +60,15 @@ enum InlineFrame {
         destination: String,
         label: Vec<Inline>,
     },
+}
+
+#[derive(Clone)]
+struct DecodedResource {
+    original_name: String,
+    mime_type: String,
+    size: u64,
+    kind: String,
+    bytes: Vec<u8>,
 }
 
 pub fn parse_document(request: &ExportDocumentRequest) -> Result<DocumentModel, String> {
@@ -182,8 +192,8 @@ fn end_tag(
     root: &mut Vec<Block>,
     block_stack: &mut Vec<BlockFrame>,
     inline_stack: &mut Vec<InlineFrame>,
-    resources: &HashMap<String, Vec<u8>>,
-    mermaid_images: &mut HashMap<String, VecDeque<Option<Vec<u8>>>>,
+    resources: &HashMap<String, DecodedResource>,
+    mermaid_images: &mut HashMap<String, VecDeque<Option<MermaidImage>>>,
 ) -> Result<(), String> {
     match tag {
         TagEnd::Paragraph => {
@@ -299,7 +309,7 @@ fn end_tag(
             };
             cells.push(inlines);
         }
-        TagEnd::Image => finish_image(block_stack, resources)?,
+        TagEnd::Image => finish_image(block_stack, inline_stack, resources)?,
         TagEnd::Emphasis => finish_inline(inline_stack, InlineKind::Emphasis, block_stack)?,
         TagEnd::Strong => finish_inline(inline_stack, InlineKind::Strong, block_stack)?,
         TagEnd::Strikethrough => finish_inline(inline_stack, InlineKind::Strike, block_stack)?,
@@ -309,25 +319,47 @@ fn end_tag(
     Ok(())
 }
 
-fn decode_resources(resources: &[ExportResource]) -> Result<HashMap<String, Vec<u8>>, String> {
+fn decode_resources(
+    resources: &[ExportResource],
+) -> Result<HashMap<String, DecodedResource>, String> {
     resources
         .iter()
         .map(|resource| {
             general_purpose::STANDARD
                 .decode(&resource.base64)
-                .map(|bytes| (resource.name.clone(), bytes))
+                .map(|bytes| {
+                    (
+                        resource.name.clone(),
+                        DecodedResource {
+                            original_name: resource.original_name.clone(),
+                            mime_type: resource.mime_type.clone(),
+                            size: resource.size,
+                            kind: resource.kind.clone(),
+                            bytes,
+                        },
+                    )
+                })
                 .map_err(|error| format!("资源「{}」的 Base64 数据无效：{error}", resource.name))
         })
         .collect()
 }
 
-fn mermaid_images(diagrams: &[ExportMermaidDiagram]) -> HashMap<String, VecDeque<Option<Vec<u8>>>> {
+fn mermaid_images(
+    diagrams: &[ExportMermaidDiagram],
+) -> HashMap<String, VecDeque<Option<MermaidImage>>> {
     let mut images = HashMap::new();
     for diagram in diagrams {
         let decoded = general_purpose::STANDARD
             .decode(&diagram.png_base64)
             .ok()
-            .filter(|bytes| bytes.starts_with(b"\x89PNG\r\n\x1a\n"));
+            .and_then(|bytes| {
+                png_dimensions(&bytes).map(|(width, height)| MermaidImage {
+                    bytes,
+                    format: ImageFormat::Png,
+                    width,
+                    height,
+                })
+            });
         images
             .entry(diagram.source.clone())
             .or_insert_with(VecDeque::new)
@@ -336,9 +368,135 @@ fn mermaid_images(diagrams: &[ExportMermaidDiagram]) -> HashMap<String, VecDeque
     images
 }
 
+fn asset_image(
+    path: &str,
+    resources: &HashMap<String, DecodedResource>,
+) -> Result<Option<ImageData>, String> {
+    let Some(resource) = resources.get(path) else {
+        return Ok(None);
+    };
+
+    if resource.kind != "asset" {
+        return Err(format!(
+            "资源「{path}」不是可导出的图片资产，kind 必须为 asset。"
+        ));
+    }
+    if resource.size != resource.bytes.len() as u64 {
+        return Err(format!(
+            "资源「{path}」的声明大小与解码后的数据长度不一致。"
+        ));
+    }
+
+    let expected_format = image_format_for_mime(&resource.mime_type).ok_or_else(|| {
+        format!(
+            "资源「{path}」的 MIME 类型「{}」不支持图片导出。",
+            resource.mime_type
+        )
+    })?;
+    let (format, width, height) = inspect_image(&resource.bytes)
+        .ok_or_else(|| format!("资源「{path}」的图片数据损坏或格式不受支持。"))?;
+    if format != expected_format {
+        return Err(format!("资源「{path}」的 MIME 类型与实际图片格式不一致。"));
+    }
+
+    Ok(Some(ImageData {
+        path: path.to_string(),
+        original_name: resource.original_name.clone(),
+        mime_type: resource.mime_type.clone(),
+        kind: resource.kind.clone(),
+        declared_size: resource.size,
+        bytes: resource.bytes.clone(),
+        format,
+        width,
+        height,
+    }))
+}
+
+fn image_format_for_mime(mime_type: &str) -> Option<ImageFormat> {
+    match mime_type.to_ascii_lowercase().as_str() {
+        "image/png" => Some(ImageFormat::Png),
+        "image/jpeg" | "image/jpg" => Some(ImageFormat::Jpeg),
+        "image/gif" => Some(ImageFormat::Gif),
+        _ => None,
+    }
+}
+
+fn inspect_image(bytes: &[u8]) -> Option<(ImageFormat, u32, u32)> {
+    png_dimensions(bytes)
+        .map(|(width, height)| (ImageFormat::Png, width, height))
+        .or_else(|| {
+            jpeg_dimensions(bytes).map(|(width, height)| (ImageFormat::Jpeg, width, height))
+        })
+        .or_else(|| gif_dimensions(bytes).map(|(width, height)| (ImageFormat::Gif, width, height)))
+}
+
+fn png_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    const PNG_SIGNATURE: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
+    if bytes.len() < 24 || !bytes.starts_with(PNG_SIGNATURE) || &bytes[12..16] != b"IHDR" {
+        return None;
+    }
+    let width = u32::from_be_bytes(bytes[16..20].try_into().ok()?);
+    let height = u32::from_be_bytes(bytes[20..24].try_into().ok()?);
+    (width != 0 && height != 0).then_some((width, height))
+}
+
+fn jpeg_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    if bytes.len() < 4 || bytes[0..2] != [0xff, 0xd8] {
+        return None;
+    }
+
+    let mut offset = 2;
+    while offset < bytes.len() {
+        while offset < bytes.len() && bytes[offset] == 0xff {
+            offset += 1;
+        }
+        let marker = *bytes.get(offset)?;
+        offset += 1;
+        if marker == 0xd9 || marker == 0xda {
+            return None;
+        }
+        let segment_length =
+            u16::from_be_bytes([*bytes.get(offset)?, *bytes.get(offset + 1)?]) as usize;
+        if segment_length < 8 || offset + segment_length > bytes.len() {
+            return None;
+        }
+        if matches!(
+            marker,
+            0xc0 | 0xc1
+                | 0xc2
+                | 0xc3
+                | 0xc5
+                | 0xc6
+                | 0xc7
+                | 0xc9
+                | 0xca
+                | 0xcb
+                | 0xcd
+                | 0xce
+                | 0xcf
+        ) {
+            let height = u16::from_be_bytes([bytes[offset + 3], bytes[offset + 4]]) as u32;
+            let width = u16::from_be_bytes([bytes[offset + 5], bytes[offset + 6]]) as u32;
+            return (width != 0 && height != 0).then_some((width, height));
+        }
+        offset += segment_length;
+    }
+    None
+}
+
+fn gif_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    if bytes.len() < 10 || (!bytes.starts_with(b"GIF87a") && !bytes.starts_with(b"GIF89a")) {
+        return None;
+    }
+    let width = u16::from_le_bytes(bytes[6..8].try_into().ok()?) as u32;
+    let height = u16::from_le_bytes(bytes[8..10].try_into().ok()?) as u32;
+    (width != 0 && height != 0).then_some((width, height))
+}
+
 fn finish_image(
     block_stack: &mut Vec<BlockFrame>,
-    resources: &HashMap<String, Vec<u8>>,
+    inline_stack: &mut Vec<InlineFrame>,
+    resources: &HashMap<String, DecodedResource>,
 ) -> Result<(), String> {
     let frame = pop_block(block_stack, "图片")?;
     let BlockFrame::Image { destination, alt } = frame else {
@@ -349,17 +507,20 @@ fn finish_image(
         return push_inline_or_code(
             Inline::Text(attachment_reference(&destination)),
             block_stack,
-            &mut Vec::new(),
+            inline_stack,
         );
     }
 
-    let image = Block::Image {
-        alt: inline_text(&alt),
-        bytes: destination
-            .starts_with("assets/")
-            .then(|| resources.get(&destination).cloned())
-            .flatten(),
-        path: destination,
+    let alt = inline_text(&alt);
+    let image = if destination.starts_with("assets/") {
+        asset_image(&destination, resources)?
+    } else {
+        None
+    };
+    let inline_image = Inline::Image {
+        alt: alt.clone(),
+        path: destination.clone(),
+        image: image.clone(),
     };
 
     if let Some(BlockFrame::Paragraph {
@@ -367,20 +528,17 @@ fn finish_image(
         standalone_image,
     }) = block_stack.last_mut()
     {
-        if inlines.is_empty() && standalone_image.is_none() {
-            *standalone_image = Some(image);
+        if inline_stack.is_empty() && inlines.is_empty() && standalone_image.is_none() {
+            *standalone_image = Some(Block::Image {
+                alt,
+                path: destination,
+                image,
+            });
             return Ok(());
         }
     }
 
-    match image {
-        Block::Image { path, .. } => push_inline_or_code(
-            Inline::Text(format!("[图片：{path}]")),
-            block_stack,
-            &mut Vec::new(),
-        ),
-        _ => unreachable!(),
-    }
+    push_inline_or_code(inline_image, block_stack, inline_stack)
 }
 
 enum InlineKind {
@@ -423,6 +581,11 @@ fn push_inline_or_code(
         (block_stack.last_mut(), &inline)
     {
         source.push_str(text);
+        return Ok(());
+    }
+
+    if let Some(BlockFrame::Image { alt, .. }) = block_stack.last_mut() {
+        alt.push(inline);
         return Ok(());
     }
 
@@ -568,6 +731,7 @@ fn inline_text(inlines: &[Inline]) -> String {
                 inline_text(content)
             }
             Inline::Link { label, .. } => inline_text(label),
+            Inline::Image { alt, .. } => alt.clone(),
             Inline::HardBreak => " ".to_string(),
         })
         .collect()
