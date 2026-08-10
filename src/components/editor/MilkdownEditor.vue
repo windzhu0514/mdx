@@ -3,6 +3,8 @@
 </template>
 
 <script setup lang="ts">
+import { LanguageDescription, LanguageSupport, StreamLanguage } from "@codemirror/language";
+import { languages as codeLanguages } from "@codemirror/language-data";
 import { Crepe } from "@milkdown/crepe";
 import type { AIProvider } from "@milkdown/crepe/feature/ai";
 import mermaid from "mermaid";
@@ -33,6 +35,19 @@ import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { EditorCommand, ImageUploadHandler, MoraEditorHandle } from "./editorTypes";
 import { createMermaidPreview } from "./mermaidPreview";
 import { normalizeMarkdownHeadingText } from "../../utils/text";
+
+const mermaidLanguage = LanguageDescription.of({
+    name: "mermaid",
+    support: new LanguageSupport(
+        StreamLanguage.define<null>({
+            startState: () => null,
+            token: (stream) => {
+                stream.skipToEnd();
+                return null;
+            },
+        }),
+    ),
+});
 
 const renderMermaidPreview = createMermaidPreview(mermaid);
 
@@ -155,6 +170,7 @@ onMounted(() => {
     };
     const featureConfigs = {
         [Crepe.Feature.CodeMirror]: {
+            languages: [...codeLanguages, mermaidLanguage],
             renderPreview: renderMermaidPreview,
             previewOnlyByDefault: true,
         },

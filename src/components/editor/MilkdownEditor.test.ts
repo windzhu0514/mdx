@@ -336,13 +336,28 @@ describe("MilkdownEditor", () => {
             const options = mocks.instances[0].options as {
                 featureConfigs: Record<
                     string,
-                    { previewOnlyByDefault?: boolean; renderPreview?: unknown }
+                    {
+                        languages?: Array<{
+                            name: string;
+                            alias: readonly string[];
+                            support?: unknown;
+                        }>;
+                        previewOnlyByDefault?: boolean;
+                        renderPreview?: unknown;
+                    }
                 >;
             };
-            expect(options.featureConfigs["code-mirror"].previewOnlyByDefault).toBe(true);
-            expect(options.featureConfigs["code-mirror"].renderPreview).toEqual(
-                expect.any(Function),
-            );
+            const codeMirrorConfig = options.featureConfigs["code-mirror"];
+            const configuredLanguages = codeMirrorConfig.languages ?? [];
+
+            expect(configuredLanguages.some(({ name }) => name === "JavaScript")).toBe(true);
+            expect(configuredLanguages.find(({ name }) => name === "mermaid")).toMatchObject({
+                name: "mermaid",
+                alias: expect.arrayContaining(["mermaid"]),
+                support: expect.anything(),
+            });
+            expect(codeMirrorConfig.previewOnlyByDefault).toBe(true);
+            expect(codeMirrorConfig.renderPreview).toEqual(expect.any(Function));
         },
     );
 
