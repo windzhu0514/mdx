@@ -1,3 +1,4 @@
+pub mod docx;
 mod model;
 
 pub use model::{

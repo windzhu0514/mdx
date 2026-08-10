@@ -3,10 +3,13 @@
 mod document_export;
 
 use base64::{engine::general_purpose, Engine as _};
+use document_export::docx::render_docx;
 use document_export::{
     parse_document, Block, ExportDocumentRequest, ExportFormat, ExportMermaidDiagram,
     ExportResource, Inline, ListItem,
 };
+use std::io::{Cursor, Read};
+use zip::ZipArchive;
 
 fn fixture_request(markdown: &str) -> ExportDocumentRequest {
     ExportDocumentRequest {
@@ -27,6 +30,80 @@ fn fixture_request(markdown: &str) -> ExportDocumentRequest {
         }],
         format: ExportFormat::Docx,
     }
+}
+
+fn rich_request() -> ExportDocumentRequest {
+    fixture_request(
+        "# 标题\n\n###### 六级标题\n\n普通 **粗体** *斜体* ~~删除~~ `代码` 和 [链接](https://example.com)。\\\n第二行 [附件](attachments/report.pdf)\n\n> 引用\n\n1. 有序项\n   - 普通无序项\n     1. 嵌套有序项\n   - [x] 已完成\n   - [ ] 未完成\n\n```rust\nlet value = 1;\n```\n\n---\n\n| 左 | 中 | 右 |\n|:---|:---:|---:|\n| 一 | 二 | 三 |\n\n![块图](assets/a.png)\n\n段落 ![行内图](assets/a.png) 后缀\n\n```mermaid\nflowchart TD\nA-->B\n```\n\n![缺图](assets/missing.png)\n\n```mermaid\n未渲染\n```",
+    )
+}
+
+#[test]
+fn renders_real_docx_with_structure_and_media() {
+    let bytes = render_docx(&parse_document(&rich_request()).unwrap()).unwrap();
+
+    assert!(bytes.starts_with(b"PK"));
+    let mut zip = ZipArchive::new(Cursor::new(bytes)).unwrap();
+    let document_xml = read_zip_entry(&mut zip, "word/document.xml");
+    assert!(document_xml.contains("标题"));
+    assert!(document_xml.contains("<w:tbl"));
+    assert!(document_xml.contains("w:numId"));
+    assert!(zip.file_names().any(|name| name.starts_with("word/media/")));
+}
+
+#[test]
+fn docx_preserves_model_styles_relationships_and_readable_fallbacks() {
+    let bytes = render_docx(&parse_document(&rich_request()).unwrap()).unwrap();
+    let mut zip = ZipArchive::new(Cursor::new(bytes)).unwrap();
+
+    let content_types = read_zip_entry(&mut zip, "[Content_Types].xml");
+    let styles = read_zip_entry(&mut zip, "word/styles.xml");
+    let numbering = read_zip_entry(&mut zip, "word/numbering.xml");
+    let document = read_zip_entry(&mut zip, "word/document.xml");
+    let relationships = read_zip_entry(&mut zip, "word/_rels/document.xml.rels");
+
+    assert!(content_types.contains("wordprocessingml.document.main+xml"));
+    assert!(styles.contains("MoraBody"));
+    assert!(styles.contains("MoraQuote"));
+    assert!(styles.contains("MoraCode"));
+    assert!(styles.contains("MoraHeading6"));
+    assert!(styles.contains("Microsoft YaHei"));
+    assert!(styles.contains("SimSun"));
+    assert!(styles.contains("Arial"));
+    assert!(numbering.contains("decimal"));
+    assert!(numbering.contains("bullet"));
+    assert!(document.contains("w:tbl"));
+    assert!(document.contains("w:tc"));
+    assert!(document.contains("w:tblGrid"));
+    assert!(document.contains("w:tblCellMar"));
+    assert!(document.contains("w:tcW"));
+    assert!(document.contains("w:numId"));
+    assert!(document.contains("w:br"));
+    assert!(document.contains("w:w=\"11906\""));
+    assert!(document.contains("w:top=\"1440\""));
+    assert!(document.contains("let value = 1;"));
+    assert!(document.contains("附件：report.pdf"));
+    assert!(document.contains("[图片不可用：assets/missing.png]"));
+    assert!(document.contains("未渲染"));
+    assert!(document.contains("标题"));
+    assert!(document.contains("六级标题"));
+    assert!(document.contains("引用"));
+    assert!(styles.contains("w:pBdr"));
+    assert!(relationships.contains("https://example.com"));
+    assert!(relationships.contains("TargetMode=\"External\""));
+    assert!(
+        zip.file_names()
+            .filter(|name| name.starts_with("word/media/"))
+            .count()
+            >= 3
+    );
+}
+
+fn read_zip_entry(zip: &mut ZipArchive<Cursor<Vec<u8>>>, name: &str) -> String {
+    let mut entry = zip.by_name(name).unwrap();
+    let mut xml = String::new();
+    entry.read_to_string(&mut xml).unwrap();
+    xml
 }
 
 #[test]
