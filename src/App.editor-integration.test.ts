@@ -44,7 +44,12 @@ const mocks = vi.hoisted(() => ({
     nextMilkdownReadiness: undefined as Promise<void> | undefined,
     nextMilkdownSettlement: undefined as Promise<void> | undefined,
     mermaidDiagrams: new Map<string, MermaidDiagramSnapshot[]>(),
-    mermaidPng: vi.fn(async () => "cG5n"),
+    assetBase64:
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGBgAAAABQABpfZFQAAAAABJRU5ErkJggg==",
+    mermaidPng: vi.fn(
+        async () =>
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGBgAAAABQABpfZFQAAAAABJRU5ErkJggg==",
+    ),
     invoke: vi.fn(),
     openDialog: vi.fn(),
     saveDialog: vi.fn(),
@@ -295,6 +300,8 @@ beforeEach(() => {
     mocks.nextMilkdownReadiness = undefined;
     mocks.nextMilkdownSettlement = undefined;
     mocks.mermaidDiagrams.clear();
+    mocks.assetBase64 =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGBgAAAABQABpfZFQAAAAABJRU5ErkJggg==";
     mocks.mermaidPng.mockClear();
     mocks.openDialog.mockResolvedValue("C:\\notes\\test.mdx");
     mocks.saveDialog.mockResolvedValue("C:\\notes\\saved.mdx");
@@ -325,7 +332,7 @@ beforeEach(() => {
                 )
             );
         }
-        if (command === "read_asset") return "aW1hZ2U=";
+        if (command === "read_asset") return mocks.assetBase64;
         if (command === "save_mdx_as" || command === "save_mdx") {
             if (mocks.nextSave) {
                 const pending = mocks.nextSave;
@@ -854,6 +861,41 @@ describe("App PDF 打印视图", () => {
         );
     });
 
+    it("导出 PDF 在 Mermaid 等待期间资源 revision 变更会取消", async () => {
+        const host = await mountApp();
+        mocks.milkdown?.emitUpdate("# 正文不变");
+        await nextTick();
+        const targetEditor = mocks.milkdown;
+        const settled = createDeferred<void>();
+        if (targetEditor) targetEditor.settlement = settled.promise;
+        mocks.saveDialog.mockResolvedValueOnce("C:\\Exports\\resource-change.pdf");
+
+        findButton(host, "导出 PDF...").click();
+        await vi.waitFor(() => expect(targetEditor?.whenSettledCalls).toBe(1));
+        mocks.openDialog.mockResolvedValueOnce("C:\\files\\late.png");
+        mocks.nextImportedResource = Promise.resolve({
+            name: "assets/late.png",
+            originalName: "late.png",
+            mimeType: "image/png",
+            size: 70,
+            kind: "asset",
+            base64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGBgAAAABQABpfZFQAAAAABJRU5ErkJggg==",
+        });
+        findButton(host, "导入图片或附件...").click();
+        await vi.waitFor(() => expect(host.textContent).toContain("已导入 1 个资源"));
+        expect(editorValue(host, "milkdown")).toBe("# 正文不变");
+        settled.resolve();
+
+        await vi.waitFor(() =>
+            expect(host.textContent).toContain("PDF 导出已取消：文档内容已变更"),
+        );
+        expect(mocks.saveDialog).not.toHaveBeenCalled();
+        expect(mocks.invoke).not.toHaveBeenCalledWith(
+            "export_document",
+            expect.anything(),
+        );
+    });
+
     it.each([
         ["Word", "docx", "导出 Word...", "C:\\Exports\\draft.docx"],
         ["PDF", "pdf", "导出 PDF...", "C:\\Exports\\draft.pdf"],
@@ -872,7 +914,7 @@ describe("App PDF 打印视图", () => {
                     storedName: "diagram.png",
                     path: "assets/diagram.png",
                     type: "image/png",
-                    size: 4,
+                    size: 70,
                     createdAt: "2026-08-10T00:00:00Z",
                 },
             ];
@@ -912,21 +954,80 @@ describe("App PDF 打印视图", () => {
                             resources: [
                                 expect.objectContaining({
                                     name: "assets/diagram.png",
-                                    base64: "aW1hZ2U=",
+                                    size: 70,
+                                    base64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGBgAAAABQABpfZFQAAAAABJRU5ErkJggg==",
                                 }),
                             ],
                             mermaidDiagrams: [
                                 {
                                     source: "flowchart TD\nA --> B",
-                                    pngBase64: "cG5n",
+                                    pngBase64:
+                                        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGBgAAAABQABpfZFQAAAAABJRU5ErkJggg==",
                                 },
                             ],
                         }),
                     }),
                 ),
             );
+            expect(
+                mocks.invoke.mock.calls.some(
+                    ([command]) => command === "save_mdx" || command === "save_mdx_as",
+                ),
+            ).toBe(false);
         },
     );
+
+    it("导出大 Base64 资源时不序列化资源快照进行 revision 比较", async () => {
+        const sourcePath = "C:\\notes\\large-resource.mdx";
+        const largeBase64 = "A".repeat(4 * 1024 * 1024);
+        const note = createNote("![图](assets/large.png)", sourcePath);
+        note.meta.assets = [
+            {
+                id: "large-image",
+                originalName: "large.png",
+                storedName: "large.png",
+                path: "assets/large.png",
+                type: "image/png",
+                size: largeBase64.length,
+                createdAt: "2026-08-10T00:00:00Z",
+            },
+        ];
+        mocks.assetBase64 = largeBase64;
+        mocks.openedNotes.set(sourcePath, note);
+        mocks.openDialog.mockResolvedValueOnce(sourcePath);
+        mocks.saveDialog.mockResolvedValueOnce("C:\\Exports\\large.pdf");
+        const host = await mountApp();
+        findButton(host, "打开文件...").click();
+        await vi.waitFor(() =>
+            expect(mocks.invoke).toHaveBeenCalledWith("read_asset", {
+                path: sourcePath,
+                assetName: "assets/large.png",
+            }),
+        );
+        const stringify = vi.spyOn(JSON, "stringify");
+
+        findButton(host, "导出 PDF...").click();
+
+        await vi.waitFor(() =>
+            expect(mocks.invoke).toHaveBeenCalledWith(
+                "export_document",
+                expect.anything(),
+            ),
+        );
+        expect(
+            stringify.mock.calls.some(
+                ([value]) =>
+                    Array.isArray(value) &&
+                    value.some(
+                        (resource) =>
+                            typeof resource === "object" &&
+                            resource !== null &&
+                            (resource as { base64?: string }).base64 === largeBase64,
+                    ),
+            ),
+        ).toBe(false);
+        stringify.mockRestore();
+    });
 
     it("Markdown 导出等待目标保存时切换文档仍导出原目标路径", async () => {
         const pathA = "C:\\notes\\a.mdx";

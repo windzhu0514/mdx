@@ -7,6 +7,10 @@ export type ResourceSession = ReturnType<typeof createResourceSession>;
 export type ResourceSessionSnapshot = {
     newResources: ResourceSaveData[];
 };
+export type ResourceExportSnapshot = {
+    revision: number;
+    resources: ResourceSaveData[];
+};
 
 export function createResourceSession() {
     const resources = new Map<string, PendingResource>();
@@ -54,6 +58,14 @@ export function createResourceSession() {
         return Array.from(resources.values(), toResourceSaveData);
     }
 
+    function exportSnapshot(): ResourceExportSnapshot {
+        return { revision: revision.value, resources: exportResources() };
+    }
+
+    function resourceRevision(): number {
+        return revision.value;
+    }
+
     function markSaved() {
         for (const resource of resources.values()) {
             resource.isNew = false;
@@ -97,6 +109,8 @@ export function createResourceSession() {
         persistedMarkdown,
         newResources,
         exportResources,
+        exportSnapshot,
+        resourceRevision,
         markSaved,
         snapshot,
         restore,

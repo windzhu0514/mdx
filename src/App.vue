@@ -1390,11 +1390,13 @@ async function exportDocument(format: DocumentExportFormat) {
     const editor = editorRef.value;
     if (!target) return;
 
+    const resourceSnapshot = target.resources.exportSnapshot();
     const snapshot = {
         documentId: target.id,
         title: target.path ? documentNameFromPath(target.path) : target.displayName,
         markdown: target.content,
-        resources: target.resources.exportResources(),
+        resources: resourceSnapshot.resources,
+        resourceRevision: resourceSnapshot.revision,
     };
     const label = format === "docx" ? "Word" : "PDF";
     const extension = format === "docx" ? "docx" : "pdf";
@@ -1406,8 +1408,7 @@ async function exportDocument(format: DocumentExportFormat) {
         return (
             activeDocumentId.value === snapshot.documentId &&
             current?.content === snapshot.markdown &&
-            JSON.stringify(current.resources.exportResources()) ===
-                JSON.stringify(snapshot.resources)
+            current.resources.resourceRevision() === snapshot.resourceRevision
         );
     };
     const cancelIfSnapshotChanged = () => {

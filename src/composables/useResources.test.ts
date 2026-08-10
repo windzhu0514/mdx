@@ -77,6 +77,38 @@ describe("resource session", () => {
         ).toBe("YQ==");
     });
 
+    it("captures export resources and revision atomically without changing revision on markSaved", () => {
+        const session = createResourceSession();
+        session.registerNew(newImage);
+
+        const first = session.exportSnapshot();
+        const firstRevision = session.resourceRevision();
+        session.markSaved();
+        const afterSave = session.exportSnapshot();
+        const afterSaveRevision = session.resourceRevision();
+        session.registerLoaded({
+            ...newImage,
+            path: "assets/b.png",
+            objectUrl: "blob:b",
+        });
+        const afterRegister = session.exportSnapshot();
+        const afterRegisterRevision = session.resourceRevision();
+        session.clear();
+        const afterClear = session.exportSnapshot();
+        const afterClearRevision = session.resourceRevision();
+
+        expect(first.resources).toEqual([
+            expect.objectContaining({ name: "assets/a.png", base64: "YQ==" }),
+        ]);
+        expect(afterSave.revision).toBe(first.revision);
+        expect(afterRegister.revision).toBeGreaterThan(first.revision);
+        expect(afterClear.revision).toBeGreaterThan(afterRegister.revision);
+        expect(firstRevision).toBe(first.revision);
+        expect(afterSaveRevision).toBe(firstRevision);
+        expect(afterRegisterRevision).toBe(afterRegister.revision);
+        expect(afterClearRevision).toBe(afterClear.revision);
+    });
+
     it("keeps the persisted path while showing an object URL", () => {
         const session = createResourceSession();
         session.registerLoaded({ ...newImage, isNew: false });
