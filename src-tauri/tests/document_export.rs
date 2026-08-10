@@ -222,6 +222,83 @@ fn falls_back_when_mermaid_png_is_invalid() {
     ));
 }
 
+#[test]
+fn preserves_images_before_text_and_when_consecutive() {
+    let before_text = parse_document(&fixture_request("![前图](assets/a.png) 后缀")).unwrap();
+    let Block::Paragraph(before_text_inlines) = &before_text.blocks[0] else {
+        panic!("图片后跟文字时应保留段落");
+    };
+    assert_inline_image(&before_text_inlines[0], "前图");
+    assert_eq!(before_text_inlines[1], Inline::Text(" 后缀".to_string()));
+
+    let consecutive = parse_document(&fixture_request(
+        "![图一](assets/a.png) ![图二](assets/a.png)",
+    ))
+    .unwrap();
+    let Block::Paragraph(consecutive_inlines) = &consecutive.blocks[0] else {
+        panic!("连续图片应保留段落");
+    };
+    assert_inline_image(&consecutive_inlines[0], "图一");
+    assert_inline_image(&consecutive_inlines[2], "图二");
+}
+
+#[test]
+fn promotes_an_image_only_paragraph_to_an_image_block() {
+    let model = parse_document(&fixture_request("![唯一图片](assets/a.png)")).unwrap();
+
+    assert!(matches!(
+        model.blocks.as_slice(),
+        [Block::Image { alt, path, image: Some(_) }] if alt == "唯一图片" && path == "assets/a.png"
+    ));
+}
+
+#[test]
+fn accepts_complete_png_jpeg_and_gif_with_dimensions() {
+    for (mime_type, bytes, expected_dimensions) in [
+        ("image/png", png_bytes(2, 3), (2, 3)),
+        ("image/jpeg", valid_jpeg(), (1, 1)),
+        ("image/gif", valid_gif(), (1, 1)),
+    ] {
+        let mut request = fixture_request("![图](assets/a.png)");
+        request.resources[0].mime_type = mime_type.to_string();
+        request.resources[0].base64 = general_purpose::STANDARD.encode(&bytes);
+        request.resources[0].size = bytes.len() as u64;
+
+        let model = parse_document(&request).unwrap();
+        let Block::Image {
+            image: Some(image), ..
+        } = &model.blocks[0]
+        else {
+            panic!("完整图片应保留图片数据");
+        };
+        assert_eq!((image.width, image.height), expected_dimensions);
+    }
+}
+
+#[test]
+fn rejects_header_valid_but_truncated_images() {
+    for (mime_type, bytes) in [
+        ("image/png", png_header_only(1, 1)),
+        ("image/jpeg", jpeg_without_scan()),
+        ("image/gif", gif_header_only()),
+    ] {
+        let mut request = fixture_request("![图](assets/a.png)");
+        request.resources[0].mime_type = mime_type.to_string();
+        request.resources[0].base64 = general_purpose::STANDARD.encode(&bytes);
+        request.resources[0].size = bytes.len() as u64;
+        assert_resource_error(request, "图片数据损坏");
+    }
+}
+
+#[test]
+fn rejects_png_with_invalid_crc_or_missing_required_chunks() {
+    let mut invalid_crc = png_bytes(1, 1);
+    *invalid_crc.last_mut().unwrap() ^= 1;
+    assert_invalid_png(invalid_crc);
+    assert_invalid_png(png_with_parts(1, 1, false, true));
+    assert_invalid_png(png_with_parts(1, 1, true, false));
+}
+
 fn assert_nested_task_item(items: &[ListItem]) {
     let nested = items[0]
         .blocks
@@ -264,8 +341,118 @@ fn png_base64(width: u32, height: u32) -> String {
 }
 
 fn png_bytes(width: u32, height: u32) -> Vec<u8> {
-    let mut bytes = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
-    bytes.extend(width.to_be_bytes());
-    bytes.extend(height.to_be_bytes());
+    png_with_parts(width, height, true, true)
+}
+
+fn png_header_only(width: u32, height: u32) -> Vec<u8> {
+    let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+    push_png_chunk(&mut bytes, *b"IHDR", &png_ihdr(width, height));
     bytes
+}
+
+fn png_with_parts(width: u32, height: u32, include_idat: bool, include_iend: bool) -> Vec<u8> {
+    let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+    push_png_chunk(&mut bytes, *b"IHDR", &png_ihdr(width, height));
+    if include_idat {
+        push_png_chunk(&mut bytes, *b"IDAT", &zlib_rgba_scanlines(width, height));
+    }
+    if include_iend {
+        push_png_chunk(&mut bytes, *b"IEND", &[]);
+    }
+    bytes
+}
+
+fn png_ihdr(width: u32, height: u32) -> Vec<u8> {
+    let mut ihdr = Vec::new();
+    ihdr.extend(width.to_be_bytes());
+    ihdr.extend(height.to_be_bytes());
+    ihdr.extend([8, 6, 0, 0, 0]);
+    ihdr
+}
+
+fn zlib_rgba_scanlines(width: u32, height: u32) -> Vec<u8> {
+    let mut scanlines = Vec::new();
+    for _ in 0..height {
+        scanlines.push(0);
+        scanlines.extend(std::iter::repeat_n(0, width as usize * 4));
+    }
+    let length = scanlines.len() as u16;
+    let mut zlib = vec![0x78, 0x01, 0x01];
+    zlib.extend(length.to_le_bytes());
+    zlib.extend((!length).to_le_bytes());
+    zlib.extend(&scanlines);
+    zlib.extend(test_adler32(&scanlines).to_be_bytes());
+    zlib
+}
+
+fn push_png_chunk(bytes: &mut Vec<u8>, chunk_type: [u8; 4], data: &[u8]) {
+    bytes.extend((data.len() as u32).to_be_bytes());
+    bytes.extend(chunk_type);
+    bytes.extend(data);
+    let mut crc_input = chunk_type.to_vec();
+    crc_input.extend(data);
+    bytes.extend(test_crc32(&crc_input).to_be_bytes());
+}
+
+fn valid_jpeg() -> Vec<u8> {
+    [
+        vec![0xff, 0xd8],
+        vec![0xff, 0xc0, 0, 11, 8, 0, 1, 0, 1, 1, 1, 0x11, 0],
+        vec![0xff, 0xda, 0, 8, 1, 1, 0, 0, 0x3f, 0],
+        vec![0x11, 0xff, 0x00, 0x22, 0xff, 0xd0, 0x33, 0xff, 0xd9],
+    ]
+    .concat()
+}
+
+fn jpeg_without_scan() -> Vec<u8> {
+    [
+        vec![0xff, 0xd8],
+        vec![0xff, 0xc0, 0, 11, 8, 0, 1, 0, 1, 1, 1, 0x11, 0],
+    ]
+    .concat()
+}
+
+fn valid_gif() -> Vec<u8> {
+    vec![
+        b'G', b'I', b'F', b'8', b'9', b'a', 1, 0, 1, 0, 0x80, 0, 0, 0, 0, 0, 0xff, 0xff, 0xff,
+        0x2c, 0, 0, 0, 0, 1, 0, 1, 0, 0, 2, 2, 0x44, 0x01, 0, 0x3b,
+    ]
+}
+
+fn gif_header_only() -> Vec<u8> {
+    vec![
+        b'G', b'I', b'F', b'8', b'9', b'a', 1, 0, 1, 0, 0x80, 0, 0, 0, 0, 0, 0xff, 0xff, 0xff,
+    ]
+}
+
+fn assert_invalid_png(bytes: Vec<u8>) {
+    let mut request = fixture_request("![图](assets/a.png)");
+    request.resources[0].base64 = general_purpose::STANDARD.encode(&bytes);
+    request.resources[0].size = bytes.len() as u64;
+    assert_resource_error(request, "图片数据损坏");
+}
+
+fn test_crc32(bytes: &[u8]) -> u32 {
+    let mut crc = !0u32;
+    for byte in bytes {
+        crc ^= u32::from(*byte);
+        for _ in 0..8 {
+            crc = if crc & 1 == 1 {
+                (crc >> 1) ^ 0xedb8_8320
+            } else {
+                crc >> 1
+            };
+        }
+    }
+    !crc
+}
+
+fn test_adler32(bytes: &[u8]) -> u32 {
+    let mut s1 = 1u32;
+    let mut s2 = 0u32;
+    for byte in bytes {
+        s1 = (s1 + u32::from(*byte)) % 65_521;
+        s2 = (s2 + s1) % 65_521;
+    }
+    (s2 << 16) | s1
 }

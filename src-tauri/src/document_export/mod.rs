@@ -13,7 +13,6 @@ use std::collections::{HashMap, VecDeque};
 enum BlockFrame {
     Paragraph {
         inlines: Vec<Inline>,
-        standalone_image: Option<Block>,
     },
     Heading {
         level: u8,
@@ -130,7 +129,6 @@ fn start_tag(
     match tag {
         Tag::Paragraph => block_stack.push(BlockFrame::Paragraph {
             inlines: Vec::new(),
-            standalone_image: None,
         }),
         Tag::Heading { level, .. } => block_stack.push(BlockFrame::Heading {
             level: heading_level(level),
@@ -199,11 +197,7 @@ fn end_tag(
         TagEnd::Paragraph => {
             let frame = pop_block(block_stack, "段落")?;
             let block = match frame {
-                BlockFrame::Paragraph {
-                    inlines,
-                    standalone_image: Some(image),
-                } if inlines.is_empty() => image,
-                BlockFrame::Paragraph { inlines, .. } => Block::Paragraph(inlines),
+                BlockFrame::Paragraph { inlines } => paragraph_block(inlines),
                 _ => return Err("Markdown 段落结构不匹配。".to_string()),
             };
             push_block(block, root, block_stack)?;
@@ -344,6 +338,17 @@ fn decode_resources(
         .collect()
 }
 
+fn paragraph_block(inlines: Vec<Inline>) -> Block {
+    match inlines.as_slice() {
+        [Inline::Image { alt, path, image }] => Block::Image {
+            alt: alt.clone(),
+            path: path.clone(),
+            image: image.clone(),
+        },
+        _ => Block::Paragraph(inlines),
+    }
+}
+
 fn mermaid_images(
     diagrams: &[ExportMermaidDiagram],
 ) -> HashMap<String, VecDeque<Option<MermaidImage>>> {
@@ -432,12 +437,56 @@ fn inspect_image(bytes: &[u8]) -> Option<(ImageFormat, u32, u32)> {
 
 fn png_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
     const PNG_SIGNATURE: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
-    if bytes.len() < 24 || !bytes.starts_with(PNG_SIGNATURE) || &bytes[12..16] != b"IHDR" {
+    if !bytes.starts_with(PNG_SIGNATURE) {
         return None;
     }
-    let width = u32::from_be_bytes(bytes[16..20].try_into().ok()?);
-    let height = u32::from_be_bytes(bytes[20..24].try_into().ok()?);
-    (width != 0 && height != 0).then_some((width, height))
+    let mut offset = PNG_SIGNATURE.len();
+    let mut dimensions = None;
+    let mut saw_idat = false;
+    let mut first_chunk = true;
+
+    while offset < bytes.len() {
+        let length = read_u32(bytes, offset)? as usize;
+        let type_start = offset.checked_add(4)?;
+        let data_start = type_start.checked_add(4)?;
+        let data_end = data_start.checked_add(length)?;
+        let crc_end = data_end.checked_add(4)?;
+        if crc_end > bytes.len() {
+            return None;
+        }
+
+        let chunk_type = bytes.get(type_start..data_start)?;
+        let data = bytes.get(data_start..data_end)?;
+        let actual_crc = read_u32(bytes, data_end)?;
+        if crc32(bytes.get(type_start..data_end)?) != actual_crc {
+            return None;
+        }
+
+        if first_chunk {
+            if chunk_type != b"IHDR" || data.len() != 13 {
+                return None;
+            }
+            let width = read_u32(data, 0)?;
+            let height = read_u32(data, 4)?;
+            if width == 0 || height == 0 {
+                return None;
+            }
+            dimensions = Some((width, height));
+            first_chunk = false;
+        } else if chunk_type == b"IHDR" {
+            return None;
+        }
+
+        if chunk_type == b"IDAT" {
+            saw_idat = true;
+        }
+        if chunk_type == b"IEND" {
+            return (data.is_empty() && saw_idat && crc_end == bytes.len()).then_some(dimensions?);
+        }
+        offset = crc_end;
+    }
+
+    None
 }
 
 fn jpeg_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
@@ -446,18 +495,25 @@ fn jpeg_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
     }
 
     let mut offset = 2;
+    let mut dimensions = None;
     while offset < bytes.len() {
-        while offset < bytes.len() && bytes[offset] == 0xff {
+        if *bytes.get(offset)? != 0xff {
+            return None;
+        }
+        while *bytes.get(offset)? == 0xff {
             offset += 1;
         }
         let marker = *bytes.get(offset)?;
         offset += 1;
-        if marker == 0xd9 || marker == 0xda {
+        if marker == 0xd9 {
             return None;
         }
-        let segment_length =
-            u16::from_be_bytes([*bytes.get(offset)?, *bytes.get(offset + 1)?]) as usize;
-        if segment_length < 8 || offset + segment_length > bytes.len() {
+        if matches!(marker, 0x01 | 0xd0..=0xd7) {
+            continue;
+        }
+        let segment_length = read_u16(bytes, offset)? as usize;
+        let segment_end = offset.checked_add(segment_length)?;
+        if segment_length < 2 || segment_end > bytes.len() {
             return None;
         }
         if matches!(
@@ -475,22 +531,157 @@ fn jpeg_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
                 | 0xce
                 | 0xcf
         ) {
+            if dimensions.is_some() || segment_length < 8 {
+                return None;
+            }
             let height = u16::from_be_bytes([bytes[offset + 3], bytes[offset + 4]]) as u32;
             let width = u16::from_be_bytes([bytes[offset + 5], bytes[offset + 6]]) as u32;
-            return (width != 0 && height != 0).then_some((width, height));
+            let component_count = bytes[offset + 7] as usize;
+            if width == 0
+                || height == 0
+                || component_count == 0
+                || segment_length != 8 + component_count.checked_mul(3)?
+            {
+                return None;
+            }
+            dimensions = Some((width, height));
         }
-        offset += segment_length;
+        if marker == 0xda {
+            let component_count = *bytes.get(offset + 2)? as usize;
+            if dimensions.is_none()
+                || component_count == 0
+                || segment_length != 6 + component_count.checked_mul(2)?
+            {
+                return None;
+            }
+            return jpeg_scan_to_eoi(bytes, segment_end).and_then(|()| dimensions);
+        }
+        offset = segment_end;
     }
     None
 }
 
 fn gif_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
-    if bytes.len() < 10 || (!bytes.starts_with(b"GIF87a") && !bytes.starts_with(b"GIF89a")) {
+    if bytes.len() < 13 || (!bytes.starts_with(b"GIF87a") && !bytes.starts_with(b"GIF89a")) {
         return None;
     }
     let width = u16::from_le_bytes(bytes[6..8].try_into().ok()?) as u32;
     let height = u16::from_le_bytes(bytes[8..10].try_into().ok()?) as u32;
-    (width != 0 && height != 0).then_some((width, height))
+    if width == 0 || height == 0 {
+        return None;
+    }
+
+    let mut offset: usize = 13;
+    let packed = bytes[10];
+    if packed & 0x80 != 0 {
+        offset = offset.checked_add(gif_color_table_size(packed)?)?;
+        if offset > bytes.len() {
+            return None;
+        }
+    }
+
+    let mut saw_image = false;
+    while offset < bytes.len() {
+        match *bytes.get(offset)? {
+            0x3b => return (saw_image && offset + 1 == bytes.len()).then_some((width, height)),
+            0x21 => {
+                offset = offset.checked_add(2)?;
+                offset = gif_sub_blocks(bytes, offset)?;
+            }
+            0x2c => {
+                let descriptor_end = offset.checked_add(10)?;
+                if descriptor_end > bytes.len() {
+                    return None;
+                }
+                let image_width =
+                    u16::from_le_bytes(bytes[offset + 5..offset + 7].try_into().ok()?);
+                let image_height =
+                    u16::from_le_bytes(bytes[offset + 7..offset + 9].try_into().ok()?);
+                if image_width == 0 || image_height == 0 {
+                    return None;
+                }
+                let image_packed = bytes[offset + 9];
+                offset = descriptor_end;
+                if image_packed & 0x80 != 0 {
+                    offset = offset.checked_add(gif_color_table_size(image_packed)?)?;
+                    if offset > bytes.len() {
+                        return None;
+                    }
+                }
+                let lzw_min_code_size = *bytes.get(offset)?;
+                if !(2..=8).contains(&lzw_min_code_size) {
+                    return None;
+                }
+                offset = gif_sub_blocks(bytes, offset.checked_add(1)?)?;
+                saw_image = true;
+            }
+            _ => return None,
+        }
+    }
+    None
+}
+
+fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
+    Some(u32::from_be_bytes(
+        bytes.get(offset..offset.checked_add(4)?)?.try_into().ok()?,
+    ))
+}
+
+fn read_u16(bytes: &[u8], offset: usize) -> Option<u16> {
+    Some(u16::from_be_bytes(
+        bytes.get(offset..offset.checked_add(2)?)?.try_into().ok()?,
+    ))
+}
+
+fn crc32(bytes: &[u8]) -> u32 {
+    let mut crc = !0u32;
+    for byte in bytes {
+        crc ^= u32::from(*byte);
+        for _ in 0..8 {
+            crc = if crc & 1 == 1 {
+                (crc >> 1) ^ 0xedb8_8320
+            } else {
+                crc >> 1
+            };
+        }
+    }
+    !crc
+}
+
+fn jpeg_scan_to_eoi(bytes: &[u8], mut offset: usize) -> Option<()> {
+    while offset < bytes.len() {
+        if bytes[offset] != 0xff {
+            offset += 1;
+            continue;
+        }
+        let marker = *bytes.get(offset.checked_add(1)?)?;
+        offset = offset.checked_add(2)?;
+        match marker {
+            0x00 | 0xd0..=0xd7 => {}
+            0xd9 => return (offset == bytes.len()).then_some(()),
+            0xff => return None,
+            _ => return None,
+        }
+    }
+    None
+}
+
+fn gif_color_table_size(packed: u8) -> Option<usize> {
+    3usize.checked_mul(1usize.checked_shl(u32::from((packed & 0x07) + 1))?)
+}
+
+fn gif_sub_blocks(bytes: &[u8], mut offset: usize) -> Option<usize> {
+    loop {
+        let size = *bytes.get(offset)? as usize;
+        offset = offset.checked_add(1)?;
+        if size == 0 {
+            return Some(offset);
+        }
+        offset = offset.checked_add(size)?;
+        if offset > bytes.len() {
+            return None;
+        }
+    }
 }
 
 fn finish_image(
@@ -522,21 +713,6 @@ fn finish_image(
         path: destination.clone(),
         image: image.clone(),
     };
-
-    if let Some(BlockFrame::Paragraph {
-        inlines,
-        standalone_image,
-    }) = block_stack.last_mut()
-    {
-        if inline_stack.is_empty() && inlines.is_empty() && standalone_image.is_none() {
-            *standalone_image = Some(Block::Image {
-                alt,
-                path: destination,
-                image,
-            });
-            return Ok(());
-        }
-    }
 
     push_inline_or_code(inline_image, block_stack, inline_stack)
 }
