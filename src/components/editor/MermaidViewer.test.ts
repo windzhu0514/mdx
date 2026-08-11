@@ -132,7 +132,7 @@ describe("MermaidViewer", () => {
                 .transform,
         ).toContain("translate(35px, 20px)");
 
-        button(viewer.host, "适合窗口").click();
+        button(viewer.host, "适应视图").click();
         await nextTick();
         expect(viewer.host.textContent).toContain("100%");
         expect(viewer.host.querySelector(".mermaid-viewer-minimap")).toBeNull();
@@ -140,6 +140,35 @@ describe("MermaidViewer", () => {
             viewer.host.querySelector<HTMLElement>(".mermaid-viewer-canvas")?.style
                 .transform,
         ).toContain("translate(0px, 0px)");
+    });
+
+    it("shows native hover tips for every toolbar control", async () => {
+        const viewer = mountViewer();
+        cleanup = viewer.unmount;
+        await nextTick();
+
+        for (const label of [
+            "上一张图",
+            "下一张图",
+            "缩小",
+            "放大",
+            "适应视图",
+            "导出 PNG",
+            "关闭查看器",
+        ]) {
+            expect(button(viewer.host, label).title).toBe(label);
+        }
+
+        const zoomSelect = viewer.host.querySelector<HTMLSelectElement>(
+            'select[aria-label="缩放比例"]',
+        );
+        expect(zoomSelect?.title).toBe("缩放比例");
+
+        const fullscreen = button(viewer.host, "全屏查看");
+        expect(fullscreen.title).toBe("全屏查看");
+        fullscreen.click();
+        await nextTick();
+        expect(button(viewer.host, "退出全屏").title).toBe("退出全屏");
     });
 
     it("supports wheel zoom and fullscreen mode", async () => {

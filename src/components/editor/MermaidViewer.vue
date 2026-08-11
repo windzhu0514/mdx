@@ -158,6 +158,7 @@ watch(
                     <button
                         type="button"
                         aria-label="上一张图"
+                        title="上一张图"
                         :disabled="activeIndex === 0"
                         @click="selectDiagram(activeIndex - 1)"
                     >
@@ -167,6 +168,7 @@ watch(
                     <button
                         type="button"
                         aria-label="下一张图"
+                        title="下一张图"
                         :disabled="activeIndex === diagrams.length - 1"
                         @click="selectDiagram(activeIndex + 1)"
                     >
@@ -179,6 +181,7 @@ watch(
                         <button
                             type="button"
                             aria-label="缩小"
+                            title="缩小"
                             :disabled="!canZoomOut"
                             @click="stepZoom(-1)"
                         >
@@ -187,6 +190,7 @@ watch(
                         <select
                             :value="zoom"
                             aria-label="缩放比例"
+                            title="缩放比例"
                             @change="
                                 setZoom(
                                     Number(($event.target as HTMLSelectElement).value),
@@ -204,20 +208,27 @@ watch(
                         <button
                             type="button"
                             aria-label="放大"
+                            title="放大"
                             :disabled="!canZoomIn"
                             @click="stepZoom(1)"
                         >
                             ＋
                         </button>
                     </div>
-                    <button type="button" aria-label="适合窗口" @click="resetView">
+                    <button
+                        type="button"
+                        aria-label="适应视图"
+                        title="适应视图"
+                        @click="resetView"
+                    >
                         <svg viewBox="0 0 24 24" aria-hidden="true">
                             <path d="M9 9H5V5m10 4h4V5M9 15H5v4m10-4h4v4" />
                         </svg>
                     </button>
                     <button
                         type="button"
-                        aria-label="全屏查看"
+                        :aria-label="fullscreen ? '退出全屏' : '全屏查看'"
+                        :title="fullscreen ? '退出全屏' : '全屏查看'"
                         :aria-pressed="fullscreen"
                         @click="fullscreen = !fullscreen"
                     >
@@ -228,6 +239,7 @@ watch(
                     <button
                         type="button"
                         aria-label="导出 PNG"
+                        title="导出 PNG"
                         :disabled="exporting"
                         @click="exportActive"
                     >
@@ -236,7 +248,12 @@ watch(
                         </svg>
                     </button>
                     <span class="mermaid-viewer-divider" aria-hidden="true"></span>
-                    <button type="button" aria-label="关闭查看器" @click="emit('close')">
+                    <button
+                        type="button"
+                        aria-label="关闭查看器"
+                        title="关闭查看器"
+                        @click="emit('close')"
+                    >
                         <svg viewBox="0 0 24 24" aria-hidden="true">
                             <path d="m5 5 14 14M19 5 5 19" />
                         </svg>
