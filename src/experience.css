@@ -65,31 +65,31 @@
 
 :root[data-theme="dai-blue"],
 .theme-card[data-theme-preview="dai-blue"] {
-    --color-bg-base: #111820;
-    --color-bg-surface: #192129;
-    --color-bg-chrome: rgba(15, 22, 29, 0.96);
-    --color-bg-sidebar: #141d25;
-    --color-bg-sidebar-subtle: #111a22;
-    --color-bg-sidebar-header: #19242d;
-    --color-bg-elevated: #202a34;
-    --color-bg-popup: rgba(32, 42, 52, 0.98);
-    --color-bg-input: #131c24;
-    --color-bg-control: rgba(222, 230, 238, 0.06);
-    --color-bg-control-hover: rgba(222, 230, 238, 0.1);
-    --color-border: rgba(205, 219, 231, 0.14);
-    --color-text-main: #e5ebef;
-    --color-text-muted: #9da8b0;
-    --color-primary: #7da7c8;
-    --color-primary-light: rgba(94, 136, 171, 0.19);
-    --color-danger: #ed929a;
-    --color-success: #7bc8a5;
-    --color-inset-highlight: rgba(255, 255, 255, 0.05);
+    --color-bg-base: #162334;
+    --color-bg-surface: #1c2b3d;
+    --color-bg-chrome: rgba(19, 31, 47, 0.97);
+    --color-bg-sidebar: #18283a;
+    --color-bg-sidebar-subtle: #142235;
+    --color-bg-sidebar-header: #1d2e42;
+    --color-bg-elevated: #24364b;
+    --color-bg-popup: rgba(36, 54, 75, 0.98);
+    --color-bg-input: #172638;
+    --color-bg-control: rgba(222, 233, 244, 0.07);
+    --color-bg-control-hover: rgba(222, 233, 244, 0.12);
+    --color-border: rgba(190, 211, 232, 0.18);
+    --color-text-main: #e7edf3;
+    --color-text-muted: #aab9c7;
+    --color-primary: #83add1;
+    --color-primary-light: rgba(96, 145, 188, 0.24);
+    --color-danger: #f09aa4;
+    --color-success: #82c9ad;
+    --color-inset-highlight: rgba(255, 255, 255, 0.06);
     --app-background-image: radial-gradient(
         circle at 50% -18%,
-        rgba(75, 111, 143, 0.13) 0%,
-        rgba(17, 24, 32, 0) 58%
+        rgba(83, 129, 171, 0.22) 0%,
+        rgba(22, 35, 52, 0) 60%
     );
-    --shadow-lg: 0 24px 72px rgba(2, 7, 12, 0.43);
+    --shadow-lg: 0 24px 72px rgba(3, 10, 20, 0.4);
     color-scheme: dark;
 }
 

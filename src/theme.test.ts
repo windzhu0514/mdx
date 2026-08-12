@@ -113,6 +113,34 @@ describe("dark application theme", () => {
         expect(experienceCss).not.toContain("#f7f5ef");
     });
 
+    it("keeps dai blue visibly distinct from ink black", () => {
+        const readThemeToken = (theme: string, token: string) => {
+            const block = experienceCss.match(
+                new RegExp(`:root\\[data-theme="${theme}"\\][^{]*\\{([^}]*)\\}`, "su"),
+            )?.[1];
+            expect(block).toBeDefined();
+            return block?.match(new RegExp(`--${token}:\\s*([^;]+);`, "u"))?.[1];
+        };
+
+        expect(readThemeToken("dai-blue", "color-bg-base")).toBe("#162334");
+        expect(readThemeToken("dai-blue", "color-bg-surface")).toBe("#1c2b3d");
+        expect(readThemeToken("dai-blue", "color-bg-sidebar")).toBe("#18283a");
+        expect(readThemeToken("dai-blue", "color-bg-elevated")).toBe("#24364b");
+        expect(readThemeToken("dai-blue", "color-text-main")).toBe("#e7edf3");
+        expect(readThemeToken("dai-blue", "color-primary")).toBe("#83add1");
+
+        for (const token of [
+            "color-bg-base",
+            "color-bg-surface",
+            "color-bg-sidebar",
+            "color-primary",
+        ]) {
+            expect(readThemeToken("dai-blue", token)).not.toBe(
+                readThemeToken("ink-black", token),
+            );
+        }
+    });
+
     it("uses one main background across each light theme window", () => {
         for (const theme of ["xuan-white", "pine-green", "crimson", "wisteria"]) {
             const block = experienceCss.match(
