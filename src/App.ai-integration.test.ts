@@ -87,6 +87,10 @@ vi.mock("@tauri-apps/api/window", () => ({
         onDragDropEvent: vi.fn(async () => () => undefined),
         onCloseRequested: vi.fn(async () => () => undefined),
         onFocusChanged: vi.fn(async () => () => undefined),
+        onResized: vi.fn(async () => () => undefined),
+        isMaximized: vi.fn(async () => false),
+        minimize: vi.fn(async () => undefined),
+        toggleMaximize: vi.fn(async () => undefined),
         close: vi.fn(async () => undefined),
     }),
 }));

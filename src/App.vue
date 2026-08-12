@@ -19,6 +19,7 @@ import SettingsPanel from "./components/SettingsPanel.vue";
 import StatusBar from "./components/StatusBar.vue";
 import TableOfContents from "./components/TableOfContents.vue";
 import ThemePicker from "./components/ThemePicker.vue";
+import WindowControls from "./components/WindowControls.vue";
 import WorkspaceSidebar from "./components/WorkspaceSidebar.vue";
 import MoraEditor from "./components/editor/MoraEditor.vue";
 import MermaidViewer from "./components/editor/MermaidViewer.vue";
@@ -2230,7 +2231,7 @@ function stringifyError(error: unknown) {
 
 <template>
     <main class="app-shell">
-        <nav class="menu-bar" aria-label="应用菜单">
+        <nav class="menu-bar custom-titlebar" aria-label="应用菜单">
             <details class="menu-group" @toggle="handleMenuToggle">
                 <summary>文件</summary>
                 <div class="menu-popup">
@@ -2382,7 +2383,11 @@ function stringifyError(error: unknown) {
                 </div>
             </details>
 
-            <div class="menu-document-name" :title="title">
+            <div
+                class="menu-document-name"
+                :title="title"
+                data-tauri-drag-region
+            >
                 {{ title }}
             </div>
 
@@ -2416,6 +2421,7 @@ function stringifyError(error: unknown) {
                     垂直双栏
                 </button>
             </div>
+            <WindowControls v-if="tauriRuntime" />
         </nav>
 
         <div class="main-body">

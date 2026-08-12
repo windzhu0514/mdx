@@ -1035,7 +1035,11 @@ button.mermaid-preview:focus-visible {
     }
 
     .menu-bar {
-        overflow-x: auto;
+        overflow: visible;
+    }
+
+    .menu-group summary {
+        padding-inline: 8px;
     }
 
     .setting-field {

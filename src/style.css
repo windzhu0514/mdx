@@ -456,8 +456,10 @@ summary {
 .menu-bar {
     display: flex;
     align-items: center;
-    gap: 4px;
-    padding: 8px 16px;
+    height: 42px;
+    flex: 0 0 42px;
+    gap: 2px;
+    padding: 0 0 0 8px;
     background: var(--color-bg-chrome);
     backdrop-filter: blur(24px);
     -webkit-backdrop-filter: blur(24px);
@@ -468,8 +470,11 @@ summary {
 }
 
 .menu-document-name {
+    display: grid;
+    align-self: stretch;
     flex: 1;
     min-width: 0;
+    place-items: center;
     padding-inline: 16px;
     overflow: hidden;
     color: var(--color-text-muted);
@@ -477,6 +482,7 @@ summary {
     font-weight: 600;
     text-align: center;
     text-overflow: ellipsis;
+    user-select: none;
     white-space: nowrap;
 }
 
@@ -669,6 +675,16 @@ summary {
     background: var(--color-bg-surface);
     color: var(--color-primary);
     box-shadow: var(--shadow-sm);
+}
+
+.mode-switch.compact {
+    height: 28px;
+    padding: 2px;
+}
+
+.mode-switch.compact button {
+    padding: 4px 10px;
+    font-size: 12px;
 }
 
 /* Main Note Panel */

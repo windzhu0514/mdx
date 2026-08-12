@@ -132,6 +132,10 @@ const mocks = vi.hoisted(() => ({
                 return () => undefined;
             },
         ),
+        onResized: vi.fn(async () => () => undefined),
+        isMaximized: vi.fn(async () => false),
+        minimize: vi.fn(async () => undefined),
+        toggleMaximize: vi.fn(async () => undefined),
         close: mocks.windowClose,
     })),
     invoke: vi.fn(async (command: string, args?: unknown) => {
@@ -724,6 +728,7 @@ afterEach(() => {
 describe("App Web 预览启动", () => {
     it("按 Markdown、Word、PDF、打印顺序提供导出，并在取消时不调用 Tauri", async () => {
         const host = await mountApp();
+        expect(host.querySelector(".window-controls")).toBeNull();
         findButton(host, "新建文档")?.click();
         await nextTick();
 
