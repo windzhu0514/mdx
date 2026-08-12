@@ -85,9 +85,9 @@ describe("mermaidPreview", () => {
         const preview = createMermaidPreview(mermaid);
 
         expect(mermaid.initialize).not.toHaveBeenCalled();
-        document.documentElement.dataset.theme = "light";
+        document.documentElement.dataset.theme = "xuan-white";
         preview("mermaid", "flowchart LR\nA --> B", vi.fn());
-        document.documentElement.dataset.theme = "dark";
+        document.documentElement.dataset.theme = "dai-blue";
         preview("mermaid", "flowchart LR\nA --> C", vi.fn());
 
         expect(mermaid.initialize).toHaveBeenNthCalledWith(1, {
@@ -109,7 +109,7 @@ describe("mermaidPreview", () => {
             initialize: vi.fn(),
             render: vi.fn(async () => ({ svg: "<svg />" })),
         };
-        document.documentElement.dataset.theme = "dark";
+        document.documentElement.dataset.theme = "dai-blue";
         const diagrams = await (
             mermaidPreview as typeof mermaidPreview & {
                 renderMermaidForExport(

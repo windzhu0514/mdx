@@ -1,4 +1,8 @@
 <script setup lang="ts">
+import { ref } from "vue";
+
+import { useScrollActivity } from "../composables/useScrollActivity";
+
 export type TocItem = {
     level: number;
     text: string;
@@ -11,10 +15,14 @@ const props = defineProps<{
     compact: boolean;
 }>();
 const emit = defineEmits<{ select: [text: string] }>();
+const outlineScrollElement = ref<HTMLElement>();
+
+useScrollActivity(outlineScrollElement);
 </script>
 
 <template>
     <aside
+        ref="outlineScrollElement"
         v-if="props.visible && props.items.length"
         class="toc-sidebar"
         :class="{ 'is-compact': props.compact }"

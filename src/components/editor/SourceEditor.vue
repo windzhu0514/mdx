@@ -8,6 +8,7 @@ import { markdown } from "@codemirror/lang-markdown";
 import { Compartment, EditorState } from "@codemirror/state";
 import { basicSetup, EditorView } from "codemirror";
 import { onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { useScrollActivity } from "../../composables/useScrollActivity";
 import type { EditorCommand, MoraEditorHandle } from "./editorTypes";
 import type { MermaidDiagramSnapshot } from "./mermaidPreview";
 import { transformSourceSelection } from "./sourceTransforms";
@@ -21,6 +22,9 @@ const props = defineProps<{
 const emit = defineEmits<{ "update:modelValue": [markdown: string] }>();
 
 const editorElement = ref<HTMLDivElement>();
+const scrollElement = ref<HTMLElement>();
+useScrollActivity(scrollElement);
+
 const editableCompartment = new Compartment();
 let editorView: EditorView | undefined;
 let applyingExternalValue = false;
@@ -108,6 +112,7 @@ onMounted(() => {
         state: createState(props.modelValue),
         parent: editorElement.value,
     });
+    scrollElement.value = editorView.scrollDOM;
 });
 
 watch(

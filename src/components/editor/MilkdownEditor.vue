@@ -41,6 +41,7 @@ import { selectAll } from "@milkdown/kit/prose/commands";
 import { EditorState, Selection, TextSelection } from "@milkdown/kit/prose/state";
 import { getMarkdown, replaceAll, replaceRange } from "@milkdown/kit/utils";
 import { onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { useScrollActivity } from "../../composables/useScrollActivity";
 import type { EditorCommand, ImageUploadHandler, MoraEditorHandle } from "./editorTypes";
 import {
     createMermaidPreview,
@@ -93,6 +94,8 @@ const renderMermaidPreview = createMermaidPreview(mermaid, (request) =>
 );
 
 const editorElement = ref<HTMLDivElement>();
+useScrollActivity(editorElement);
+
 let crepe: Crepe | undefined;
 let currentMarkdown = props.modelValue;
 let activeDocumentId = props.documentId;

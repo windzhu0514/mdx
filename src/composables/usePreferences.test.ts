@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
     DEFAULT_PREFERENCES,
+    THEME_OPTIONS,
+    isDarkTheme,
     loadPreferences,
     normalizePreferences,
     resolveTheme,
@@ -74,19 +76,35 @@ describe("editor preferences", () => {
         });
     });
 
-    it("resolves the system theme", () => {
-        expect(resolveTheme("system", true)).toBe("dark");
-        expect(resolveTheme("system", false)).toBe("light");
-        expect(resolveTheme("light", true)).toBe("light");
+    it("exposes the six writing themes in display order", () => {
+        expect(THEME_OPTIONS).toEqual([
+            { id: "xuan-white", label: "宣白" },
+            { id: "ink-black", label: "墨黑" },
+            { id: "dai-blue", label: "黛蓝" },
+            { id: "pine-green", label: "松青" },
+            { id: "crimson", label: "绛红" },
+            { id: "wisteria", label: "藤紫" },
+        ]);
     });
 
-    it("persists the monochrome reading theme", () => {
-        const storage = memoryStorage();
-        const preferences = normalizePreferences({ theme: "monochrome" });
+    it("resolves system mode and classifies concrete dark themes", () => {
+        expect(resolveTheme("system", true)).toBe("ink-black");
+        expect(resolveTheme("system", false)).toBe("xuan-white");
+        expect(resolveTheme("dai-blue", false)).toBe("dai-blue");
+        expect(isDarkTheme("ink-black")).toBe(true);
+        expect(isDarkTheme("dai-blue")).toBe(true);
+        expect(isDarkTheme("crimson")).toBe(false);
+    });
 
-        expect(preferences.theme).toBe("monochrome");
+    it("persists a concrete theme and migrates legacy theme values", () => {
+        const storage = memoryStorage();
+        const preferences = normalizePreferences({ theme: "wisteria" });
+
+        expect(preferences.theme).toBe("wisteria");
         savePreferences(storage, preferences);
-        expect(loadPreferences(storage).theme).toBe("monochrome");
-        expect(resolveTheme("monochrome", true)).toBe("monochrome");
+        expect(loadPreferences(storage).theme).toBe("wisteria");
+        expect(normalizePreferences({ theme: "light" }).theme).toBe("xuan-white");
+        expect(normalizePreferences({ theme: "dark" }).theme).toBe("ink-black");
+        expect(normalizePreferences({ theme: "monochrome" }).theme).toBe("xuan-white");
     });
 });

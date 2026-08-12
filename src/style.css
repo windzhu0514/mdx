@@ -61,6 +61,7 @@ body,
 #app {
     width: 100%;
     height: 100%;
+    overflow: hidden;
     background: var(--color-bg-base);
     background-image: var(--app-background-image);
     font-family: var(--font-sans);
@@ -293,6 +294,97 @@ summary {
     right: 0;
     bottom: 0;
     box-shadow: var(--shadow-lg);
+}
+
+:where(
+    .workspace-tree,
+    .toc-sidebar,
+    .markdown-editor .milkdown-editor,
+    .markdown-editor .cm-scroller
+) {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+}
+
+:where(
+    .workspace-tree,
+    .toc-sidebar,
+    .markdown-editor .milkdown-editor,
+    .markdown-editor .cm-scroller
+)::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+:where(
+    .workspace-tree,
+    .toc-sidebar,
+    .markdown-editor .milkdown-editor,
+    .markdown-editor .cm-scroller
+)::-webkit-scrollbar-track,
+:where(
+    .workspace-tree,
+    .toc-sidebar,
+    .markdown-editor .milkdown-editor,
+    .markdown-editor .cm-scroller
+)::-webkit-scrollbar-corner {
+    background: transparent;
+}
+
+:where(
+    .workspace-tree,
+    .toc-sidebar,
+    .markdown-editor .milkdown-editor,
+    .markdown-editor .cm-scroller
+)::-webkit-scrollbar-button {
+    width: 0;
+    height: 0;
+    display: none;
+}
+
+:where(
+    .workspace-tree,
+    .toc-sidebar,
+    .markdown-editor .milkdown-editor,
+    .markdown-editor .cm-scroller
+)::-webkit-scrollbar-thumb {
+    border: 2px solid transparent;
+    border-radius: 999px;
+    background: transparent;
+    background-clip: padding-box;
+}
+
+:where(
+    .workspace-tree,
+    .toc-sidebar,
+    .markdown-editor .milkdown-editor,
+    .markdown-editor .cm-scroller
+)[data-scroll-hover="true"],
+:where(
+    .workspace-tree,
+    .toc-sidebar,
+    .markdown-editor .milkdown-editor,
+    .markdown-editor .cm-scroller
+)[data-scroll-active="true"] {
+    scrollbar-color: color-mix(in srgb, var(--color-text-muted) 52%, transparent)
+        transparent;
+}
+
+:where(
+        .workspace-tree,
+        .toc-sidebar,
+        .markdown-editor .milkdown-editor,
+        .markdown-editor .cm-scroller
+    )[data-scroll-hover="true"]::-webkit-scrollbar-thumb,
+:where(
+        .workspace-tree,
+        .toc-sidebar,
+        .markdown-editor .milkdown-editor,
+        .markdown-editor .cm-scroller
+    )[data-scroll-active="true"]::-webkit-scrollbar-thumb {
+    border: 2px solid transparent;
+    background: color-mix(in srgb, var(--color-text-muted) 52%, transparent);
+    background-clip: padding-box;
 }
 
 .toc-header {

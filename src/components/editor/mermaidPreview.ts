@@ -1,3 +1,5 @@
+import { isDarkTheme } from "../../composables/usePreferences";
+
 export type MermaidRenderResult = {
     svg: string;
     bindFunctions?: (element: Element) => void;
@@ -96,8 +98,9 @@ export async function renderMermaidForExport(
     mermaid: MermaidRenderer,
     sources: readonly string[],
 ): Promise<MermaidDiagramSnapshot[]> {
-    const restoreTheme =
-        document.documentElement.dataset.theme === "dark" ? "dark" : "neutral";
+    const restoreTheme = isDarkTheme(document.documentElement.dataset.theme)
+        ? "dark"
+        : "neutral";
     mermaid.initialize({
         startOnLoad: false,
         securityLevel: "strict",
@@ -157,8 +160,9 @@ export function createMermaidPreview(
             return null;
         }
 
-        const theme =
-            document.documentElement.dataset.theme === "dark" ? "dark" : "neutral";
+        const theme = isDarkTheme(document.documentElement.dataset.theme)
+            ? "dark"
+            : "neutral";
         if (theme !== initializedTheme) {
             mermaid.initialize({
                 startOnLoad: false,

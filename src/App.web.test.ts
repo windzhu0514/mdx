@@ -765,9 +765,33 @@ describe("App Web 预览启动", () => {
         expect(mocks.invoke.mock.calls).toHaveLength(invokeCallsBeforeExport);
     });
 
-    it("在 Tauri 中把当前深色主题同步给原生窗口", async () => {
+    it("从视图菜单打开底部主题选择，立即切换并关闭", async () => {
+        const host = await mountApp();
+
+        findButton(host, "选择主题...")?.click();
+        await nextTick();
+        expect(host.querySelector(".theme-picker")).not.toBeNull();
+
+        host.querySelector<HTMLButtonElement>('[data-theme-choice="wisteria"]')?.click();
+        await nextTick();
+        expect(document.documentElement.dataset.theme).toBe("wisteria");
+        expect(
+            JSON.parse(localStorage.getItem("mora.preferences.v1") ?? "{}"),
+        ).toMatchObject({ theme: "wisteria" });
+
+        host.querySelector<HTMLButtonElement>(
+            'button[aria-label="关闭主题选择"]',
+        )?.click();
+        await nextTick();
+        expect(host.querySelector(".theme-picker")).toBeNull();
+    });
+
+    it("在 Tauri 中把黛蓝主题同步为原生深色窗口", async () => {
         mocks.isTauri.mockReturnValue(true);
-        localStorage.setItem("mora.preferences.v1", JSON.stringify({ theme: "dark" }));
+        localStorage.setItem(
+            "mora.preferences.v1",
+            JSON.stringify({ theme: "dai-blue" }),
+        );
 
         await mountApp();
 

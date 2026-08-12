@@ -1,7 +1,18 @@
 import { ref, watch } from "vue";
 
-export type ThemePreference = "system" | "light" | "dark" | "monochrome";
+export type ThemeId =
+    "xuan-white" | "ink-black" | "dai-blue" | "pine-green" | "crimson" | "wisteria";
+export type ThemePreference = "system" | ThemeId;
 export type FontPreference = "sans" | "serif" | "mono";
+
+export const THEME_OPTIONS: ReadonlyArray<{ id: ThemeId; label: string }> = [
+    { id: "xuan-white", label: "宣白" },
+    { id: "ink-black", label: "墨黑" },
+    { id: "dai-blue", label: "黛蓝" },
+    { id: "pine-green", label: "松青" },
+    { id: "crimson", label: "绛红" },
+    { id: "wisteria", label: "藤紫" },
+];
 
 export type EditorPreferences = {
     theme: ThemePreference;
@@ -17,7 +28,7 @@ export type EditorPreferences = {
 export type PreferenceStorage = Pick<Storage, "getItem" | "setItem">;
 
 const STORAGE_KEY = "mora.preferences.v1";
-const themes: ThemePreference[] = ["system", "light", "dark", "monochrome"];
+const themes: ThemePreference[] = ["system", ...THEME_OPTIONS.map(({ id }) => id)];
 const fonts: FontPreference[] = ["sans", "serif", "mono"];
 
 export const DEFAULT_PREFERENCES: EditorPreferences = {
@@ -41,13 +52,19 @@ function text(value: unknown) {
     return typeof value === "string" ? value.trim() : "";
 }
 
+function normalizeTheme(value: unknown): ThemePreference {
+    if (value === "light" || value === "monochrome") return "xuan-white";
+    if (value === "dark") return "ink-black";
+    return themes.includes(value as ThemePreference)
+        ? (value as ThemePreference)
+        : DEFAULT_PREFERENCES.theme;
+}
+
 export function normalizePreferences(
     value: Partial<Record<keyof EditorPreferences, unknown>>,
 ): EditorPreferences {
     return {
-        theme: themes.includes(value.theme as ThemePreference)
-            ? (value.theme as ThemePreference)
-            : DEFAULT_PREFERENCES.theme,
+        theme: normalizeTheme(value.theme),
         fontFamily: fonts.includes(value.fontFamily as FontPreference)
             ? (value.fontFamily as FontPreference)
             : DEFAULT_PREFERENCES.fontFamily,
@@ -87,7 +104,11 @@ export function savePreferences(
 }
 
 export function resolveTheme(theme: ThemePreference, prefersDark: boolean) {
-    return theme === "system" ? (prefersDark ? "dark" : "light") : theme;
+    return theme === "system" ? (prefersDark ? "ink-black" : "xuan-white") : theme;
+}
+
+export function isDarkTheme(theme: string | undefined): boolean {
+    return theme === "ink-black" || theme === "dai-blue";
 }
 
 const fontStacks: Record<FontPreference, string> = {

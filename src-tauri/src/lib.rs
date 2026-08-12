@@ -10,6 +10,7 @@ mod note_index;
 mod path_identity;
 mod recent_files;
 mod resource_import;
+mod window_state;
 pub mod workspace;
 mod workspace_session;
 
@@ -845,9 +846,27 @@ fn new_resource_id() -> String {
 }
 
 pub fn run() {
+    let window_state_flags = window_state::tracked_state_flags();
     tauri::Builder::default()
         .manage(AiRequestState::default())
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(window_state_flags)
+                .skip_initial_state("main")
+                .build(),
+        )
         .plugin(tauri_plugin_dialog::init())
+        .on_page_load(|webview, payload| {
+            if webview.label() == "main"
+                && matches!(payload.event(), tauri::webview::PageLoadEvent::Finished)
+            {
+                let _ = window_state::fit_and_show_main_window(webview.app_handle());
+            }
+        })
+        .setup(|app| {
+            let _ = window_state::restore_main_window_state(app);
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             ai::save_ai_api_key,
             ai::delete_ai_api_key,

@@ -1,4 +1,6 @@
-export type MermaidExportTheme = "light" | "dark" | "monochrome";
+import { isDarkTheme, type ThemeId } from "../../composables/usePreferences";
+
+export type MermaidExportTheme = ThemeId | "light";
 
 const DEFAULT_SIZE = { width: 1200, height: 800 } as const;
 
@@ -70,7 +72,7 @@ export async function svgToPngBase64(
         const context = canvas.getContext("2d");
         if (!context) throw new Error("当前环境无法创建 PNG 画布");
 
-        context.fillStyle = theme === "dark" ? "#111827" : "#ffffff";
+        context.fillStyle = isDarkTheme(theme) ? "#111827" : "#ffffff";
         context.fillRect(0, 0, outputWidth, outputHeight);
         context.drawImage(image, 0, 0, outputWidth, outputHeight);
         const dataUrl = canvas.toDataURL("image/png");

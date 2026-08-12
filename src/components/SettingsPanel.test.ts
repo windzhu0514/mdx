@@ -24,7 +24,7 @@ function settingsProps() {
 }
 
 describe("SettingsPanel", () => {
-    it("emits monochrome theme selection", async () => {
+    it("offers system mode and all six themes, then emits a concrete selection", async () => {
         const update = vi.fn();
         const host = document.createElement("div");
         document.body.append(host);
@@ -36,13 +36,19 @@ describe("SettingsPanel", () => {
         const select = host.querySelector<HTMLSelectElement>("select");
         if (!select) throw new Error("未找到主题选择框");
 
-        expect(Array.from(select.options).map((option) => option.value)).toContain(
-            "monochrome",
-        );
-        select.value = "monochrome";
+        expect(Array.from(select.options).map((option) => option.value)).toEqual([
+            "system",
+            "xuan-white",
+            "ink-black",
+            "dai-blue",
+            "pine-green",
+            "crimson",
+            "wisteria",
+        ]);
+        select.value = "wisteria";
         select.dispatchEvent(new Event("change", { bubbles: true }));
         await nextTick();
 
-        expect(update).toHaveBeenCalledWith({ theme: "monochrome" });
+        expect(update).toHaveBeenCalledWith({ theme: "wisteria" });
     });
 });

@@ -49,7 +49,7 @@ describe("Mermaid PNG export", () => {
 
         const result = await svgToPngBase64(
             '<svg viewBox="0 0 800 500"><rect width="800" height="500" /></svg>',
-            "dark",
+            "dai-blue",
         );
 
         expect(result).toBe("cG5nLWRhdGE=");

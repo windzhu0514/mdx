@@ -28,6 +28,7 @@ export function owningRoot(path: string, roots: string[]) {
 <script setup lang="ts">
 import { computed, nextTick, ref, type ComponentPublicInstance } from "vue";
 
+import { useScrollActivity } from "../composables/useScrollActivity";
 import type { OpenDocument } from "../composables/useDocumentSession";
 import type { WorkspaceFolder, WorkspaceTreeEntry } from "../types/workspace";
 
@@ -72,6 +73,9 @@ const rovingKey = ref<string | null>(null);
 const drag = ref<{ pointerId: number; startX: number; startWidth: number } | null>(null);
 const treeItems = new Map<string, HTMLElement>();
 const openFolderButton = ref<HTMLButtonElement | null>(null);
+const workspaceScrollElement = ref<HTMLDivElement>();
+
+useScrollActivity(workspaceScrollElement);
 
 function clampWidth(value: number) {
     return Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, value));
@@ -377,7 +381,7 @@ function onPointerUp(event: PointerEvent) {
         <header class="workspace-sidebar-header">
             <span>工作区</span>
         </header>
-        <div class="workspace-tree">
+        <div ref="workspaceScrollElement" class="workspace-tree">
             <section
                 v-if="!documentRows.length"
                 class="workspace-section"
@@ -411,7 +415,9 @@ function onPointerUp(event: PointerEvent) {
                             :data-tree-key="row.key"
                             :aria-label="rowAriaLabel(row)"
                             :aria-level="row.depth"
-                            :aria-expanded="row.expanded === null ? undefined : row.expanded"
+                            :aria-expanded="
+                                row.expanded === null ? undefined : row.expanded
+                            "
                             :aria-current="row.active ? 'page' : undefined"
                             :tabindex="rowTabindex(row)"
                             @click="selectRow(row)"
@@ -420,9 +426,14 @@ function onPointerUp(event: PointerEvent) {
                             <div
                                 class="workspace-tree-item"
                                 :class="{ active: row.active }"
-                                :style="{ paddingInlineStart: `${8 + (row.depth - 1) * 14}px` }"
+                                :style="{
+                                    paddingInlineStart: `${8 + (row.depth - 1) * 14}px`,
+                                }"
                             >
-                                <span v-if="row.expanded !== null" class="workspace-disclosure">
+                                <span
+                                    v-if="row.expanded !== null"
+                                    class="workspace-disclosure"
+                                >
                                     {{ row.expanded ? "⌄" : "›" }}
                                 </span>
                                 <span class="workspace-name">{{ row.label }}</span>
@@ -434,7 +445,10 @@ function onPointerUp(event: PointerEvent) {
                                     {{ status }}
                                 </span>
                             </div>
-                            <span v-if="row.kind === 'document'" class="workspace-row-actions">
+                            <span
+                                v-if="row.kind === 'document'"
+                                class="workspace-row-actions"
+                            >
                                 <button
                                     type="button"
                                     class="workspace-row-action"
@@ -445,7 +459,10 @@ function onPointerUp(event: PointerEvent) {
                                     ×
                                 </button>
                             </span>
-                            <span v-else-if="row.kind === 'folder'" class="workspace-row-actions">
+                            <span
+                                v-else-if="row.kind === 'folder'"
+                                class="workspace-row-actions"
+                            >
                                 <button
                                     type="button"
                                     class="workspace-row-action"

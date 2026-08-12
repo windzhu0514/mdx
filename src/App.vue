@@ -18,6 +18,7 @@ import RecentFilesDialog from "./components/RecentFilesDialog.vue";
 import SettingsPanel from "./components/SettingsPanel.vue";
 import StatusBar from "./components/StatusBar.vue";
 import TableOfContents from "./components/TableOfContents.vue";
+import ThemePicker from "./components/ThemePicker.vue";
 import WorkspaceSidebar from "./components/WorkspaceSidebar.vue";
 import MoraEditor from "./components/editor/MoraEditor.vue";
 import MermaidViewer from "./components/editor/MermaidViewer.vue";
@@ -42,7 +43,7 @@ import {
     type OpenDocument,
     type SessionDocument,
 } from "./composables/useDocumentSession";
-import { usePreferences } from "./composables/usePreferences";
+import { isDarkTheme, usePreferences, type ThemeId } from "./composables/usePreferences";
 import type { HistoryListItem, HistorySnapshot } from "./types/history";
 import type { NoteListItem, NoteSearchResult } from "./types/library";
 import type { ResourceSaveData } from "./types/mdx";
@@ -141,6 +142,7 @@ const historyItems = ref<HistoryListItem[]>([]);
 const historyLoading = ref(false);
 let historyRequestId = 0;
 const showSettings = ref(false);
+const showThemePicker = ref(false);
 const mermaidViewerRequest = ref<MermaidViewerRequest | null>(null);
 const mermaidExporting = ref(false);
 const mermaidExportError = ref("");
@@ -158,7 +160,7 @@ watch(
     resolvedTheme,
     (theme) => {
         if (!tauriRuntime) return;
-        void setTheme(theme === "dark" ? "dark" : "light").catch((error: unknown) => {
+        void setTheme(isDarkTheme(theme) ? "dark" : "light").catch((error: unknown) => {
             console.warn("同步原生窗口主题失败", error);
         });
     },
@@ -669,6 +671,13 @@ const viewMenu = computed<MarkdownCommand[]>(() => [
         action: openHistoryPanel,
         disabled: !activeDocument.value,
     },
+    {
+        id: "view.theme",
+        label: "选择主题...",
+        action: () => {
+            showThemePicker.value = true;
+        },
+    },
     { id: "view.settings", label: "偏好设置...", action: openSettingsPanel },
     {
         id: "view.cursor-start",
@@ -892,6 +901,10 @@ async function refreshAiKeyConfigured() {
 async function openSettingsPanel() {
     showSettings.value = true;
     await refreshAiKeyConfigured();
+}
+
+function selectTheme(theme: ThemeId) {
+    updatePreferences({ theme });
 }
 
 async function saveAiApiKey(apiKey: string) {
@@ -2557,6 +2570,12 @@ function stringifyError(error: unknown) {
             :export-error="mermaidExportError"
             @close="closeMermaidViewer"
             @export="exportMermaidDiagram"
+        />
+        <ThemePicker
+            v-if="showThemePicker"
+            :theme="resolvedTheme"
+            @select="selectTheme"
+            @close="showThemePicker = false"
         />
         <StatusBar
             :error-message="errorMessage"
