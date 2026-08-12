@@ -56,7 +56,7 @@ describe("模态面板关闭按钮", () => {
                 loading: false,
                 query: "",
             },
-            label: "关闭笔记库",
+            label: "关闭工作区查找",
         },
     ])("$name 提供明确的无障碍名称", ({ component, props, label }) => {
         const host = mountPanel(component, props);

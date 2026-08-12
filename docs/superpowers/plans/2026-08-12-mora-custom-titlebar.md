@@ -325,3 +325,97 @@ src-tauri/target/release/bundle/nsis/Mora_0.1.0_x64-setup.exe
 ```
 
 Run `git diff --check` and `git status --short`. Confirm `TODO.md`, `examples/`, and `src-tauri/target-scrollbar-build/` remain outside this feature's change scope.
+
+---
+
+### Task 5: Refine the Editor Mode Buttons
+
+**Files:**
+- Modify: `src/App.markdown-layout.test.ts`
+- Modify: `src/App.vue`
+- Modify: `src/style.css`
+
+**Interfaces:**
+- Consumes: the existing `editorMode`, `sourcePreview`, `setEditorMode()`, and `setSourcePreview()` behavior.
+- Produces: three compact icon buttons for editing, source, and split view, with complete `title` and `aria-label` descriptions.
+
+- [ ] **Step 1: Write failing markup and style tests**
+
+Assert that the three buttons expose `title` and `aria-label` values “所见即所得”, “仅源码”, and “垂直双栏”; assert each contains an `aria-hidden` inline SVG and no visible text label. Assert that `.mode-switch.compact` is one bordered segmented group with no gaps, while each button is `28px × 28px`.
+
+- [ ] **Step 2: Run the focused test and verify RED**
+
+Run: `npm test -- --run src/App.markdown-layout.test.ts`
+
+Expected: FAIL because the current buttons still render text instead of inline SVG icons.
+
+- [ ] **Step 3: Implement the minimal markup and CSS change**
+
+Keep the complete tooltip/accessibility attributes without changing the existing click handlers or active-state expressions. Replace only the visible labels with three inline SVG icons and refine the compact styles. Do not add a component, dependency, tooltip library, or new mode state.
+
+- [ ] **Step 4: Run focused and full verification**
+
+Run the focused test, then the full test suite and the three mandatory build commands. Preserve `TODO.md`, `examples/`, and `src-tauri/target-scrollbar-build/` outside the change scope.
+
+---
+
+### Task 6: Reorganize File, Edit, and View Menus
+
+**Files:**
+- Modify: `src/App.web.test.ts`
+- Modify: `src/App.vue`
+- Modify: `src/components/LibraryPanel.vue`
+- Modify: `src/components/CommandPalette.test.ts`
+- Modify: `src/App.ai-integration.test.ts`
+- Modify: `src/App.editor-integration.test.ts`
+
+**Interfaces:**
+- Consumes: existing `openLibrary`, `openHistoryPanel`, `openSettingsPanel`, file operations, theme picker, and command palette generation.
+- Produces: coherent file/edit/view menus and matching command palette categories without changing command behavior.
+
+- [ ] **Step 1: Write failing menu-structure tests**
+
+Mount `App.vue` in Web mode and assert that file-menu labels contain no `...`, include “历史版本” after “另存为”, and exclude “工作区查找”. Assert that edit-menu labels order “查找”, “工作区查找”, “替换”, place “偏好设置” last, and exclude old “笔记库与全文搜索...”. Assert that view-menu labels contain no `...` and exclude both cursor movement commands.
+
+- [ ] **Step 2: Run the focused test and verify RED**
+
+Run: `npm test -- --run src/App.web.test.ts`
+
+Expected: FAIL because the current labels and menu ownership still use the old structure.
+
+- [ ] **Step 3: Apply the minimal command-data changes**
+
+Rename file/view labels, move the existing actions to `edit.workspace-search`, `file.history`, and `edit.settings`, remove the two cursor menu entries, and update `LibraryPanel.vue` title/close-label copy to “工作区查找”. Do not change the underlying search, history, settings, or keyboard logic.
+
+- [ ] **Step 4: Update behavior tests for intentional labels and IDs**
+
+Replace old file/view labels and command IDs in integration and command-palette fixtures. Keep all existing behavior assertions intact.
+
+- [ ] **Step 5: Run focused and full verification**
+
+Run the focused menu, AI, editor-integration, and command-palette tests, then run the full test suite and all three mandatory build commands. Preserve unrelated working-tree changes.
+
+---
+
+### Task 7: Align Menu Labels and Keyboard Shortcuts
+
+**Files:**
+- Modify: `src/App.web.test.ts`
+- Modify: `src/App.editor-integration.test.ts`
+- Modify: `src/App.ai-integration.test.ts`
+- Modify: `src/App.markdown-layout.test.ts`
+- Modify: `src/components/CommandPalette.test.ts`
+- Modify: `src/App.vue`
+- Modify: `src/style.css`
+
+- [x] **Step 1: Verify RED for final labels and shortcuts**
+
+Assert the final menu labels, complete shortcut strings, application-level panel actions, editor-focused list commands, and the “垂直双栏” hover hint.
+
+- [x] **Step 2: Implement final command mappings**
+
+Map open folder, workspace, outline, theme, settings, and the three list commands to the confirmed shortcuts. Keep `Ctrl+B` for bold and `Ctrl+K` for links. Increase menu width and keep shortcut labels non-shrinking.
+
+- [x] **Step 3: Run complete verification**
+
+Run the focused tests, full test suite, frontend build, Rust check, Tauri build, and `git diff --check`.

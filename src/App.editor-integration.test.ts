@@ -10,6 +10,7 @@ import { countNonWhitespaceCharacters } from "./utils/text";
 type LowestEditorControls = {
     cancelAi: ReturnType<typeof vi.fn>;
     emitUpdate: (markdown: string) => void;
+    execute: ReturnType<typeof vi.fn>;
     focus: ReturnType<typeof vi.fn>;
     readiness: Promise<void>;
     settlement: Promise<void>;
@@ -164,6 +165,7 @@ function lowestEditorStub(kind: "milkdown" | "source") {
             const controls: LowestEditorControls = {
                 cancelAi: vi.fn(),
                 emitUpdate: (markdown) => emit("update:modelValue", markdown),
+                execute: vi.fn(),
                 focus: vi.fn(),
                 readiness,
                 settlement:
@@ -195,7 +197,7 @@ function lowestEditorStub(kind: "milkdown" | "source") {
                         (diagram) => diagram.source,
                     );
                 },
-                execute: vi.fn(),
+                execute: controls.execute,
                 focus: controls.focus,
                 getMermaidDiagrams: (sources?: readonly string[]) =>
                     Promise.resolve(
@@ -445,7 +447,7 @@ describe("App 编辑器状态集成", () => {
             await vi.waitFor(() => expect(editorValue(host, editorKind)).toBe("A edit"));
             expect(editableMilkdown?.cancelAi).toHaveBeenCalled();
 
-            findButton(host, "另存为...").click();
+            findButton(host, "另存为").click();
             await vi.waitFor(() => {
                 const saveCall = mocks.invoke.mock.calls.find(
                     ([command]) => command === "save_mdx_as",
@@ -474,6 +476,23 @@ describe("App 编辑器状态集成", () => {
 
         expect(openDocumentRow(host, "未命名文档 1")).not.toBeUndefined();
         expect(openDocumentRow(host, "未命名文档 2")).toBeUndefined();
+    });
+
+    it.each([
+        ["无序列表", { ctrlKey: true, key: "l" }, "bulletList"],
+        ["有序列表", { ctrlKey: true, altKey: true, key: "l" }, "orderedList"],
+        ["任务列表", { ctrlKey: true, key: "t" }, "taskList"],
+    ] as const)("%s 快捷键执行对应编辑器命令", async (_label, init, command) => {
+        await mountApp();
+
+        const editableTarget = document.createElement("span");
+        editableTarget.setAttribute("contenteditable", "true");
+        document.querySelector(".markdown-editor")?.append(editableTarget);
+        editableTarget.dispatchEvent(
+            new KeyboardEvent("keydown", { bubbles: true, ...init }),
+        );
+
+        expect(mocks.milkdown?.execute).toHaveBeenCalledWith({ name: command });
     });
 
     it("资源 Blob URL 跨文档切换存活并在关闭所属文档时撤销", async () => {
@@ -518,7 +537,7 @@ describe("App 编辑器状态集成", () => {
         mocks.openedNote = note;
         const host = await mountApp();
 
-        findButton(host, "打开文件...").click();
+        findButton(host, "打开文件").click();
         await vi.waitFor(() => {
             expect(host.querySelector(".menu-document-name")?.textContent?.trim()).toBe(
                 "项目计划",
@@ -541,7 +560,7 @@ describe("App 编辑器状态集成", () => {
         mocks.openedNote = note;
         const host = await mountApp();
 
-        findButton(host, "打开文件...").click();
+        findButton(host, "打开文件").click();
         await vi.waitFor(() =>
             expect(host.querySelector(".menu-document-name")?.textContent).toContain(
                 "文件标题",
@@ -567,7 +586,7 @@ describe("App 编辑器状态集成", () => {
         mocks.saveDialog.mockResolvedValue("C:\\notes\\用户命名.mdx");
         const host = await mountApp();
 
-        findButton(host, "另存为...").click();
+        findButton(host, "另存为").click();
 
         await vi.waitFor(() => {
             const call = mocks.invoke.mock.calls.find(([name]) => name === "save_mdx_as");
@@ -588,7 +607,7 @@ describe("App 编辑器状态集成", () => {
             .querySelector(".milkdown-editor-stub")
             ?.getAttribute("document-id");
 
-        findButton(host, "另存为...").click();
+        findButton(host, "另存为").click();
         await vi.waitFor(() =>
             expect(mocks.invoke.mock.calls.some(([name]) => name === "save_mdx_as")).toBe(
                 true,
@@ -605,7 +624,7 @@ describe("App 编辑器状态集成", () => {
         mocks.openedNote = createNote("   ## 缩进标题\n    ### 非标题");
         const host = await mountApp();
 
-        findButton(host, "打开文件...").click();
+        findButton(host, "打开文件").click();
         await vi.waitFor(() => {
             expect(
                 Array.from(host.querySelectorAll(".toc-list button")).map((button) =>
@@ -619,7 +638,7 @@ describe("App 编辑器状态集成", () => {
         mocks.openedNote = createNote("# 外部\n```ts\n## 伪标题\n```");
         const host = await mountApp();
 
-        findButton(host, "打开文件...").click();
+        findButton(host, "打开文件").click();
         await vi.waitFor(() => {
             expect(
                 Array.from(host.querySelectorAll(".toc-list button")).map((button) =>
@@ -668,7 +687,7 @@ describe("App 编辑器状态集成", () => {
         mocks.openedNote = note;
         const host = await mountApp();
 
-        findButton(host, "打开文件...").click();
+        findButton(host, "打开文件").click();
         await vi.waitFor(() => {
             expect(editorValue(host, "milkdown")).toContain(mocks.objectUrl);
         });
@@ -693,7 +712,7 @@ describe("App 编辑器状态集成", () => {
         expect(mocks.source?.focus).toHaveBeenCalledTimes(1);
 
         const source = mocks.source;
-        findButton(host, "所见即所得编辑").click();
+        findButton(host, "所见即所得").click();
         await nextTick();
         expect(source?.focus).toHaveBeenCalledTimes(1);
         expect(mocks.milkdown?.focus).toHaveBeenCalledTimes(1);
@@ -709,7 +728,7 @@ describe("App 编辑器状态集成", () => {
         mocks.openDialog.mockResolvedValueOnce("C:\\files\\late.png");
         const host = await mountApp();
 
-        findButton(host, "导入图片或附件...").click();
+        findButton(host, "导入图片或附件").click();
         await vi.waitFor(() =>
             expect(mocks.invoke).toHaveBeenCalledWith("import_resource", {
                 path: "C:\\files\\late.png",
@@ -738,7 +757,7 @@ describe("App 编辑器状态集成", () => {
         mocks.saveDialog
             .mockResolvedValueOnce("C:\\notes\\second.mdx")
             .mockResolvedValueOnce("C:\\notes\\first.mdx");
-        findButton(host, "另存为...").click();
+        findButton(host, "另存为").click();
         await vi.waitFor(() =>
             expect(
                 mocks.invoke.mock.calls.filter(([command]) => command === "save_mdx_as"),
@@ -747,7 +766,7 @@ describe("App 编辑器状态集成", () => {
         openDocumentRow(host, "未命名文档 1")?.click();
         await nextTick();
         expect(editorValue(host, "milkdown")).toBe("");
-        findButton(host, "另存为...").click();
+        findButton(host, "另存为").click();
         await vi.waitFor(() =>
             expect(
                 mocks.invoke.mock.calls.filter(([command]) => command === "save_mdx_as"),
@@ -784,7 +803,7 @@ describe("App PDF 打印视图", () => {
         mocks.openDialog.mockResolvedValueOnce([pathA, pathB]);
         mocks.saveDialog.mockResolvedValueOnce("C:\\Exports\\draft.docx");
         const host = await mountApp();
-        findButton(host, "打开文件...").click();
+        findButton(host, "打开文件").click();
         await vi.waitFor(() =>
             expect(host.querySelector(".menu-document-name")?.textContent).toContain(
                 "other",
@@ -811,7 +830,7 @@ describe("App PDF 打印视图", () => {
             ]);
         }
 
-        findButton(host, "导出 Word...").click();
+        findButton(host, "导出 Word").click();
         await vi.waitFor(() => expect(targetEditor?.whenSettledCalls).toBe(1));
         openDocumentRow(host, "other")?.click();
         await nextTick();
@@ -849,7 +868,7 @@ describe("App PDF 打印视图", () => {
         }
         mocks.saveDialog.mockResolvedValueOnce("C:\\Exports\\draft.pdf");
 
-        findButton(host, "导出 PDF...").click();
+        findButton(host, "导出 PDF").click();
         await vi.waitFor(() => expect(targetEditor?.whenSettledCalls).toBe(1));
         targetEditor?.emitUpdate("# 导出后正文");
         await nextTick();
@@ -874,7 +893,7 @@ describe("App PDF 打印视图", () => {
         if (targetEditor) targetEditor.settlement = settled.promise;
         mocks.saveDialog.mockResolvedValueOnce("C:\\Exports\\resource-change.pdf");
 
-        findButton(host, "导出 PDF...").click();
+        findButton(host, "导出 PDF").click();
         await vi.waitFor(() => expect(targetEditor?.whenSettledCalls).toBe(1));
         mocks.openDialog.mockResolvedValueOnce("C:\\files\\late.png");
         mocks.nextImportedResource = Promise.resolve({
@@ -885,7 +904,7 @@ describe("App PDF 打印视图", () => {
             kind: "asset",
             base64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGBgAAAABQABpfZFQAAAAABJRU5ErkJggg==",
         });
-        findButton(host, "导入图片或附件...").click();
+        findButton(host, "导入图片或附件").click();
         await vi.waitFor(() => expect(host.textContent).toContain("已导入 1 个资源"));
         expect(editorValue(host, "milkdown")).toBe("# 正文不变");
         settled.resolve();
@@ -901,8 +920,8 @@ describe("App PDF 打印视图", () => {
     });
 
     it.each([
-        ["Word", "docx", "导出 Word...", "C:\\Exports\\draft.docx"],
-        ["PDF", "pdf", "导出 PDF...", "C:\\Exports\\draft.pdf"],
+        ["Word", "docx", "导出 Word", "C:\\Exports\\draft.docx"],
+        ["PDF", "pdf", "导出 PDF", "C:\\Exports\\draft.pdf"],
     ] as const)(
         "导出 %s 会调用 export_document，并传递同一快照的完整请求",
         async (_label, format, action, destinationPath) => {
@@ -926,7 +945,7 @@ describe("App PDF 打印视图", () => {
             mocks.openDialog.mockResolvedValueOnce(sourcePath);
             mocks.saveDialog.mockResolvedValueOnce(destinationPath);
             const host = await mountApp();
-            findButton(host, "打开文件...").click();
+            findButton(host, "打开文件").click();
             await vi.waitFor(() =>
                 expect(mocks.invoke).toHaveBeenCalledWith("read_asset", {
                     path: sourcePath,
@@ -1001,7 +1020,7 @@ describe("App PDF 打印视图", () => {
         mocks.openDialog.mockResolvedValueOnce(sourcePath);
         mocks.saveDialog.mockResolvedValueOnce("C:\\Exports\\large.pdf");
         const host = await mountApp();
-        findButton(host, "打开文件...").click();
+        findButton(host, "打开文件").click();
         await vi.waitFor(() =>
             expect(mocks.invoke).toHaveBeenCalledWith("read_asset", {
                 path: sourcePath,
@@ -1010,7 +1029,7 @@ describe("App PDF 打印视图", () => {
         );
         const stringify = vi.spyOn(JSON, "stringify");
 
-        findButton(host, "导出 PDF...").click();
+        findButton(host, "导出 PDF").click();
 
         await vi.waitFor(() =>
             expect(mocks.invoke).toHaveBeenCalledWith(
@@ -1040,7 +1059,7 @@ describe("App PDF 打印视图", () => {
         mocks.openedNotes.set(pathB, createNote("# B", pathB));
         mocks.openDialog.mockResolvedValueOnce([pathA, pathB]);
         const host = await mountApp();
-        findButton(host, "打开文件...").click();
+        findButton(host, "打开文件").click();
         await vi.waitFor(() =>
             expect(host.querySelector(".menu-document-name")?.textContent).toContain("b"),
         );
@@ -1051,7 +1070,7 @@ describe("App PDF 打印视图", () => {
 
         const pendingSave = createDeferred<MdxNote>();
         mocks.nextSave = pendingSave.promise;
-        findButton(host, "导出 Markdown...").click();
+        findButton(host, "导出 Markdown").click();
         await vi.waitFor(() =>
             expect(mocks.invoke.mock.calls.some(([name]) => name === "save_mdx")).toBe(
                 true,
@@ -1076,7 +1095,7 @@ describe("App PDF 打印视图", () => {
         mocks.openedNotes.set(pathB, createNote("# PDF B", pathB));
         mocks.openDialog.mockResolvedValueOnce([pathA, pathB]);
         const host = await mountApp();
-        findButton(host, "打开文件...").click();
+        findButton(host, "打开文件").click();
         await vi.waitFor(() =>
             expect(host.querySelector(".menu-document-name")?.textContent).toContain(
                 "pdf-b",
@@ -1088,7 +1107,7 @@ describe("App PDF 打印视图", () => {
         const readiness = createDeferred<void>();
         if (targetEditor) targetEditor.readiness = readiness.promise;
 
-        findButton(host, "打印...").click();
+        findButton(host, "打印").click();
         await vi.waitFor(() => expect(targetEditor?.whenReadyCalls).toBe(1));
         openDocumentRow(host, "pdf-b")?.click();
         await nextTick();
@@ -1103,14 +1122,14 @@ describe("App PDF 打印视图", () => {
     it("打印期间用文档文件名作为标题且不注入额外正文标题", async () => {
         mocks.openedNote = createNote("## Markdown 中的标题", "C:\\notes\\项目计划.mdx");
         const host = await mountApp();
-        findButton(host, "打开文件...").click();
+        findButton(host, "打开文件").click();
         await vi.waitFor(() =>
             expect(host.querySelector(".menu-document-name")?.textContent).toContain(
                 "项目计划",
             ),
         );
 
-        findButton(host, "打印...").click();
+        findButton(host, "打印").click();
         await vi.waitFor(() => expect(window.print).toHaveBeenCalledTimes(1));
 
         expect(mocks.printTitles).toEqual(["项目计划"]);
@@ -1122,7 +1141,7 @@ describe("App PDF 打印视图", () => {
     it("prevents concurrent exports, recovers from rejected readiness, and releases the print guard", async () => {
         mocks.openedNote = createNote("# 原文");
         const host = await mountApp();
-        findButton(host, "打开文件...").click();
+        findButton(host, "打开文件").click();
         await vi.waitFor(() => expect(editorValue(host, "milkdown")).toBe("# 原文"));
         const editableMilkdown = mocks.milkdown;
         findButton(host, "垂直双栏").click();
@@ -1130,8 +1149,8 @@ describe("App PDF 打印视图", () => {
 
         const deferred = createDeferred<void>();
         if (editableMilkdown) editableMilkdown.readiness = deferred.promise;
-        findButton(host, "打印...").click();
-        findButton(host, "打印...").click();
+        findButton(host, "打印").click();
+        findButton(host, "打印").click();
         await vi.waitFor(() => expect(editableMilkdown?.whenReadyCalls).toBe(1));
 
         deferred.reject(new Error("Crepe 初始化失败"));
@@ -1145,21 +1164,21 @@ describe("App PDF 打印视图", () => {
         expect(host.textContent).not.toContain("未保存");
 
         if (editableMilkdown) editableMilkdown.readiness = Promise.resolve();
-        findButton(host, "打印...").click();
+        findButton(host, "打印").click();
         await vi.waitFor(() => expect(window.print).toHaveBeenCalledTimes(1));
     });
 
     it("waits for the temporary WYSIWYG editor and ignores its normalization until printing ends", async () => {
         mocks.openedNote = createNote("# 原文");
         const host = await mountApp();
-        findButton(host, "打开文件...").click();
+        findButton(host, "打开文件").click();
         await vi.waitFor(() => expect(editorValue(host, "milkdown")).toBe("# 原文"));
         findButton(host, "仅源码").click();
         await nextTick();
 
         const deferred = createDeferred<void>();
         if (mocks.milkdown) mocks.milkdown.readiness = deferred.promise;
-        findButton(host, "打印...").click();
+        findButton(host, "打印").click();
         await vi.waitFor(() => expect(mocks.milkdown?.whenReadyCalls).toBe(1));
 
         expect(window.print).not.toHaveBeenCalled();
@@ -1179,7 +1198,7 @@ describe("App PDF 打印视图", () => {
         const mermaidSettlement = createDeferred<void>();
         if (mocks.milkdown) mocks.milkdown.settlement = mermaidSettlement.promise;
 
-        findButton(host, "打印...").click();
+        findButton(host, "打印").click();
         await vi.waitFor(() => expect(mocks.milkdown?.whenSettledCalls).toBe(1));
         expect(window.print).not.toHaveBeenCalled();
 
@@ -1195,7 +1214,7 @@ describe("App PDF 打印视图", () => {
         findButton(host, mode).click();
         await nextTick();
 
-        findButton(host, "打印...").click();
+        findButton(host, "打印").click();
         await vi.waitFor(() => expect(window.print).toHaveBeenCalledTimes(1));
 
         const printed = mocks.printSnapshots[0];
@@ -1232,7 +1251,7 @@ describe("App 历史版本文档作用域", () => {
         const pendingItems = createDeferred<HistoryListItem[]>();
         mocks.nextHistoryItems = pendingItems.promise;
         const host = await mountApp();
-        findButton(host, "打开文件...").click();
+        findButton(host, "打开文件").click();
         await vi.waitFor(() =>
             expect(host.querySelector(".menu-document-name")?.textContent).toContain(
                 "history-b",
@@ -1240,7 +1259,7 @@ describe("App 历史版本文档作用域", () => {
         );
         openDocumentRow(host, "history-a")?.click();
         await nextTick();
-        findButton(host, "历史版本...").click();
+        findButton(host, "历史版本").click();
         await vi.waitFor(() =>
             expect(mocks.invoke).toHaveBeenCalledWith("list_history", { path: pathA }),
         );
@@ -1277,7 +1296,7 @@ describe("App 历史版本文档作用域", () => {
         const pendingSnapshot = createDeferred<HistorySnapshot>();
         mocks.nextHistorySnapshot = pendingSnapshot.promise;
         const host = await mountApp();
-        findButton(host, "打开文件...").click();
+        findButton(host, "打开文件").click();
         await vi.waitFor(() =>
             expect(host.querySelector(".menu-document-name")?.textContent).toContain(
                 "restore-b",
@@ -1287,7 +1306,7 @@ describe("App 历史版本文档作用域", () => {
         expect(rowA).toBeDefined();
         rowA?.click();
         await nextTick();
-        findButton(host, "历史版本...").click();
+        findButton(host, "历史版本").click();
         await vi.waitFor(() => expect(host.textContent).toContain("A 的历史"));
         findButton(host, "恢复此版本").click();
         await vi.waitFor(() =>
@@ -1351,13 +1370,13 @@ describe("App 历史版本文档作用域", () => {
             createdAt: "2026-08-02T00:00:00Z",
         };
         const host = await mountApp();
-        findButton(host, "打开文件...").click();
+        findButton(host, "打开文件").click();
         await vi.waitFor(() =>
             expect(host.querySelector(".menu-document-name")?.textContent).toContain(
                 "metadata-history",
             ),
         );
-        findButton(host, "历史版本...").click();
+        findButton(host, "历史版本").click();
         await vi.waitFor(() => expect(host.textContent).toContain("元数据历史"));
         findButton(host, "恢复此版本").click();
 

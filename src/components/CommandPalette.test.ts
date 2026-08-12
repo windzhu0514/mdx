@@ -20,7 +20,7 @@ const commands = [
         shortcut: "Ctrl+Z",
         disabled: true,
     },
-    { id: "view.settings", category: "视图", label: "偏好设置...", disabled: false },
+    { id: "edit.settings", category: "编辑", label: "偏好设置", disabled: false },
 ];
 
 let app: App | undefined;
@@ -83,7 +83,7 @@ describe("CommandPalette", () => {
         await nextTick();
         await keydown(input, "Enter");
 
-        expect(run).toHaveBeenCalledWith("view.settings");
+        expect(run).toHaveBeenCalledWith("edit.settings");
     });
 
     it("keeps disabled commands visible but does not execute them", async () => {

@@ -26,13 +26,13 @@ const emit = defineEmits<{
         >
             <header>
                 <div>
-                    <p class="panel-eyebrow">本地笔记库</p>
-                    <h2 id="library-title">笔记与全文搜索</h2>
+                    <p class="panel-eyebrow">当前工作区</p>
+                    <h2 id="library-title">工作区查找</h2>
                 </div>
                 <button
                     type="button"
                     class="icon-button"
-                    aria-label="关闭笔记库"
+                    aria-label="关闭工作区查找"
                     @click="emit('close')"
                 >
                     ×

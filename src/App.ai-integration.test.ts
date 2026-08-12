@@ -177,7 +177,10 @@ let cleanup: (() => void) | undefined;
 
 function findButton(host: HTMLElement, label: string): HTMLButtonElement {
     const button = Array.from(host.querySelectorAll("button")).find(
-        (candidate) => candidate.textContent?.trim() === label,
+        (candidate) =>
+            candidate.textContent?.trim() === label ||
+            candidate.querySelector("span")?.textContent?.trim() === label ||
+            candidate.getAttribute("aria-label") === label,
     );
     if (!button) throw new Error(`未找到按钮：${label}`);
     return button;
@@ -264,7 +267,7 @@ describe("App WYSIWYG AI 接线", () => {
         const provider = editor.aiProvider;
         expect(provider).toBeTypeOf("function");
 
-        findButton(host, "偏好设置...").click();
+        findButton(host, "偏好设置").click();
         await nextTick();
         updateInput(host, "AI Base URL", "https://new.example.com/v1");
         updateInput(host, "AI 模型", "new-model");

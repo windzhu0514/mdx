@@ -398,20 +398,19 @@ function countOccurrences(source: string, query: string) {
 
 const fileMenu = computed<MarkdownCommand[]>(() => [
     { id: "file.new", label: "新建", shortcut: "Ctrl+N", action: createNewNote },
-    { id: "file.open", label: "打开文件...", shortcut: "Ctrl+O", action: openFiles },
-    { id: "file.open-folder", label: "打开文件夹...", action: openFolder },
+    { id: "file.open", label: "打开文件", shortcut: "Ctrl+O", action: openFiles },
+    {
+        id: "file.open-folder",
+        label: "打开文件夹",
+        shortcut: "Ctrl+Shift+O",
+        action: openFolder,
+    },
     {
         id: "file.close",
         label: "关闭当前文档",
         shortcut: "Ctrl+W",
         action: closeActiveDocument,
         disabled: !activeDocument.value,
-    },
-    {
-        id: "file.library",
-        label: "笔记库与全文搜索...",
-        shortcut: "Ctrl+Shift+F",
-        action: openLibrary,
     },
     {
         id: "file.save",
@@ -422,32 +421,38 @@ const fileMenu = computed<MarkdownCommand[]>(() => [
     },
     {
         id: "file.save-as",
-        label: "另存为...",
+        label: "另存为",
         shortcut: "Ctrl+Shift+S",
         action: saveNoteAs,
         disabled: loading.value || !activeDocument.value,
     },
     {
+        id: "file.history",
+        label: "历史版本",
+        action: openHistoryPanel,
+        disabled: !activeDocument.value,
+    },
+    {
         id: "file.export-markdown",
-        label: "导出 Markdown...",
+        label: "导出 Markdown",
         action: exportMarkdown,
         disabled: !activeDocument.value,
     },
     {
         id: "file.export-word",
-        label: "导出 Word...",
+        label: "导出 Word",
         action: () => exportDocument("docx"),
         disabled: !activeDocument.value,
     },
     {
         id: "file.export-pdf",
-        label: "导出 PDF...",
+        label: "导出 PDF",
         action: () => exportDocument("pdf"),
         disabled: !activeDocument.value,
     },
     {
         id: "file.print",
-        label: "打印...",
+        label: "打印",
         action: printDocument,
         disabled: !activeDocument.value,
     },
@@ -504,11 +509,23 @@ const editMenu = computed<MarkdownCommand[]>(() => [
         disabled: !activeDocument.value,
     },
     {
+        id: "edit.workspace-search",
+        label: "工作区查找",
+        shortcut: "Ctrl+Shift+F",
+        action: openLibrary,
+    },
+    {
         id: "edit.replace",
         label: "替换",
         shortcut: "Ctrl+H",
         action: replaceInDocument,
         disabled: !activeDocument.value,
+    },
+    {
+        id: "edit.settings",
+        label: "偏好设置",
+        shortcut: "Ctrl+,",
+        action: openSettingsPanel,
     },
 ]);
 
@@ -590,19 +607,19 @@ const insertMenu = computed<MarkdownCommand[]>(() => [
     {
         id: "insert.bullet-list",
         label: "无序列表",
-        shortcut: "Ctrl+Shift+8",
+        shortcut: "Ctrl+L",
         action: () => runEditorCommand("bulletList"),
     },
     {
         id: "insert.ordered-list",
         label: "有序列表",
-        shortcut: "Ctrl+Shift+7",
+        shortcut: "Ctrl+Alt+L",
         action: () => runEditorCommand("orderedList"),
     },
     {
         id: "insert.task-list",
         label: "任务列表",
-        shortcut: "Ctrl+Shift+T",
+        shortcut: "Ctrl+T",
         action: () => runEditorCommand("taskList"),
     },
     {
@@ -634,14 +651,14 @@ const insertMenu = computed<MarkdownCommand[]>(() => [
         shortcut: "Ctrl+Shift+I",
         action: insertImageReference,
     },
-    { id: "insert.resource", label: "导入图片或附件...", action: chooseResources },
+    { id: "insert.resource", label: "导入图片或附件", action: chooseResources },
     { id: "insert.table", label: "表格", action: insertTable },
 ]);
 
 const viewMenu = computed<MarkdownCommand[]>(() => [
     {
         id: "view.wysiwyg",
-        label: "所见即所得编辑",
+        label: "所见即所得",
         shortcut: "Alt+1",
         action: () => setEditorMode("wysiwyg"),
         disabled: !activeDocument.value,
@@ -661,38 +678,25 @@ const viewMenu = computed<MarkdownCommand[]>(() => [
         disabled: !activeDocument.value,
     },
     {
+        id: "view.toggle-workspace",
+        label: "工作区",
+        shortcut: "Ctrl+Shift+B",
+        action: toggleWorkspacePanel,
+    },
+    {
         id: "view.toggle-outline",
-        label: outlineVisible.value ? "隐藏目录" : "显示目录",
+        label: "目录",
+        shortcut: "Ctrl+Shift+J",
         action: toggleOutlinePanel,
         disabled: !outlineAvailable.value,
     },
     {
-        id: "view.history",
-        label: "历史版本...",
-        action: openHistoryPanel,
-        disabled: !activeDocument.value,
-    },
-    {
         id: "view.theme",
-        label: "选择主题...",
+        label: "主题",
+        shortcut: "Ctrl+Shift+T",
         action: () => {
             showThemePicker.value = true;
         },
-    },
-    { id: "view.settings", label: "偏好设置...", action: openSettingsPanel },
-    {
-        id: "view.cursor-start",
-        label: "光标移到文首",
-        shortcut: "Ctrl+Home",
-        action: () => editorRef.value?.moveCursor("start"),
-        disabled: !activeDocument.value,
-    },
-    {
-        id: "view.cursor-end",
-        label: "光标移到文末",
-        shortcut: "Ctrl+End",
-        action: () => editorRef.value?.moveCursor("end"),
-        disabled: !activeDocument.value,
     },
 ]);
 
@@ -1905,20 +1909,46 @@ function handleWindowKeyDown(event: KeyboardEvent) {
     }
 
     if (event.ctrlKey || event.metaKey) {
+        const isEditorShortcut =
+            event.target instanceof Element &&
+            event.target.closest(".markdown-editor") !== null &&
+            ((key === "l" && !event.shiftKey) ||
+                (key === "t" && !event.shiftKey && !event.altKey));
         const isApplicationShortcut =
             key === "s" ||
             key === "n" ||
             key === "o" ||
             key === "w" ||
             key === "f" ||
+            key === "," ||
+            (event.shiftKey && (key === "b" || key === "j" || key === "t")) ||
             (key === "h" && !event.shiftKey);
 
-        if (isTextInputTarget(event.target) && !isApplicationShortcut) {
+        if (
+            isTextInputTarget(event.target) &&
+            !isApplicationShortcut &&
+            !isEditorShortcut
+        ) {
             return;
         }
 
         // File commands
-        if (key === "s") {
+        if (key === "o" && event.shiftKey) {
+            event.preventDefault();
+            void openFolder();
+        } else if (key === "b" && event.shiftKey) {
+            event.preventDefault();
+            toggleWorkspacePanel();
+        } else if (key === "j" && event.shiftKey) {
+            event.preventDefault();
+            toggleOutlinePanel();
+        } else if (key === "t" && event.shiftKey) {
+            event.preventDefault();
+            showThemePicker.value = true;
+        } else if (key === "," && !event.shiftKey && !event.altKey) {
+            event.preventDefault();
+            void openSettingsPanel();
+        } else if (key === "s") {
             event.preventDefault();
             if (event.shiftKey) saveNoteAs();
             else saveNote();
@@ -1980,7 +2010,7 @@ function handleWindowKeyDown(event: KeyboardEvent) {
         } else if (key === "6") {
             event.preventDefault();
             runEditorCommand("heading", { level: 6 });
-        } else if (key === "b") {
+        } else if (key === "b" && !event.shiftKey) {
             event.preventDefault();
             runEditorCommand("bold");
         } else if (key === "i" && !event.shiftKey) {
@@ -1992,13 +2022,13 @@ function handleWindowKeyDown(event: KeyboardEvent) {
         } else if (key === "`") {
             event.preventDefault();
             runEditorCommand("code");
-        } else if (key === "8" && event.shiftKey) {
-            event.preventDefault();
-            runEditorCommand("bulletList");
-        } else if (key === "7" && event.shiftKey) {
+        } else if (key === "l" && event.altKey && !event.shiftKey) {
             event.preventDefault();
             runEditorCommand("orderedList");
-        } else if (key === "t" && event.shiftKey) {
+        } else if (key === "l" && !event.altKey && !event.shiftKey) {
+            event.preventDefault();
+            runEditorCommand("bulletList");
+        } else if (key === "t" && !event.shiftKey && !event.altKey) {
             event.preventDefault();
             runEditorCommand("taskList");
         } else if (key === "k") {
@@ -2396,9 +2426,18 @@ function stringifyError(error: unknown) {
                     type="button"
                     :disabled="!activeDocument"
                     :class="{ active: editorMode === 'wysiwyg' }"
+                    aria-label="所见即所得"
+                    title="所见即所得"
                     @click="setEditorMode('wysiwyg')"
                 >
-                    所见即所得
+                    <svg
+                        class="mode-switch-icon"
+                        viewBox="0 0 16 16"
+                        aria-hidden="true"
+                    >
+                        <path d="m10.7 2.3 3 3-7.9 7.9-3.5.5.5-3.5z" />
+                        <path d="m9.6 3.4 3 3M2.8 10.2l3 3" />
+                    </svg>
                 </button>
                 <button
                     type="button"
@@ -2406,9 +2445,17 @@ function stringifyError(error: unknown) {
                     :class="{
                         active: editorMode === 'source' && !sourcePreview,
                     }"
+                    aria-label="仅源码"
+                    title="仅源码"
                     @click="setSourcePreview(false)"
                 >
-                    仅源码
+                    <svg
+                        class="mode-switch-icon"
+                        viewBox="0 0 16 16"
+                        aria-hidden="true"
+                    >
+                        <path d="m5.5 3.5-4 4.5 4 4.5M10.5 3.5l4 4.5-4 4.5M9 2.5l-2 11" />
+                    </svg>
                 </button>
                 <button
                     type="button"
@@ -2416,9 +2463,18 @@ function stringifyError(error: unknown) {
                     :class="{
                         active: editorMode === 'source' && sourcePreview,
                     }"
+                    aria-label="垂直双栏"
+                    title="垂直双栏"
                     @click="setSourcePreview(true)"
                 >
-                    垂直双栏
+                    <svg
+                        class="mode-switch-icon"
+                        viewBox="0 0 16 16"
+                        aria-hidden="true"
+                    >
+                        <rect x="1.75" y="2.25" width="12.5" height="11.5" rx="1.5" />
+                        <path d="M8 2.5v11" />
+                    </svg>
                 </button>
             </div>
             <WindowControls v-if="tauriRuntime" />

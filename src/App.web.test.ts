@@ -482,6 +482,35 @@ async function mountApp() {
     return host;
 }
 
+function topLevelMenuLabels(host: HTMLElement, menuName: string) {
+    const group = Array.from(
+        host.querySelectorAll<HTMLElement>(".menu-bar > .menu-group"),
+    ).find((candidate) => candidate.querySelector("summary")?.textContent === menuName);
+    const popup = group?.querySelector<HTMLElement>(":scope > .menu-popup");
+    return Array.from(popup?.children ?? []).flatMap((child) => {
+        if (!(child instanceof HTMLButtonElement)) return [];
+        return [child.querySelector("span")?.textContent?.trim() ?? child.textContent?.trim()];
+    });
+}
+
+function topLevelMenuCommands(host: HTMLElement, menuName: string) {
+    const group = Array.from(
+        host.querySelectorAll<HTMLElement>(".menu-bar > .menu-group"),
+    ).find((candidate) => candidate.querySelector("summary")?.textContent === menuName);
+    const popup = group?.querySelector<HTMLElement>(":scope > .menu-popup");
+    return Array.from(popup?.children ?? []).flatMap((child) => {
+        if (!(child instanceof HTMLButtonElement)) return [];
+        return [
+            {
+                label: child.querySelector("span")?.textContent?.trim() ?? "",
+                shortcut:
+                    child.querySelector<HTMLElement>(".shortcut")?.textContent?.trim() ??
+                    "",
+            },
+        ];
+    });
+}
+
 async function mountAppWithRecentFiles(paths: string[]) {
     mocks.isTauri.mockReturnValue(true);
     mocks.recentFiles = paths.map((path) => ({
@@ -564,7 +593,7 @@ async function mountMarkdownImport(path: string, content: string) {
     app.mount(host);
     cleanup = () => app.unmount();
     await vi.waitFor(() => expect(mocks.closeHandler).toBeTypeOf("function"));
-    findButton(host, "打开文件...")?.click();
+    findButton(host, "打开文件")?.click();
     await vi.waitFor(() => expect(mocks.getMoraEditorMarkdown?.()).toBe(content));
     return host;
 }
@@ -589,11 +618,11 @@ async function mountDirtyMdxInFolder() {
     cleanup = () => app.unmount();
     await vi.waitFor(() => expect(mocks.closeHandler).toBeTypeOf("function"));
 
-    findButton(host, "打开文件...")?.click();
+    findButton(host, "打开文件")?.click();
     await vi.waitFor(() => expect(openDocumentRow(host, "a")).not.toBeUndefined());
     mocks.editorUpdate?.("dirty a");
     await nextTick();
-    findButton(host, "打开文件夹...")?.click();
+    findButton(host, "打开文件夹")?.click();
     await vi.waitFor(() =>
         expect(host.querySelector('[aria-label="关闭文件夹 notes"]')).not.toBeNull(),
     );
@@ -609,7 +638,7 @@ async function mountWithInactiveConflict() {
     app.mount(host);
     cleanup = () => app.unmount();
     await vi.waitFor(() => expect(mocks.focusHandler).toBeTypeOf("function"));
-    findButton(host, "打开文件...")?.click();
+    findButton(host, "打开文件")?.click();
     await vi.waitFor(() =>
         expect(
             host.querySelectorAll('[role="treeitem"][data-tree-key^="document:"]'),
@@ -726,6 +755,131 @@ afterEach(() => {
 });
 
 describe("App Web 预览启动", () => {
+    it("按文件职责重排菜单并显示完整快捷键", async () => {
+        const host = await mountApp();
+        const fileLabels = topLevelMenuLabels(host, "文件");
+        const editLabels = topLevelMenuLabels(host, "编辑");
+        const insertLabels = topLevelMenuLabels(host, "插入");
+        const viewLabels = topLevelMenuLabels(host, "视图");
+        const shortcutOf = (menuName: string, label: string) =>
+            topLevelMenuCommands(host, menuName).find((item) => item.label === label)
+                ?.shortcut;
+
+        expect(fileLabels.some((label) => label?.endsWith("..."))).toBe(false);
+        expect(fileLabels).toContain("历史版本");
+        expect(fileLabels).not.toContain("工作区查找");
+        expect(fileLabels.indexOf("另存为")).toBeLessThan(
+            fileLabels.indexOf("历史版本"),
+        );
+        expect(fileLabels.indexOf("历史版本")).toBeLessThan(
+            fileLabels.indexOf("导出 Markdown"),
+        );
+        expect(shortcutOf("文件", "打开文件夹")).toBe("Ctrl+Shift+O");
+
+        expect(editLabels.indexOf("查找")).toBeLessThan(
+            editLabels.indexOf("工作区查找"),
+        );
+        expect(editLabels.indexOf("工作区查找")).toBeLessThan(
+            editLabels.indexOf("替换"),
+        );
+        expect(editLabels[editLabels.length - 1]).toBe("偏好设置");
+        expect(shortcutOf("编辑", "工作区查找")).toBe("Ctrl+Shift+F");
+        expect(shortcutOf("编辑", "偏好设置")).toBe("Ctrl+,");
+        expect(editLabels).not.toContain("笔记库与全文搜索...");
+
+        expect(insertLabels).toContain("导入图片或附件");
+        expect(insertLabels).not.toContain("导入图片或附件...");
+        expect(shortcutOf("插入", "无序列表")).toBe("Ctrl+L");
+        expect(shortcutOf("插入", "有序列表")).toBe("Ctrl+Alt+L");
+        expect(shortcutOf("插入", "任务列表")).toBe("Ctrl+T");
+
+        expect(viewLabels.some((label) => label?.endsWith("..."))).toBe(false);
+        expect(viewLabels).toEqual(
+            expect.arrayContaining([
+                "所见即所得",
+                "垂直双栏",
+                "仅源码",
+                "工作区",
+                "目录",
+                "主题",
+            ]),
+        );
+        expect(shortcutOf("视图", "工作区")).toBe("Ctrl+Shift+B");
+        expect(shortcutOf("视图", "目录")).toBe("Ctrl+Shift+J");
+        expect(shortcutOf("视图", "主题")).toBe("Ctrl+Shift+T");
+        expect(viewLabels).not.toContain("历史版本");
+        expect(viewLabels).not.toContain("偏好设置");
+        expect(viewLabels).not.toContain("光标移到文首");
+        expect(viewLabels).not.toContain("光标移到文末");
+    });
+
+    it("执行应用级快捷键并切换对应界面", async () => {
+        mocks.openDialog.mockResolvedValueOnce("C:\\快捷键工作区");
+        const host = await mountApp();
+
+        window.dispatchEvent(
+            new KeyboardEvent("keydown", {
+                bubbles: true,
+                ctrlKey: true,
+                shiftKey: true,
+                key: "O",
+            }),
+        );
+        await vi.waitFor(() =>
+            expect(mocks.openDialog).toHaveBeenCalledWith({
+                directory: true,
+                multiple: false,
+            }),
+        );
+
+        window.dispatchEvent(
+            new KeyboardEvent("keydown", {
+                bubbles: true,
+                ctrlKey: true,
+                shiftKey: true,
+                key: "B",
+            }),
+        );
+        await nextTick();
+        expect(host.querySelector(".workspace-sidebar")).toBeNull();
+
+        findButton(host, "新建文档")?.click();
+        await nextTick();
+        mocks.editorUpdate?.("# 标题");
+        await nextTick();
+        window.dispatchEvent(
+            new KeyboardEvent("keydown", {
+                bubbles: true,
+                ctrlKey: true,
+                shiftKey: true,
+                key: "J",
+            }),
+        );
+        await nextTick();
+        expect(host.querySelector(".toc-sidebar")).toBeNull();
+
+        window.dispatchEvent(
+            new KeyboardEvent("keydown", {
+                bubbles: true,
+                ctrlKey: true,
+                shiftKey: true,
+                key: "T",
+            }),
+        );
+        await nextTick();
+        expect(host.querySelector(".theme-picker")).not.toBeNull();
+
+        window.dispatchEvent(
+            new KeyboardEvent("keydown", {
+                bubbles: true,
+                ctrlKey: true,
+                key: ",",
+            }),
+        );
+        await nextTick();
+        expect(host.querySelector('[aria-labelledby="settings-title"]')).not.toBeNull();
+    });
+
     it("按 Markdown、Word、PDF、打印顺序提供导出，并在取消时不调用 Tauri", async () => {
         const host = await mountApp();
         expect(host.querySelector(".window-controls")).toBeNull();
@@ -738,25 +892,25 @@ describe("App Web 预览启动", () => {
         );
         expect(labels).toEqual(
             expect.arrayContaining([
-                "导出 Markdown...",
-                "导出 Word...",
-                "导出 PDF...",
-                "打印...",
+                "导出 Markdown",
+                "导出 Word",
+                "导出 PDF",
+                "打印",
             ]),
         );
-        expect(labels.indexOf("导出 Markdown...")).toBeLessThan(
-            labels.indexOf("导出 Word..."),
+        expect(labels.indexOf("导出 Markdown")).toBeLessThan(
+            labels.indexOf("导出 Word"),
         );
-        expect(labels.indexOf("导出 Word...")).toBeLessThan(
-            labels.indexOf("导出 PDF..."),
+        expect(labels.indexOf("导出 Word")).toBeLessThan(
+            labels.indexOf("导出 PDF"),
         );
-        expect(labels.indexOf("导出 PDF...")).toBeLessThan(labels.indexOf("打印..."));
+        expect(labels.indexOf("导出 PDF")).toBeLessThan(labels.indexOf("打印"));
 
         mocks.saveDialog.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
         const invokeCallsBeforeExport = mocks.invoke.mock.calls.length;
-        findButton(host, "导出 Word...")?.click();
+        findButton(host, "导出 Word")?.click();
         await vi.waitFor(() => expect(mocks.saveDialog).toHaveBeenCalledTimes(1));
-        findButton(host, "导出 PDF...")?.click();
+        findButton(host, "导出 PDF")?.click();
         await vi.waitFor(() => expect(mocks.saveDialog).toHaveBeenCalledTimes(2));
 
         expect(mocks.saveDialog).toHaveBeenNthCalledWith(1, {
@@ -773,7 +927,7 @@ describe("App Web 预览启动", () => {
     it("从视图菜单打开底部主题选择，立即切换并关闭", async () => {
         const host = await mountApp();
 
-        findButton(host, "选择主题...")?.click();
+        findButton(host, "主题")?.click();
         await nextTick();
         expect(host.querySelector(".theme-picker")).not.toBeNull();
 
@@ -894,7 +1048,7 @@ describe("App Web 预览启动", () => {
 
     it("blocks the command palette shortcut while another modal owns focus", async () => {
         const host = await mountApp();
-        findButton(host, "偏好设置...")?.click();
+        findButton(host, "偏好设置")?.click();
         const settings = await vi.waitFor(() => {
             const element = host.querySelector<HTMLElement>(
                 '[aria-labelledby="settings-title"]',
@@ -959,7 +1113,7 @@ describe("App Web 预览启动", () => {
         const host = await mountApp();
         findButton(host, "新建文档")?.click();
         await vi.waitFor(() => expect(host.textContent).toContain("未命名文档 1"));
-        const trigger = findButton(host, "偏好设置...");
+        const trigger = findButton(host, "偏好设置");
         if (!trigger) throw new Error("未找到命令面板启动焦点");
         trigger.focus();
 
@@ -1092,9 +1246,7 @@ describe("App Web 预览启动", () => {
         const app = createApp(App);
         app.mount(host);
         cleanup = () => app.unmount();
-        const settingsButton = Array.from(host.querySelectorAll("button")).find(
-            (button) => button.textContent?.trim() === "偏好设置...",
-        );
+        const settingsButton = findButton(host, "偏好设置");
 
         settingsButton?.click();
         await nextTick();
@@ -1148,7 +1300,7 @@ describe("App 多文档工作区", () => {
         app.mount(host);
         cleanup = () => app.unmount();
 
-        findButton(host, "打开文件夹...")?.click();
+        findButton(host, "打开文件夹")?.click();
         await vi.waitFor(() =>
             expect(host.querySelector(".workspace-sidebar")).not.toBeNull(),
         );
@@ -1177,7 +1329,7 @@ describe("App 多文档工作区", () => {
         app.mount(host);
         cleanup = () => app.unmount();
 
-        findButton(host, "打开文件夹...")?.click();
+        findButton(host, "打开文件夹")?.click();
         await vi.waitFor(() =>
             expect(host.querySelector('[aria-label="关闭文件夹 Root"]')).not.toBeNull(),
         );
@@ -1205,7 +1357,7 @@ describe("App 多文档工作区", () => {
         app.mount(host);
         cleanup = () => app.unmount();
 
-        findButton(host, "打开文件夹...")?.click();
+        findButton(host, "打开文件夹")?.click();
         await vi.waitFor(() =>
             expect(host.querySelector('[aria-label="关闭文件夹 Root"]')).not.toBeNull(),
         );
@@ -1383,7 +1535,7 @@ describe("App 多文档工作区", () => {
         Array.from(host.querySelectorAll("button"))
             .find(
                 (button) =>
-                    button.querySelector("span")?.textContent?.trim() === "打开文件...",
+                    button.querySelector("span")?.textContent?.trim() === "打开文件",
             )
             ?.click();
 
@@ -1430,7 +1582,7 @@ describe("App 多文档工作区", () => {
         app.mount(host);
         cleanup = () => app.unmount();
 
-        findButton(host, "打开文件...")?.click();
+        findButton(host, "打开文件")?.click();
         await vi.waitFor(() =>
             expect(
                 host.querySelectorAll('[role="treeitem"][data-tree-key^="document:"]'),
@@ -1464,7 +1616,7 @@ describe("App 多文档工作区", () => {
         Array.from(host.querySelectorAll("button"))
             .find(
                 (button) =>
-                    button.querySelector("span")?.textContent?.trim() === "打开文件...",
+                    button.querySelector("span")?.textContent?.trim() === "打开文件",
             )
             ?.click();
         await vi.waitFor(() =>
@@ -1508,7 +1660,7 @@ describe("App 多文档工作区", () => {
         app.mount(host);
         cleanup = () => app.unmount();
 
-        findButton(host, "打开文件...")?.click();
+        findButton(host, "打开文件")?.click();
         await vi.waitFor(() => expect(openDocumentRow(host, "b")).not.toBeUndefined());
         const activeRow = openDocumentRow(host, "b");
         activeRow?.focus();
@@ -1529,7 +1681,7 @@ describe("App 多文档工作区", () => {
         app.mount(host);
         cleanup = () => app.unmount();
 
-        findButton(host, "打开文件...")?.click();
+        findButton(host, "打开文件")?.click();
         await vi.waitFor(() => expect(openDocumentRow(host, "a")).not.toBeUndefined());
         openDocumentRow(host, "a")?.click();
         await nextTick();
@@ -1613,7 +1765,7 @@ describe("App 多文档工作区", () => {
         app.mount(host);
         cleanup = () => app.unmount();
 
-        findButton(host, "打开文件...")?.click();
+        findButton(host, "打开文件")?.click();
         await vi.waitFor(() => expect(openDocumentRow(host, "a")).not.toBeUndefined());
         const onlyRow = openDocumentRow(host, "a");
         onlyRow?.focus();
@@ -1691,7 +1843,7 @@ describe("App 多文档工作区", () => {
         Array.from(host.querySelectorAll("button"))
             .find(
                 (button) =>
-                    button.querySelector("span")?.textContent?.trim() === "打开文件...",
+                    button.querySelector("span")?.textContent?.trim() === "打开文件",
             )
             ?.click();
 
@@ -1715,7 +1867,7 @@ describe("App 多文档工作区", () => {
         app.mount(host);
         cleanup = () => app.unmount();
 
-        findButton(host, "打开文件...")?.click();
+        findButton(host, "打开文件")?.click();
         await vi.waitFor(() => expect(openDocumentRow(host, "a")).not.toBeUndefined());
         mocks.unavailableDiskPaths.add("c:\\notes\\a.mdx");
         await mocks.focusHandler?.({ payload: true });
@@ -1743,7 +1895,7 @@ describe("App 多文档工作区", () => {
         Array.from(host.querySelectorAll("button"))
             .find(
                 (button) =>
-                    button.querySelector("span")?.textContent?.trim() === "打开文件...",
+                    button.querySelector("span")?.textContent?.trim() === "打开文件",
             )
             ?.click();
         await vi.waitFor(() =>
@@ -1844,7 +1996,10 @@ describe("App 多文档工作区", () => {
         openDocumentRow(host, "b")?.click();
         await nextTick();
 
-        findButton(host, "另存为")?.click();
+        const conflictDialog = host.querySelector<HTMLElement>(
+            '[aria-labelledby="external-conflict-dialog-title"][open]',
+        );
+        findButton(conflictDialog ?? host, "另存为")?.click();
 
         await vi.waitFor(() =>
             expect(mocks.invoke).toHaveBeenCalledWith(
@@ -2250,7 +2405,7 @@ describe("App 多文档工作区", () => {
         app.mount(host);
         cleanup = () => app.unmount();
         await vi.waitFor(() => expect(mocks.closeHandler).toBeTypeOf("function"));
-        findButton(host, "打开文件...")?.click();
+        findButton(host, "打开文件")?.click();
         await vi.waitFor(() => expect(openDocumentRow(host, "a.md")).not.toBeUndefined());
         openDocumentRow(host, "a.md")?.click();
         await nextTick();
@@ -2402,7 +2557,7 @@ describe("App 多文档工作区", () => {
         ]);
         const host = await mountMarkdownImport(sourcePath, sourceContent);
         mocks.openDialog.mockResolvedValue("C:\\notes");
-        findButton(host, "打开文件夹...")?.click();
+        findButton(host, "打开文件夹")?.click();
         await vi.waitFor(() =>
             expect(folderDocumentRow(host, "folder-save.md")).not.toBeUndefined(),
         );
@@ -2432,7 +2587,7 @@ describe("App 桌面关闭", () => {
         app.mount(host);
         cleanup = () => app.unmount();
         await vi.waitFor(() => expect(mocks.closeHandler).toBeTypeOf("function"));
-        findButton(host, "打开文件...")?.click();
+        findButton(host, "打开文件")?.click();
         await vi.waitFor(() =>
             expect(
                 host.querySelectorAll('[role="treeitem"][data-tree-key^="document:"]'),
@@ -2542,9 +2697,7 @@ describe("App 桌面关闭", () => {
                 mocks.invoke.mock.calls.filter(([name]) => name === "has_ai_api_key"),
             ).toHaveLength(1);
         });
-        const settingsButton = Array.from(host.querySelectorAll("button")).find(
-            (button) => button.textContent?.trim() === "偏好设置...",
-        );
+        const settingsButton = findButton(host, "偏好设置");
         settingsButton?.click();
         await vi.waitFor(() => {
             expect(
@@ -2596,9 +2749,7 @@ describe("App 桌面关闭", () => {
                 mocks.invoke.mock.calls.filter(([name]) => name === "has_ai_api_key"),
             ).toHaveLength(1);
         });
-        const settingsButton = Array.from(host.querySelectorAll("button")).find(
-            (button) => button.textContent?.trim() === "偏好设置...",
-        );
+        const settingsButton = findButton(host, "偏好设置");
         settingsButton?.click();
         await vi.waitFor(() => {
             expect(
