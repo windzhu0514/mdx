@@ -108,9 +108,30 @@ describe("dark application theme", () => {
 
     it("keeps xuan white neutral instead of paper yellow", () => {
         expect(experienceCss).toMatch(
-            /:root\[data-theme="xuan-white"\][^{]*\{[^}]*--color-bg-base:\s*#f6f7f7[^}]*--color-bg-surface:\s*#fbfcfc[^}]*--color-bg-chrome:\s*#eceeef[^}]*--color-bg-sidebar:\s*#f0f2f2/su,
+            /:root\[data-theme="xuan-white"\][^{]*\{[^}]*--color-bg-base:\s*#f6f7f7[^}]*--color-bg-surface:\s*#fbfcfc/su,
         );
         expect(experienceCss).not.toContain("#f7f5ef");
+    });
+
+    it("uses one main background across each light theme window", () => {
+        for (const theme of ["xuan-white", "pine-green", "crimson", "wisteria"]) {
+            const block = experienceCss.match(
+                new RegExp(`:root\\[data-theme="${theme}"\\][^{]*\\{([^}]*)\\}`, "su"),
+            )?.[1];
+            expect(block).toBeDefined();
+
+            const values = [
+                "base",
+                "chrome",
+                "sidebar",
+                "sidebar-subtle",
+                "sidebar-header",
+            ].map((token) =>
+                block?.match(new RegExp(`--color-bg-${token}:\\s*([^;]+);`, "u"))?.[1],
+            );
+
+            expect(new Set(values).size).toBe(1);
+        }
     });
 
     it("uses the surrounding workspace background across every editor theme", () => {

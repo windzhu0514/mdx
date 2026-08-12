@@ -3,10 +3,10 @@
 .theme-card[data-theme-preview="xuan-white"] {
     --color-bg-base: #f6f7f7;
     --color-bg-surface: #fbfcfc;
-    --color-bg-chrome: #eceeef;
-    --color-bg-sidebar: #f0f2f2;
-    --color-bg-sidebar-subtle: #e9ecec;
-    --color-bg-sidebar-header: #edf0f0;
+    --color-bg-chrome: #f6f7f7;
+    --color-bg-sidebar: #f6f7f7;
+    --color-bg-sidebar-subtle: #f6f7f7;
+    --color-bg-sidebar-header: #f6f7f7;
     --color-bg-elevated: rgba(251, 252, 252, 0.98);
     --color-bg-popup: rgba(251, 252, 252, 0.98);
     --color-bg-input: #fcfdfd;
@@ -97,10 +97,10 @@
 .theme-card[data-theme-preview="pine-green"] {
     --color-bg-base: #f3f5f1;
     --color-bg-surface: #f8faf6;
-    --color-bg-chrome: #e9eee8;
-    --color-bg-sidebar: #edf1eb;
-    --color-bg-sidebar-subtle: #e7ece6;
-    --color-bg-sidebar-header: #ebefea;
+    --color-bg-chrome: #f3f5f1;
+    --color-bg-sidebar: #f3f5f1;
+    --color-bg-sidebar-subtle: #f3f5f1;
+    --color-bg-sidebar-header: #f3f5f1;
     --color-bg-elevated: rgba(248, 250, 246, 0.98);
     --color-bg-popup: rgba(248, 250, 246, 0.98);
     --color-bg-input: #fafbf8;
@@ -127,10 +127,10 @@
 .theme-card[data-theme-preview="crimson"] {
     --color-bg-base: #f7f4f2;
     --color-bg-surface: #fbf8f6;
-    --color-bg-chrome: #efeae7;
-    --color-bg-sidebar: #f3eeeb;
-    --color-bg-sidebar-subtle: #ece7e4;
-    --color-bg-sidebar-header: #f0ebe8;
+    --color-bg-chrome: #f7f4f2;
+    --color-bg-sidebar: #f7f4f2;
+    --color-bg-sidebar-subtle: #f7f4f2;
+    --color-bg-sidebar-header: #f7f4f2;
     --color-bg-elevated: rgba(251, 248, 246, 0.98);
     --color-bg-popup: rgba(251, 248, 246, 0.98);
     --color-bg-input: #fcfaf8;
@@ -157,10 +157,10 @@
 .theme-card[data-theme-preview="wisteria"] {
     --color-bg-base: #f6f4f6;
     --color-bg-surface: #faf8fa;
-    --color-bg-chrome: #eeeaef;
-    --color-bg-sidebar: #f2eef3;
-    --color-bg-sidebar-subtle: #ebe7ec;
-    --color-bg-sidebar-header: #efeaef;
+    --color-bg-chrome: #f6f4f6;
+    --color-bg-sidebar: #f6f4f6;
+    --color-bg-sidebar-subtle: #f6f4f6;
+    --color-bg-sidebar-header: #f6f4f6;
     --color-bg-elevated: rgba(250, 248, 250, 0.98);
     --color-bg-popup: rgba(250, 248, 250, 0.98);
     --color-bg-input: #fbfafb;
