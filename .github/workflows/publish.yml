@@ -1,0 +1,77 @@
+name: Publish Mora
+
+on:
+    push:
+        tags:
+            - "app-v*"
+    workflow_dispatch:
+        inputs:
+            release_tag:
+                description: "Exact app-vX.Y.Z tag for the Draft Release"
+                required: true
+                type: string
+
+permissions:
+    contents: write
+
+jobs:
+    publish:
+        name: Build signed Windows release
+        runs-on: windows-latest
+        env:
+            RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+
+        steps:
+            - name: Check out repository
+              uses: actions/checkout@v4
+
+            - name: Set up Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: 22
+                  cache: npm
+
+            - name: Set up Rust
+              uses: dtolnay/rust-toolchain@stable
+              with:
+                  targets: x86_64-pc-windows-msvc
+
+            - name: Install frontend dependencies
+              run: npm ci
+
+            - name: Verify release version
+              run: npm run release:check
+
+            - name: Run frontend tests
+              run: npm test
+
+            - name: Lint source
+              run: npm run lint
+
+            - name: Check formatting
+              run: npm run format:check
+
+            - name: Build frontend
+              run: npm run build
+
+            - name: Run Rust tests
+              run: cargo test --manifest-path src-tauri/Cargo.toml
+
+            - name: Check Rust source
+              run: cargo check --manifest-path src-tauri/Cargo.toml
+
+            - name: Build Draft Release and updater metadata
+              uses: tauri-apps/tauri-action@v1
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                  TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+                  TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+              with:
+                  tagName: ${{ env.RELEASE_TAG }}
+                  releaseName: "Mora __VERSION__"
+                  generateReleaseNotes: true
+                  releaseDraft: true
+                  prerelease: false
+                  uploadUpdaterJson: true
+                  updaterJsonPreferNsis: true
+                  args: --target x86_64-pc-windows-msvc

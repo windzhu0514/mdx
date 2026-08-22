@@ -54,6 +54,21 @@ const mocks = vi.hoisted(() => ({
     invoke: vi.fn(),
     openDialog: vi.fn(),
     saveDialog: vi.fn(),
+    updaterCheck: vi.fn(),
+    updaterDownload: vi.fn(),
+    updaterInstall: vi.fn(),
+    updaterClearError: vi.fn(),
+    updaterState: undefined as
+        | {
+              phase: { value: string };
+              version: { value: string };
+              date: { value: string };
+              notes: { value: string };
+              downloadedBytes: { value: number };
+              totalBytes: { value: number | null };
+              error: { value: string };
+          }
+        | undefined,
 }));
 
 function createDeferred<T>(): Deferred<T> {
@@ -145,6 +160,33 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
 vi.mock("./components/editor/mermaidExport", () => ({
     svgToPngBase64: mocks.mermaidPng,
 }));
+
+vi.mock("./composables/useAppUpdater", async () => {
+    const { computed, ref } = await import("vue");
+    const phase = ref("idle");
+    const state = {
+        phase,
+        version: ref(""),
+        date: ref(""),
+        notes: ref(""),
+        downloadedBytes: ref(0),
+        totalBytes: ref<number | null>(null),
+        error: ref(""),
+    };
+    mocks.updaterState = state;
+    return {
+        useAppUpdater: vi.fn(() => ({
+            ...state,
+            busy: computed(() =>
+                ["checking", "downloading", "installing"].includes(phase.value),
+            ),
+            checkForUpdate: mocks.updaterCheck,
+            downloadUpdate: mocks.updaterDownload,
+            installUpdate: mocks.updaterInstall,
+            clearError: mocks.updaterClearError,
+        })),
+    };
+});
 
 function lowestEditorStub(kind: "milkdown" | "source") {
     return defineComponent({
@@ -311,6 +353,19 @@ beforeEach(() => {
     mocks.mermaidPng.mockClear();
     mocks.openDialog.mockResolvedValue("C:\\notes\\test.mdx");
     mocks.saveDialog.mockResolvedValue("C:\\notes\\saved.mdx");
+    mocks.updaterCheck.mockReset().mockResolvedValue("current");
+    mocks.updaterDownload.mockReset().mockResolvedValue(true);
+    mocks.updaterInstall.mockReset().mockResolvedValue(true);
+    mocks.updaterClearError.mockReset();
+    if (mocks.updaterState) {
+        mocks.updaterState.phase.value = "idle";
+        mocks.updaterState.version.value = "";
+        mocks.updaterState.date.value = "";
+        mocks.updaterState.notes.value = "";
+        mocks.updaterState.downloadedBytes.value = 0;
+        mocks.updaterState.totalBytes.value = null;
+        mocks.updaterState.error.value = "";
+    }
     mocks.invoke.mockImplementation(async (command: string, args?: unknown) => {
         if (command === "has_ai_api_key") return false;
         if (command === "get_recent_files" || command === "push_recent_file") return [];
@@ -417,6 +472,84 @@ afterEach(() => {
     document.body.innerHTML = "";
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+});
+
+function requireUpdaterState() {
+    if (!mocks.updaterState) throw new Error("更新器状态未初始化");
+    return mocks.updaterState;
+}
+
+async function mountDownloadedUpdateWithDirtyDocument() {
+    const updaterState = requireUpdaterState();
+    mocks.updaterCheck.mockImplementation(async () => {
+        updaterState.phase.value = "available";
+        updaterState.version.value = "0.2.0";
+        updaterState.date.value = "2026-08-22T00:00:00Z";
+        updaterState.notes.value = "安全更新测试";
+        return "available";
+    });
+    mocks.updaterDownload.mockImplementation(async () => {
+        updaterState.phase.value = "downloaded";
+        return true;
+    });
+
+    const host = await mountApp();
+    await vi.waitFor(() => expect(host.textContent).toContain("下载更新"));
+    findButton(host, "下载更新").click();
+    await vi.waitFor(() => expect(host.textContent).toContain("安装并重启"));
+    mocks.milkdown?.emitUpdate("尚未保存的更新前内容");
+    await nextTick();
+    return host;
+}
+
+describe("App 安全安装更新", () => {
+    it("canceling the leave decision does not install the update", async () => {
+        const host = await mountDownloadedUpdateWithDirtyDocument();
+
+        findButton(host, "安装并重启").click();
+        await vi.waitFor(() => expect(host.textContent).toContain("保存“未命名文档 1”"));
+        findButton(host, "取消").click();
+
+        await vi.waitFor(() =>
+            expect(host.querySelector(".status-bar")?.textContent).toContain(
+                "更新安装已取消",
+            ),
+        );
+        expect(mocks.updaterInstall).not.toHaveBeenCalled();
+    });
+
+    it("a save failure does not install the update", async () => {
+        const host = await mountDownloadedUpdateWithDirtyDocument();
+        const pendingSave = createDeferred<MdxNote>();
+        mocks.nextSave = pendingSave.promise;
+
+        findButton(host, "安装并重启").click();
+        await vi.waitFor(() => expect(host.textContent).toContain("保存并继续"));
+        findButton(host, "保存并继续").click();
+        await vi.waitFor(() =>
+            expect(
+                mocks.invoke.mock.calls.some(([command]) => command === "save_mdx_as"),
+            ).toBe(true),
+        );
+        pendingSave.reject(new Error("save failed"));
+
+        await vi.waitFor(() =>
+            expect(host.querySelector(".status-bar")?.textContent).toContain(
+                "save failed",
+            ),
+        );
+        expect(mocks.updaterInstall).not.toHaveBeenCalled();
+    });
+
+    it("installs only after all dirty documents are resolved", async () => {
+        const host = await mountDownloadedUpdateWithDirtyDocument();
+
+        findButton(host, "安装并重启").click();
+        await vi.waitFor(() => expect(host.textContent).toContain("保存并继续"));
+        findButton(host, "保存并继续").click();
+
+        await vi.waitFor(() => expect(mocks.updaterInstall).toHaveBeenCalledOnce());
+    });
 });
 
 describe("App 编辑器状态集成", () => {

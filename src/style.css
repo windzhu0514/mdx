@@ -1,3 +1,11 @@
+@font-face {
+    font-family: "Maple Mono CN Bundled";
+    src: url("/fonts/maple-mono-cn/MapleMono-CN-Regular.ttf") format("truetype");
+    font-weight: 400;
+    font-style: normal;
+    font-display: swap;
+}
+
 :root {
     --color-bg-base: #f4f7f9;
     --color-bg-surface: #ffffff;
@@ -48,6 +56,7 @@
         "Inter", "Segoe UI", "-apple-system", "BlinkMacSystemFont", "Microsoft YaHei",
         sans-serif;
     --font-mono: "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+    --editor-code-font-family: "Maple Mono CN Bundled", monospace;
 }
 
 * {
@@ -92,6 +101,13 @@ summary {
     min-height: 0;
     width: 100%;
     position: relative;
+}
+
+.editor-workspace {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
 }
 
 .workspace-center {
@@ -910,7 +926,7 @@ summary {
 }
 
 .markdown-editor .cm-content {
-    font-family: var(--font-mono);
+    font-family: var(--editor-code-font-family);
 }
 
 /* Modern Status Bar */

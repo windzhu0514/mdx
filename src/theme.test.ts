@@ -106,10 +106,30 @@ describe("dark application theme", () => {
         }
     });
 
-    it("keeps xuan white neutral instead of paper yellow", () => {
-        expect(experienceCss).toMatch(
-            /:root\[data-theme="xuan-white"\][^{]*\{[^}]*--color-bg-base:\s*#f6f7f7[^}]*--color-bg-surface:\s*#fbfcfc/su,
-        );
+    it("uses NyaMark white across the entire xuan white window", () => {
+        const block = experienceCss.match(
+            /:root\[data-theme="xuan-white"\][^{]*\{([^}]*)\}/su,
+        )?.[1];
+        expect(block).toBeDefined();
+
+        const readToken = (token: string) =>
+            block?.match(new RegExp(`--${token}:\\s*([^;]+);`, "u"))?.[1];
+
+        for (const token of [
+            "color-bg-base",
+            "color-bg-surface",
+            "color-bg-chrome",
+            "color-bg-sidebar",
+            "color-bg-sidebar-subtle",
+            "color-bg-sidebar-header",
+            "color-bg-elevated",
+            "color-bg-popup",
+            "color-bg-input",
+        ]) {
+            expect(readToken(token)).toBe("#fffffd");
+        }
+        expect(readToken("color-border")).toBe("#eeeeec");
+        expect(readToken("app-background-image")).toBe("none");
         expect(experienceCss).not.toContain("#f7f5ef");
     });
 
@@ -127,7 +147,7 @@ describe("dark application theme", () => {
         expect(readThemeToken("dai-blue", "color-bg-sidebar")).toBe("#18283a");
         expect(readThemeToken("dai-blue", "color-bg-elevated")).toBe("#24364b");
         expect(readThemeToken("dai-blue", "color-text-main")).toBe("#e7edf3");
-        expect(readThemeToken("dai-blue", "color-primary")).toBe("#83add1");
+        expect(readThemeToken("dai-blue", "color-primary")).toBe("#668db3");
 
         for (const token of [
             "color-bg-base",
@@ -141,8 +161,29 @@ describe("dark application theme", () => {
         }
     });
 
+    it("uses each neutral and blue theme's own accent colors", () => {
+        const readThemeToken = (theme: string, token: string) => {
+            const block = experienceCss.match(
+                new RegExp(`:root\\[data-theme="${theme}"\\][^{]*\\{([^}]*)\\}`, "su"),
+            )?.[1];
+            expect(block).toBeDefined();
+            return block?.match(new RegExp(`--${token}:\\s*([^;]+);`, "u"))?.[1];
+        };
+
+        expect(readThemeToken("xuan-white", "color-primary")).toBe("#596164");
+        expect(readThemeToken("xuan-white", "color-primary-light")).toBe("#eef0ef");
+        expect(readThemeToken("ink-black", "color-primary")).toBe("#b8c0c3");
+        expect(readThemeToken("ink-black", "color-primary-light")).toBe(
+            "rgba(184, 192, 195, 0.16)",
+        );
+        expect(readThemeToken("dai-blue", "color-primary")).toBe("#668db3");
+        expect(readThemeToken("dai-blue", "color-primary-light")).toBe(
+            "rgba(102, 141, 179, 0.24)",
+        );
+    });
+
     it("uses one main background across each light theme window", () => {
-        for (const theme of ["xuan-white", "pine-green", "crimson", "wisteria"]) {
+        for (const theme of ["pine-green", "crimson", "wisteria"]) {
             const block = experienceCss.match(
                 new RegExp(`:root\\[data-theme="${theme}"\\][^{]*\\{([^}]*)\\}`, "su"),
             )?.[1];
@@ -154,8 +195,11 @@ describe("dark application theme", () => {
                 "sidebar",
                 "sidebar-subtle",
                 "sidebar-header",
-            ].map((token) =>
-                block?.match(new RegExp(`--color-bg-${token}:\\s*([^;]+);`, "u"))?.[1],
+            ].map(
+                (token) =>
+                    block?.match(
+                        new RegExp(`--color-bg-${token}:\\s*([^;]+);`, "u"),
+                    )?.[1],
             );
 
             expect(new Set(values).size).toBe(1);
@@ -185,6 +229,58 @@ describe("bottom theme picker", () => {
     it("uses a native horizontal overflow track for side-to-side comparison", () => {
         expect(experienceCss).toMatch(
             /\.theme-picker-track\s*\{[^}]*display:\s*flex[^}]*overflow-x:\s*auto/su,
+        );
+    });
+});
+
+describe("settings workspace", () => {
+    it("uses an in-app categorized layout with a responsive preview column", () => {
+        expect(experienceCss).toMatch(
+            /\.settings-workspace\s*\{[^}]*display:\s*grid[^}]*grid-template-columns:\s*220px minmax\(0, 1fr\)/su,
+        );
+        expect(experienceCss).toMatch(
+            /\.settings-appearance-layout\s*\{[^}]*grid-template-columns:\s*minmax\(420px, 520px\) minmax\(360px, 1fr\)/su,
+        );
+        expect(experienceCss).toMatch(
+            /@media \(max-width:\s*1100px\)[^{]*\{[\s\S]*?\.settings-appearance-layout\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/u,
+        );
+    });
+
+    it("previews body and code with the same variables as the editor", () => {
+        expect(experienceCss).toMatch(
+            /\.settings-live-preview\s*\{[^}]*font-family:\s*var\(--editor-font-family\)[^}]*font-size:\s*var\(--editor-font-size\)[^}]*line-height:\s*var\(--editor-line-height\)/su,
+        );
+        expect(experienceCss).toMatch(
+            /\.settings-live-preview code,\s*\.settings-live-preview pre\s*\{[^}]*font-family:\s*var\(--editor-code-font-family\)/su,
+        );
+    });
+});
+
+describe("body and code editor fonts", () => {
+    it("registers the bundled Maple Mono CN regular font", () => {
+        expect(styleCss).toMatch(
+            /@font-face\s*\{[^}]*font-family:\s*"Maple Mono CN Bundled"[^}]*src:\s*url\("\/fonts\/maple-mono-cn\/MapleMono-CN-Regular\.ttf"\)\s*format\("truetype"\)[^}]*font-weight:\s*400[^}]*font-style:\s*normal/su,
+        );
+    });
+
+    it("keeps body text on the body font variable", () => {
+        expect(experienceCss).toMatch(
+            /\.markdown-editor \.ProseMirror\s*\{[^}]*font-family:\s*var\(--editor-font-family\)/su,
+        );
+        expect(experienceCss).toMatch(
+            /--crepe-font-default:\s*var\(--editor-font-family\)/su,
+        );
+    });
+
+    it("uses the code font variable for source and rich-text code", () => {
+        expect(styleCss).toMatch(
+            /\.markdown-editor \.cm-content\s*\{[^}]*font-family:\s*var\(--editor-code-font-family\)/su,
+        );
+        expect(experienceCss).toMatch(
+            /\.markdown-editor \.cm-content\s*\{[^}]*font-family:\s*var\(--editor-code-font-family\)/su,
+        );
+        expect(experienceCss).toMatch(
+            /--crepe-font-code:\s*var\(--editor-code-font-family\)/su,
         );
     });
 });

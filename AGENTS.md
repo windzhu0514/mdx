@@ -178,7 +178,10 @@ npm run build
 # 启动 Tauri 开发环境
 npm run tauri -- dev
 
-# 打包桌面应用
+# 构建开发版桌面程序（仅生成 mora.exe）
+npm run build:exe
+
+# 构建正式安装包（生成 mora.exe、MSI 和 NSIS）
 npm run tauri -- build
 
 # Rust 后端静态检查（修改 Rust 代码后必须运行）
@@ -193,18 +196,24 @@ cargo check --manifest-path src-tauri/Cargo.toml
 
 每次代码修改后，Agent **必须**运行对应的验证命令：
 
-| 修改范围 | 必须运行                                                                                          |
-| -------- | ------------------------------------------------------------------------------------------------- |
-| 任何修改 | `npm run build` 和 `cargo check --manifest-path src-tauri/Cargo.toml` 和 `npm run tauri -- build` |
+| 修改范围 | 必须运行                                                                                     |
+| -------- | -------------------------------------------------------------------------------------------- |
+| 任何修改 | `npm run build`、`cargo check --manifest-path src-tauri/Cargo.toml` 和 `npm run build:exe`    |
+| 正式发布 | 在上述验证之外运行 `npm run tauri -- build`，生成并验证 MSI 和 NSIS 安装包                   |
 
 ---
 
 ## 构建产物
 
-Tauri 打包成功后生成：
+开发阶段运行 `npm run build:exe` 后生成：
 
 ```
 src-tauri/target/release/mora.exe
+```
+
+正式发布运行 `npm run tauri -- build` 后额外生成：
+
+```
 src-tauri/target/release/bundle/msi/Mora_0.1.0_x64_en-US.msi
 src-tauri/target/release/bundle/nsis/Mora_0.1.0_x64-setup.exe
 ```

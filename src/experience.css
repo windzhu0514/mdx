@@ -1,32 +1,29 @@
 :root,
 :root[data-theme="xuan-white"],
 .theme-card[data-theme-preview="xuan-white"] {
-    --color-bg-base: #f6f7f7;
-    --color-bg-surface: #fbfcfc;
-    --color-bg-chrome: #f6f7f7;
-    --color-bg-sidebar: #f6f7f7;
-    --color-bg-sidebar-subtle: #f6f7f7;
-    --color-bg-sidebar-header: #f6f7f7;
-    --color-bg-elevated: rgba(251, 252, 252, 0.98);
-    --color-bg-popup: rgba(251, 252, 252, 0.98);
-    --color-bg-input: #fcfdfd;
+    --color-bg-base: #fffffd;
+    --color-bg-surface: #fffffd;
+    --color-bg-chrome: #fffffd;
+    --color-bg-sidebar: #fffffd;
+    --color-bg-sidebar-subtle: #fffffd;
+    --color-bg-sidebar-header: #fffffd;
+    --color-bg-elevated: #fffffd;
+    --color-bg-popup: #fffffd;
+    --color-bg-input: #fffffd;
     --color-bg-control: rgba(43, 48, 49, 0.05);
     --color-bg-control-hover: rgba(43, 48, 49, 0.09);
-    --color-border: rgba(52, 62, 64, 0.14);
+    --color-border: #eeeeec;
     --color-text-main: #2c3031;
     --color-text-muted: #687174;
-    --color-primary: #2f7473;
-    --color-primary-light: #dceae7;
+    --color-primary: #596164;
+    --color-primary-light: #eef0ef;
     --color-danger: #a7484d;
     --color-success: #3c7655;
-    --color-inset-highlight: rgba(255, 255, 255, 0.56);
-    --app-background-image: radial-gradient(
-        circle at 50% -18%,
-        rgba(255, 255, 255, 0.82) 0%,
-        rgba(246, 247, 247, 0) 64%
-    );
+    --color-inset-highlight: rgba(255, 255, 255, 0.72);
+    --app-background-image: none;
     --shadow-lg: 0 22px 64px rgba(45, 52, 54, 0.16);
     --editor-font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+    --editor-code-font-family: "Maple Mono CN Bundled", monospace;
     --editor-font-size: 16px;
     --editor-line-height: 1.75;
     --content-width: 820px;
@@ -49,8 +46,8 @@
     --color-border: rgba(205, 225, 228, 0.14);
     --color-text-main: #e4eded;
     --color-text-muted: #9cacae;
-    --color-primary: #72bebf;
-    --color-primary-light: rgba(82, 166, 168, 0.17);
+    --color-primary: #b8c0c3;
+    --color-primary-light: rgba(184, 192, 195, 0.16);
     --color-danger: #ef8c93;
     --color-success: #75c99f;
     --color-inset-highlight: rgba(255, 255, 255, 0.04);
@@ -79,8 +76,8 @@
     --color-border: rgba(190, 211, 232, 0.18);
     --color-text-main: #e7edf3;
     --color-text-muted: #aab9c7;
-    --color-primary: #83add1;
-    --color-primary-light: rgba(96, 145, 188, 0.24);
+    --color-primary: #668db3;
+    --color-primary-light: rgba(102, 141, 179, 0.24);
     --color-danger: #f09aa4;
     --color-success: #82c9ad;
     --color-inset-highlight: rgba(255, 255, 255, 0.06);
@@ -231,7 +228,7 @@ summary:focus-visible,
 }
 
 .markdown-editor .cm-content {
-    font-family: var(--font-mono);
+    font-family: var(--editor-code-font-family);
     font-size: var(--editor-font-size);
     line-height: var(--editor-line-height);
 }
@@ -252,7 +249,7 @@ summary:focus-visible,
     --crepe-color-hover: var(--color-primary-light);
     --crepe-color-selected: var(--color-primary-light);
     --crepe-font-default: var(--editor-font-family);
-    --crepe-font-code: var(--font-mono);
+    --crepe-font-code: var(--editor-code-font-family);
 }
 
 .editor-card {
@@ -371,8 +368,7 @@ summary:focus-visible,
 }
 
 .library-panel,
-.history-panel,
-.settings-panel {
+.history-panel {
     width: min(720px, 100%);
     max-height: min(720px, calc(100vh - 48px));
     padding: 22px;
@@ -383,14 +379,12 @@ summary:focus-visible,
     box-shadow: var(--shadow-lg);
 }
 
-.history-panel,
-.settings-panel {
+.history-panel {
     width: min(560px, 100%);
 }
 
 .library-panel > header,
-.history-panel > header,
-.settings-panel > header {
+.history-panel > header {
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
@@ -408,8 +402,7 @@ summary:focus-visible,
 }
 
 .library-panel h2,
-.history-panel h2,
-.settings-panel h2 {
+.history-panel h2 {
     margin: 0;
     font-size: 22px;
 }
@@ -504,6 +497,7 @@ summary:focus-visible,
 
 .recent-files-dialog::backdrop,
 .workspace-decision-dialog::backdrop,
+.update-dialog::backdrop,
 .leave-dialog::backdrop {
     background: rgba(9, 15, 19, 0.46);
     backdrop-filter: blur(8px);
@@ -525,6 +519,119 @@ summary:focus-visible,
 
 .workspace-decision-dialog {
     width: min(540px, 100%);
+}
+
+.update-dialog {
+    width: min(520px, calc(100% - 32px));
+    max-height: min(680px, calc(100vh - 48px));
+    margin: auto;
+    padding: 22px;
+    overflow: auto;
+    border: 1px solid var(--color-border);
+    border-radius: 16px;
+    background: var(--color-bg-elevated);
+    color: var(--color-text-main);
+    box-shadow: var(--shadow-lg);
+}
+
+.update-dialog-header,
+.update-version-row,
+.update-progress-label {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.update-dialog-header {
+    align-items: flex-start;
+}
+
+.update-dialog-header h2 {
+    margin: 2px 0 0;
+    font-size: 20px;
+}
+
+.update-dialog-close {
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--color-text-muted);
+    font-size: 20px;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.update-dialog-close:hover:not(:disabled) {
+    border-color: var(--color-border);
+    background: var(--color-bg-control-hover);
+    color: var(--color-text-main);
+}
+
+.update-dialog-close:disabled {
+    cursor: default;
+    opacity: 0.45;
+}
+
+.update-version-row {
+    margin-top: 18px;
+}
+
+.update-version-row time,
+.update-progress-label {
+    color: var(--color-text-muted);
+    font-size: 12px;
+}
+
+.update-notes {
+    max-height: 220px;
+    margin: 12px 0 0;
+    padding: 12px;
+    overflow: auto;
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    background: var(--color-bg-surface);
+    line-height: 1.55;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+}
+
+.update-progress,
+.update-status,
+.update-error {
+    margin: 18px 0 0;
+}
+
+.update-progress-track {
+    height: 7px;
+    margin-top: 8px;
+    overflow: hidden;
+    border-radius: 999px;
+    background: var(--color-bg-control-hover);
+}
+
+.update-progress-value {
+    display: block;
+    height: 100%;
+    border-radius: inherit;
+    background: var(--color-primary);
+}
+
+.update-progress-value.indeterminate {
+    width: 38%;
+}
+
+.update-error {
+    color: var(--color-danger);
+}
+
+.update-dialog-actions .update-primary {
+    border-color: var(--color-primary);
+    background: var(--color-primary);
+    color: white;
 }
 
 .workspace-dialog-header {
@@ -729,11 +836,6 @@ summary:focus-visible,
     color: var(--color-text-muted);
 }
 
-.settings-panel {
-    display: grid;
-    gap: 14px;
-}
-
 .setting-field {
     display: grid;
     grid-template-columns: minmax(140px, 1fr) minmax(180px, 1fr);
@@ -784,6 +886,247 @@ summary:focus-visible,
     margin-right: auto;
     color: var(--color-text-muted);
     font-size: 12px;
+}
+
+.settings-workspace {
+    display: grid;
+    grid-template-columns: 220px minmax(0, 1fr);
+    width: 100%;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+    background: var(--color-bg-base);
+}
+
+.settings-workspace:focus {
+    outline: none;
+}
+
+.settings-navigation {
+    min-height: 0;
+    padding: 22px 14px;
+    overflow: auto;
+    border-right: 1px solid var(--color-border);
+    background: var(--color-bg-sidebar);
+}
+
+.settings-navigation-header {
+    display: grid;
+    gap: 22px;
+    padding: 0 8px 18px;
+}
+
+.settings-back {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: fit-content;
+    padding: 7px 9px;
+    border: 0;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--color-text-muted);
+    cursor: pointer;
+}
+
+.settings-back::before {
+    content: "←";
+}
+
+.settings-back:hover,
+.settings-back:focus-visible {
+    background: var(--color-bg-control-hover);
+    color: var(--color-text-main);
+}
+
+.settings-product-name {
+    color: var(--color-text-muted);
+    font-size: 12px;
+}
+
+.settings-navigation h1 {
+    margin: 3px 0 0;
+    font-size: 21px;
+}
+
+.settings-nav {
+    display: grid;
+    gap: 3px;
+}
+
+.settings-nav button {
+    padding: 9px 12px;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--color-text-main);
+    text-align: left;
+    cursor: pointer;
+}
+
+.settings-nav button:hover,
+.settings-nav button:focus-visible {
+    background: var(--color-bg-control-hover);
+}
+
+.settings-nav button.active {
+    background: var(--color-primary-light);
+    color: var(--color-primary);
+    font-weight: 650;
+}
+
+.settings-content {
+    min-width: 0;
+    min-height: 0;
+    padding: 34px clamp(28px, 4vw, 64px) 52px;
+    overflow: auto;
+}
+
+.settings-content-header {
+    max-width: 760px;
+    margin-bottom: 24px;
+}
+
+.settings-content-header h2 {
+    margin: 0;
+    font-size: 28px;
+    letter-spacing: -0.02em;
+}
+
+.settings-content-header > p:last-child {
+    margin: 7px 0 0;
+    color: var(--color-text-muted);
+}
+
+.settings-appearance-layout {
+    display: grid;
+    grid-template-columns: minmax(420px, 520px) minmax(360px, 1fr);
+    align-items: start;
+    gap: 24px;
+}
+
+.settings-card,
+.settings-preview-panel {
+    min-width: 0;
+    border: 1px solid var(--color-border);
+    border-radius: 14px;
+    background: var(--color-bg-elevated);
+    box-shadow: var(--shadow-sm);
+}
+
+.settings-card {
+    width: min(680px, 100%);
+    padding: 20px;
+}
+
+.settings-appearance-layout .settings-card {
+    width: 100%;
+}
+
+.settings-control-list {
+    display: grid;
+    gap: 18px;
+}
+
+.settings-control-list .setting-field + .setting-field {
+    padding-top: 18px;
+    border-top: 1px solid var(--color-border);
+}
+
+.settings-preview-panel {
+    overflow: hidden;
+}
+
+.settings-preview-heading {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 17px 20px;
+    border-bottom: 1px solid var(--color-border);
+    background: var(--color-bg-sidebar-subtle);
+}
+
+.settings-preview-heading h3 {
+    margin: 0;
+    font-size: 16px;
+}
+
+.settings-preview-heading > span {
+    color: var(--color-text-muted);
+    font-size: 12px;
+}
+
+.settings-live-preview {
+    padding: clamp(24px, 4vw, 44px);
+    font-family: var(--editor-font-family);
+    font-size: var(--editor-font-size);
+    line-height: var(--editor-line-height);
+}
+
+.settings-live-preview h3 {
+    margin: 6px 0 18px;
+    font-size: 1.6em;
+    line-height: 1.3;
+}
+
+.settings-live-preview p {
+    margin: 0 0 16px;
+}
+
+.settings-preview-kicker {
+    color: var(--color-primary);
+    font-size: 0.78em;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+}
+
+.settings-live-preview a {
+    color: var(--color-primary);
+    text-underline-offset: 0.16em;
+}
+
+.settings-live-preview code,
+.settings-live-preview pre {
+    font-family: var(--editor-code-font-family);
+}
+
+.settings-live-preview :not(pre) > code {
+    padding: 0.12em 0.32em;
+    border-radius: 4px;
+    background: var(--color-bg-control);
+    font-size: 0.88em;
+}
+
+.settings-live-preview blockquote {
+    margin: 18px 0;
+    padding-left: 16px;
+    border-left: 3px solid var(--color-primary);
+    color: var(--color-text-muted);
+}
+
+.settings-live-preview pre {
+    margin: 18px 0;
+    padding: 16px 18px;
+    overflow: auto;
+    border: 1px solid var(--color-border);
+    border-radius: 9px;
+    background: var(--color-bg-control);
+    font-size: 0.85em;
+    line-height: 1.6;
+}
+
+.settings-live-preview pre code {
+    font-family: inherit;
+}
+
+.setting-check > span {
+    display: grid;
+    gap: 3px;
+}
+
+.setting-check small {
+    color: var(--color-text-muted);
 }
 
 .theme-picker {
@@ -1029,6 +1372,17 @@ button.mermaid-preview:focus-visible {
     }
 }
 
+@media (max-width: 1100px) {
+    .settings-appearance-layout {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .settings-appearance-layout .settings-card,
+    .settings-preview-panel {
+        width: min(680px, 100%);
+    }
+}
+
 @media (max-width: 780px) {
     .mode-switch.compact {
         display: none;
@@ -1045,6 +1399,14 @@ button.mermaid-preview:focus-visible {
     .setting-field {
         grid-template-columns: 1fr;
         gap: 6px;
+    }
+
+    .settings-workspace {
+        grid-template-columns: 190px minmax(0, 1fr);
+    }
+
+    .settings-content {
+        padding-inline: 24px;
     }
 
     .panel-backdrop {

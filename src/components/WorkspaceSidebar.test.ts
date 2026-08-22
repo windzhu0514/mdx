@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 
-import { createApp, h, nextTick, type App } from "vue";
+import { createApp, nextTick, type App } from "vue";
 import { afterEach, describe, expect, it } from "vitest";
 
 import WorkspaceSidebar, { owningRoot } from "./WorkspaceSidebar.vue";
@@ -216,9 +216,7 @@ describe("WorkspaceSidebar", () => {
         const folderCopy = treeItem(sidebar, "file:c:\\notes\\draft.md");
         expect(openCopy.getAttribute("aria-current")).toBe("page");
         expect(folderCopy.getAttribute("aria-current")).toBe("page");
-        expect(folderCopy.getAttribute("aria-label")).toBe(
-            "draft.md，未保存，不可用",
-        );
+        expect(folderCopy.getAttribute("aria-label")).toBe("draft.md，未保存，不可用");
 
         folderCopy.click();
         await nextTick();
@@ -365,7 +363,9 @@ describe("WorkspaceSidebar", () => {
         documentRow.focus();
         dispatchKey(documentRow, "ArrowDown");
         await nextTick();
-        expect(document.activeElement?.getAttribute("data-tree-key")).toBe("folder:c:\\notes");
+        expect(document.activeElement?.getAttribute("data-tree-key")).toBe(
+            "folder:c:\\notes",
+        );
 
         dispatchKey(treeItem(sidebar, "folder:c:\\notes"), "ArrowUp");
         await nextTick();
@@ -463,9 +463,8 @@ describe("WorkspaceSidebar", () => {
     it("keeps empty-state controls outside the ARIA composite", () => {
         const sidebar = mountSidebar({ documents: [untitled()] });
         const tree = sidebar.host.querySelector<HTMLElement>('[role="tree"]');
-        const openFolder = sidebar.host.querySelector<HTMLButtonElement>(
-            '[aria-label="打开文件夹"]',
-        );
+        const openFolder =
+            sidebar.host.querySelector<HTMLButtonElement>('[aria-label="打开文件夹"]');
 
         expect(tree).not.toBeNull();
         expect(openFolder).not.toBeNull();
@@ -481,12 +480,12 @@ describe("WorkspaceSidebar", () => {
             expandedPaths: ["C:\\notes"],
         });
 
-        expect(treeItem(sidebar, "document:c:\\notes\\a.mdx").getAttribute("aria-current")).toBe(
-            "page",
-        );
-        expect(treeItem(sidebar, "file:c:\\notes\\a.mdx").getAttribute("aria-current")).toBe(
-            "page",
-        );
+        expect(
+            treeItem(sidebar, "document:c:\\notes\\a.mdx").getAttribute("aria-current"),
+        ).toBe("page");
+        expect(
+            treeItem(sidebar, "file:c:\\notes\\a.mdx").getAttribute("aria-current"),
+        ).toBe("page");
     });
 
     it("focuses a requested open document through the public focus API", async () => {
@@ -593,9 +592,7 @@ describe("WorkspaceSidebar", () => {
         });
         const tree = sidebar.host.querySelector<HTMLElement>("[role=tree]");
         const rootRow = treeItem(sidebar, "folder:c:\\root");
-        const actions = rootRow.querySelector<HTMLElement>(
-            ".workspace-row-actions",
-        );
+        const actions = rootRow.querySelector<HTMLElement>(".workspace-row-actions");
         const refresh = actions?.querySelector<HTMLButtonElement>(
             '[aria-label="刷新 Root"]',
         );

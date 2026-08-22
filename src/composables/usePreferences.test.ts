@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+    CODE_FONT_OPTIONS,
     DEFAULT_PREFERENCES,
+    FONT_GROUPS,
+    FONT_OPTIONS,
     THEME_OPTIONS,
     isDarkTheme,
     loadPreferences,
@@ -106,5 +109,89 @@ describe("editor preferences", () => {
         expect(normalizePreferences({ theme: "light" }).theme).toBe("xuan-white");
         expect(normalizePreferences({ theme: "dark" }).theme).toBe("ink-black");
         expect(normalizePreferences({ theme: "monochrome" }).theme).toBe("xuan-white");
+    });
+
+    it("exposes the fixed font list in display groups", () => {
+        expect(FONT_OPTIONS.map(({ id, label }) => ({ id, label }))).toEqual([
+            { id: "system-default", label: "系统默认" },
+            { id: "cascadia-code", label: "Cascadia Code" },
+            { id: "consolas", label: "Consolas" },
+            { id: "fira-code", label: "Fira Code" },
+            { id: "jetbrains-mono", label: "JetBrains Mono" },
+            { id: "maple-mono-cn", label: "Maple Mono CN" },
+            { id: "sf-mono", label: "SF Mono" },
+            { id: "sarasa-mono-sc", label: "等距更纱黑体" },
+            { id: "inter", label: "Inter" },
+            { id: "segoe-ui", label: "Segoe UI" },
+            { id: "pingfang-sc", label: "苹方" },
+            { id: "source-han-sans-sc", label: "思源黑体" },
+            { id: "microsoft-yahei", label: "微软雅黑" },
+            { id: "georgia", label: "Georgia" },
+            { id: "times-new-roman", label: "Times New Roman" },
+            { id: "kaiti", label: "楷体" },
+            { id: "source-han-serif-sc", label: "思源宋体" },
+            { id: "simsun", label: "宋体" },
+            { id: "lxgw-wenkai", label: "霞鹜文楷" },
+        ]);
+        expect(FONT_GROUPS.map(({ label }) => label)).toEqual(["等宽", "无衬线", "衬线"]);
+        expect(FONT_OPTIONS[0].fontFamily).toBe(
+            'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif',
+        );
+        expect(FONT_OPTIONS.find(({ id }) => id === "fira-code")?.fontFamily).toBe(
+            '"Fira Code", "Cascadia Code", "JetBrains Mono", Consolas, "Microsoft YaHei", monospace',
+        );
+    });
+
+    it("accepts concrete fonts and migrates legacy font preferences", () => {
+        expect(normalizePreferences({ fontFamily: "fira-code" }).fontFamily).toBe(
+            "fira-code",
+        );
+        expect(normalizePreferences({ fontFamily: "sans" }).fontFamily).toBe(
+            "system-default",
+        );
+        expect(normalizePreferences({ fontFamily: "serif" }).fontFamily).toBe(
+            "lxgw-wenkai",
+        );
+        expect(normalizePreferences({ fontFamily: "mono" }).fontFamily).toBe(
+            "cascadia-code",
+        );
+        expect(normalizePreferences({ fontFamily: "missing" }).fontFamily).toBe(
+            "system-default",
+        );
+    });
+
+    it("exposes code-only monospaced fonts in display order", () => {
+        expect(CODE_FONT_OPTIONS.map(({ id, label }) => ({ id, label }))).toEqual([
+            { id: "cascadia-code", label: "Cascadia Code" },
+            { id: "consolas", label: "Consolas" },
+            { id: "fira-code", label: "Fira Code" },
+            { id: "jetbrains-mono", label: "JetBrains Mono" },
+            { id: "maple-mono-cn", label: "Maple Mono CN" },
+            { id: "sf-mono", label: "SF Mono" },
+            { id: "sarasa-mono-sc", label: "等距更纱黑体" },
+        ]);
+        expect(
+            CODE_FONT_OPTIONS.find(({ id }) => id === "maple-mono-cn")?.fontFamily,
+        ).toBe('"Maple Mono CN Bundled", monospace');
+        expect(CODE_FONT_OPTIONS.find(({ id }) => id === "fira-code")?.fontFamily).toBe(
+            '"Fira Code", "Maple Mono CN Bundled", monospace',
+        );
+        expect(
+            FONT_OPTIONS.filter(({ group }) => group === "monospace").map(({ id }) => id),
+        ).toEqual(CODE_FONT_OPTIONS.map(({ id }) => id));
+    });
+
+    it("defaults and normalizes the independent code font", () => {
+        expect(DEFAULT_PREFERENCES.codeFontFamily).toBe("maple-mono-cn");
+        expect(normalizePreferences({ codeFontFamily: "fira-code" }).codeFontFamily).toBe(
+            "fira-code",
+        );
+        expect(normalizePreferences({}).codeFontFamily).toBe("maple-mono-cn");
+        expect(normalizePreferences({ codeFontFamily: "missing" }).codeFontFamily).toBe(
+            "maple-mono-cn",
+        );
+        expect(normalizePreferences({ codeFontFamily: 42 }).codeFontFamily).toBe(
+            "maple-mono-cn",
+        );
     });
 });

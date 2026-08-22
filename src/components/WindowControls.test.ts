@@ -92,15 +92,14 @@ describe("WindowControls", () => {
 
     it("contains maximize-state failures raised by native resize events", async () => {
         await mountControls();
-        const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+        const consoleError = vi
+            .spyOn(console, "error")
+            .mockImplementation(() => undefined);
         mocks.isMaximized.mockRejectedValueOnce(new Error("state unavailable"));
 
         await expect(mocks.resizeHandler?.()).resolves.toBeUndefined();
 
-        expect(consoleError).toHaveBeenCalledWith(
-            "窗口命令执行失败",
-            expect.any(Error),
-        );
+        expect(consoleError).toHaveBeenCalledWith("窗口命令执行失败", expect.any(Error));
         consoleError.mockRestore();
     });
 });

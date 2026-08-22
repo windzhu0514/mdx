@@ -10,6 +10,7 @@ mod note_index;
 mod path_identity;
 mod recent_files;
 mod resource_import;
+mod system_fonts;
 mod window_state;
 pub mod workspace;
 mod workspace_session;
@@ -856,6 +857,8 @@ pub fn run() {
                 .build(),
         )
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .on_page_load(|webview, payload| {
             if webview.label() == "main"
                 && matches!(payload.event(), tauri::webview::PageLoadEvent::Finished)
@@ -901,7 +904,8 @@ pub fn run() {
             remove_recent_file,
             clear_recent_files,
             scan_workspace_folder,
-            get_disk_revisions
+            get_disk_revisions,
+            system_fonts::list_system_font_families
         ])
         .run(tauri::generate_context!())
         .expect("error while running MDXNote application");
@@ -910,6 +914,19 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn system_font_names_are_sorted_and_deduplicated_case_insensitively() {
+        assert_eq!(
+            system_fonts::normalize_font_family_names([
+                "Segoe UI".to_string(),
+                "inter".to_string(),
+                "Inter".to_string(),
+                "  ".to_string(),
+            ]),
+            vec!["inter".to_string(), "Segoe UI".to_string()]
+        );
+    }
 
     #[test]
     fn resource_metadata_is_added_and_deduplicated() {

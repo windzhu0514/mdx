@@ -18,7 +18,8 @@ export type EditorCommand =
               | "indent"
               | "outdent"
               | "hr"
-              | "codeBlock";
+              | "codeBlock"
+              | "table";
       };
 
 export type MoraEditorHandle = {

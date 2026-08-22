@@ -1,5 +1,5 @@
-import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
+import { configDefaults, defineConfig } from "vitest/config";
 
 export default defineConfig({
     plugins: [vue()],
@@ -26,5 +26,8 @@ export default defineConfig({
         watch: {
             ignored: ["**/src-tauri/**"],
         },
+    },
+    test: {
+        exclude: [...configDefaults.exclude, "scripts/**/*.test.mjs"],
     },
 });

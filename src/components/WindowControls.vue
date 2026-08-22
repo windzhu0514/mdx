@@ -26,9 +26,7 @@ async function toggleMaximize() {
 onMounted(async () => {
     await runWindowCommand(syncMaximized);
     try {
-        unlistenResize = await appWindow.onResized(() =>
-            runWindowCommand(syncMaximized),
-        );
+        unlistenResize = await appWindow.onResized(() => runWindowCommand(syncMaximized));
     } catch (error) {
         console.error("窗口状态监听失败", error);
     }

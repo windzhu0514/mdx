@@ -27,19 +27,8 @@ function mountPanel(component: Component, props: Record<string, unknown>) {
     return host;
 }
 
-describe("模态面板关闭按钮", () => {
+describe("面板关闭按钮", () => {
     it.each([
-        {
-            name: "偏好设置",
-            component: SettingsPanel,
-            props: {
-                open: true,
-                preferences: DEFAULT_PREFERENCES,
-                aiKeyConfigured: false,
-                aiKeySaving: false,
-            },
-            label: "关闭偏好设置",
-        },
         {
             name: "历史版本",
             component: HistoryPanel,
@@ -65,28 +54,31 @@ describe("模态面板关闭按钮", () => {
         expect(closeButton?.getAttribute("aria-label")).toBe(label);
     });
 
-    it.each([
-        {
-            name: "偏好设置",
-            component: SettingsPanel,
-            props: {
-                open: true,
-                preferences: DEFAULT_PREFERENCES,
-                aiKeyConfigured: false,
-                aiKeySaving: false,
-            },
-        },
-        {
-            name: "历史版本",
-            component: HistoryPanel,
-            props: { open: true, items: [], loading: false },
-        },
-    ])("$name 打开后接管模态焦点", async ({ component, props }) => {
-        const host = mountPanel(component, props);
+    it("历史版本打开后接管模态焦点", async () => {
+        const host = mountPanel(HistoryPanel, {
+            open: true,
+            items: [],
+            loading: false,
+        });
         const dialog = host.querySelector<HTMLElement>('[role="dialog"]');
 
         expect(dialog).not.toBeNull();
         await vi.waitFor(() => expect(document.activeElement).toBe(dialog));
+    });
+
+    it("偏好设置使用非模态工作区并提供返回入口", async () => {
+        const host = mountPanel(SettingsPanel, {
+            open: true,
+            preferences: DEFAULT_PREFERENCES,
+            aiKeyConfigured: false,
+            aiKeySaving: false,
+        });
+        const workspace = host.querySelector<HTMLElement>(".settings-workspace");
+        const backButton = host.querySelector<HTMLButtonElement>(".settings-back");
+
+        expect(host.querySelector('[role="dialog"]')).toBeNull();
+        expect(backButton?.getAttribute("aria-label")).toBe("返回编辑器");
+        await vi.waitFor(() => expect(document.activeElement).toBe(workspace));
     });
 });
 
@@ -102,6 +94,10 @@ describe("AI 设置", () => {
             onUpdate: update,
             onSaveAiKey: saveAiKey,
         });
+        Array.from(host.querySelectorAll<HTMLButtonElement>(".settings-nav button"))
+            .find((button) => button.textContent?.trim() === "AI")
+            ?.click();
+        await nextTick();
         const baseUrl = host.querySelector<HTMLInputElement>(
             'input[aria-label="AI Base URL"]',
         );
@@ -134,7 +130,7 @@ describe("AI 设置", () => {
         expect(deleteButton?.disabled).toBe(true);
     });
 
-    it("已配置时允许删除 API Key", () => {
+    it("已配置时允许删除 API Key", async () => {
         const deleteAiKey = vi.fn();
         const host = mountPanel(SettingsPanel, {
             open: true,
@@ -143,6 +139,10 @@ describe("AI 设置", () => {
             aiKeySaving: false,
             onDeleteAiKey: deleteAiKey,
         });
+        Array.from(host.querySelectorAll<HTMLButtonElement>(".settings-nav button"))
+            .find((button) => button.textContent?.trim() === "AI")
+            ?.click();
+        await nextTick();
         const deleteButton = Array.from(host.querySelectorAll("button")).find(
             (button) => button.textContent?.trim() === "删除 API Key",
         );

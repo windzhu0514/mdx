@@ -68,7 +68,6 @@ export type ImportedMarkdown = {
     frontMatter: FrontMatterData | null;
 };
 
-
 export type PendingResource = {
     path: string;
     originalName: string;

@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
     openMermaid: undefined as ((request: unknown) => void) | undefined,
     aiKeyConfigured: false,
     aiKeyStatusResponses: [] as Array<boolean | Promise<boolean>>,
+    systemFontFamilies: [] as string[],
     getMoraEditorAiProvider: undefined as (() => unknown) | undefined,
     getMoraEditorMarkdown: undefined as (() => string) | undefined,
     moraEditorMounted: vi.fn(),
@@ -139,6 +140,9 @@ const mocks = vi.hoisted(() => ({
         close: mocks.windowClose,
     })),
     invoke: vi.fn(async (command: string, args?: unknown) => {
+        if (command === "list_system_font_families") {
+            return [...mocks.systemFontFamilies];
+        }
         if (command === "has_ai_api_key") {
             const response = mocks.aiKeyStatusResponses.shift();
             return response ?? mocks.aiKeyConfigured;
@@ -370,6 +374,22 @@ const mocks = vi.hoisted(() => ({
     isTauri: vi.fn(() => false),
     setTheme: vi.fn(async () => undefined),
     windowClose: vi.fn(async () => undefined),
+    updaterCheck: vi.fn(),
+    updaterDownload: vi.fn(),
+    updaterInstall: vi.fn(),
+    updaterClearError: vi.fn(),
+    updaterState: undefined as
+        | {
+              phase: { value: string };
+              version: { value: string };
+              date: { value: string };
+              notes: { value: string };
+              downloadedBytes: { value: number };
+              totalBytes: { value: number | null };
+              error: { value: string };
+              busy: { value: boolean };
+          }
+        | undefined,
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -389,6 +409,33 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
     open: mocks.openDialog,
     save: mocks.saveDialog,
 }));
+
+vi.mock("./composables/useAppUpdater", async () => {
+    const { computed, ref } = await import("vue");
+    const phase = ref("idle");
+    const state = {
+        phase,
+        version: ref(""),
+        date: ref(""),
+        notes: ref(""),
+        downloadedBytes: ref(0),
+        totalBytes: ref<number | null>(null),
+        error: ref(""),
+        busy: computed(() =>
+            ["checking", "downloading", "installing"].includes(phase.value),
+        ),
+    };
+    mocks.updaterState = state;
+    return {
+        useAppUpdater: vi.fn(() => ({
+            ...state,
+            checkForUpdate: mocks.updaterCheck,
+            downloadUpdate: mocks.updaterDownload,
+            installUpdate: mocks.updaterInstall,
+            clearError: mocks.updaterClearError,
+        })),
+    };
+});
 
 vi.mock("./components/editor/MoraEditor.vue", async () => {
     const { defineComponent, h } = await import("vue");
@@ -489,7 +536,9 @@ function topLevelMenuLabels(host: HTMLElement, menuName: string) {
     const popup = group?.querySelector<HTMLElement>(":scope > .menu-popup");
     return Array.from(popup?.children ?? []).flatMap((child) => {
         if (!(child instanceof HTMLButtonElement)) return [];
-        return [child.querySelector("span")?.textContent?.trim() ?? child.textContent?.trim()];
+        return [
+            child.querySelector("span")?.textContent?.trim() ?? child.textContent?.trim(),
+        ];
     });
 }
 
@@ -705,6 +754,7 @@ beforeEach(() => {
     localStorage.clear();
     mocks.aiKeyConfigured = false;
     mocks.aiKeyStatusResponses = [];
+    mocks.systemFontFamilies = [];
     mocks.openDialog.mockReset();
     mocks.saveDialog.mockReset();
     mocks.mermaidPng.mockClear();
@@ -724,6 +774,19 @@ beforeEach(() => {
     mocks.unavailableDiskPaths.clear();
     mocks.workspaceFolderEntries.clear();
     mocks.workspaceSession = null;
+    mocks.updaterCheck.mockReset().mockResolvedValue("current");
+    mocks.updaterDownload.mockReset().mockResolvedValue(true);
+    mocks.updaterInstall.mockReset().mockResolvedValue(true);
+    mocks.updaterClearError.mockReset();
+    if (mocks.updaterState) {
+        mocks.updaterState.phase.value = "idle";
+        mocks.updaterState.version.value = "";
+        mocks.updaterState.date.value = "";
+        mocks.updaterState.notes.value = "";
+        mocks.updaterState.downloadedBytes.value = 0;
+        mocks.updaterState.totalBytes.value = null;
+        mocks.updaterState.error.value = "";
+    }
     Object.defineProperty(HTMLDialogElement.prototype, "showModal", {
         configurable: true,
         value() {
@@ -755,6 +818,33 @@ afterEach(() => {
 });
 
 describe("App Web 预览启动", () => {
+    it("shows update checking under About and disables it in Web preview", async () => {
+        const host = await mountApp();
+
+        expect(topLevelMenuLabels(host, "关于")).toContain("检查更新");
+        expect(findButton(host, "检查更新")?.disabled).toBe(true);
+        expect(mocks.updaterCheck).not.toHaveBeenCalled();
+    });
+
+    it("runs a manual desktop check and reports the current version", async () => {
+        mocks.isTauri.mockReturnValue(true);
+        const host = await mountApp();
+        await vi.waitFor(() =>
+            expect(mocks.updaterCheck).toHaveBeenCalledWith({ silent: true }),
+        );
+        mocks.updaterCheck.mockClear();
+
+        findButton(host, "检查更新")?.click();
+        await vi.waitFor(() =>
+            expect(mocks.updaterCheck).toHaveBeenCalledWith({ silent: false }),
+        );
+        await vi.waitFor(() =>
+            expect(host.querySelector(".status-bar")?.textContent).toContain(
+                "已是最新版",
+            ),
+        );
+    });
+
     it("按文件职责重排菜单并显示完整快捷键", async () => {
         const host = await mountApp();
         const fileLabels = topLevelMenuLabels(host, "文件");
@@ -768,20 +858,14 @@ describe("App Web 预览启动", () => {
         expect(fileLabels.some((label) => label?.endsWith("..."))).toBe(false);
         expect(fileLabels).toContain("历史版本");
         expect(fileLabels).not.toContain("工作区查找");
-        expect(fileLabels.indexOf("另存为")).toBeLessThan(
-            fileLabels.indexOf("历史版本"),
-        );
+        expect(fileLabels.indexOf("另存为")).toBeLessThan(fileLabels.indexOf("历史版本"));
         expect(fileLabels.indexOf("历史版本")).toBeLessThan(
             fileLabels.indexOf("导出 Markdown"),
         );
         expect(shortcutOf("文件", "打开文件夹")).toBe("Ctrl+Shift+O");
 
-        expect(editLabels.indexOf("查找")).toBeLessThan(
-            editLabels.indexOf("工作区查找"),
-        );
-        expect(editLabels.indexOf("工作区查找")).toBeLessThan(
-            editLabels.indexOf("替换"),
-        );
+        expect(editLabels.indexOf("查找")).toBeLessThan(editLabels.indexOf("工作区查找"));
+        expect(editLabels.indexOf("工作区查找")).toBeLessThan(editLabels.indexOf("替换"));
         expect(editLabels[editLabels.length - 1]).toBe("偏好设置");
         expect(shortcutOf("编辑", "工作区查找")).toBe("Ctrl+Shift+F");
         expect(shortcutOf("编辑", "偏好设置")).toBe("Ctrl+,");
@@ -891,19 +975,10 @@ describe("App Web 预览启动", () => {
             (button) => button.querySelector("span")?.textContent?.trim(),
         );
         expect(labels).toEqual(
-            expect.arrayContaining([
-                "导出 Markdown",
-                "导出 Word",
-                "导出 PDF",
-                "打印",
-            ]),
+            expect.arrayContaining(["导出 Markdown", "导出 Word", "导出 PDF", "打印"]),
         );
-        expect(labels.indexOf("导出 Markdown")).toBeLessThan(
-            labels.indexOf("导出 Word"),
-        );
-        expect(labels.indexOf("导出 Word")).toBeLessThan(
-            labels.indexOf("导出 PDF"),
-        );
+        expect(labels.indexOf("导出 Markdown")).toBeLessThan(labels.indexOf("导出 Word"));
+        expect(labels.indexOf("导出 Word")).toBeLessThan(labels.indexOf("导出 PDF"));
         expect(labels.indexOf("导出 PDF")).toBeLessThan(labels.indexOf("打印"));
 
         mocks.saveDialog.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
@@ -1046,7 +1121,7 @@ describe("App Web 预览启动", () => {
         ).toBe("true");
     });
 
-    it("blocks the command palette shortcut while another modal owns focus", async () => {
+    it("设置工作区打开时不叠加命令面板", async () => {
         const host = await mountApp();
         findButton(host, "偏好设置")?.click();
         const settings = await vi.waitFor(() => {
@@ -1073,7 +1148,7 @@ describe("App Web 预览启动", () => {
         expect(document.activeElement).toBe(settings);
     });
 
-    it("hands focus to a modal opened by a palette command", async () => {
+    it("通过命令面板打开设置工作区后交接焦点", async () => {
         const host = await mountApp();
         window.dispatchEvent(
             new KeyboardEvent("keydown", {
@@ -1251,9 +1326,39 @@ describe("App Web 预览启动", () => {
         settingsButton?.click();
         await nextTick();
 
+        findButton(host, "AI")?.click();
+        await nextTick();
+
         expect(host.querySelector('[aria-labelledby="settings-title"]')).not.toBeNull();
         expect(host.textContent).toContain("未配置");
         expect(mocks.invoke).not.toHaveBeenCalled();
+    });
+
+    it("在设置工作区与编辑器之间切换时保留同一个编辑器实例", async () => {
+        const host = await mountApp();
+        findButton(host, "新建文档")?.click();
+        await vi.waitFor(() => {
+            expect(mocks.moraEditorMounted).toHaveBeenCalledTimes(1);
+        });
+        const editor = host.querySelector(".mora-editor-stub");
+
+        findButton(host, "偏好设置")?.click();
+        await nextTick();
+
+        const editorWorkspace = host.querySelector<HTMLElement>(".editor-workspace");
+        const settingsWorkspace = host.querySelector<HTMLElement>(".settings-workspace");
+        expect(settingsWorkspace?.parentElement).toBe(host.querySelector(".main-body"));
+        expect(editorWorkspace?.style.display).toBe("none");
+        expect(host.querySelector(".mora-editor-stub")).toBe(editor);
+        expect(mocks.moraEditorMounted).toHaveBeenCalledTimes(1);
+
+        findButton(host, "返回编辑器")?.click();
+        await nextTick();
+
+        expect(host.querySelector(".settings-workspace")).toBeNull();
+        expect(editorWorkspace?.style.display).not.toBe("none");
+        expect(host.querySelector(".mora-editor-stub")).toBe(editor);
+        expect(mocks.moraEditorMounted).toHaveBeenCalledTimes(1);
     });
 
     it("includes the existing recent-file submenu actions", async () => {
@@ -2705,6 +2810,8 @@ describe("App 桌面关闭", () => {
             ).toHaveLength(2);
         });
 
+        findButton(host, "AI")?.click();
+
         secondStatus.resolve(true);
         await vi.waitFor(() => expect(host.textContent).toContain("已配置"));
         firstStatus.resolve(false);
@@ -2756,6 +2863,8 @@ describe("App 桌面关闭", () => {
                 mocks.invoke.mock.calls.filter(([name]) => name === "has_ai_api_key"),
             ).toHaveLength(2);
         });
+        findButton(host, "AI")?.click();
+        await nextTick();
         expect(host.textContent).toContain("已配置");
 
         const apiKey = host.querySelector<HTMLInputElement>(
@@ -2789,5 +2898,35 @@ describe("App 桌面关闭", () => {
             ).toHaveLength(4);
         });
         expect(host.textContent).toContain("未配置");
+    });
+
+    it("桌面设置按系统字体族禁用未安装字体", async () => {
+        mocks.isTauri.mockReturnValue(true);
+        mocks.systemFontFamilies = ["Microsoft YaHei", "Segoe UI"];
+        const host = document.createElement("div");
+        document.body.append(host);
+        const app = createApp(App);
+        app.mount(host);
+        cleanup = () => app.unmount();
+
+        findButton(host, "偏好设置")?.click();
+        await vi.waitFor(() => {
+            expect(mocks.invoke).toHaveBeenCalledWith("list_system_font_families");
+            const bodyFontSelect = host.querySelectorAll<HTMLSelectElement>("select")[1];
+            expect(
+                bodyFontSelect?.querySelector<HTMLOptionElement>('option[value="inter"]')
+                    ?.disabled,
+            ).toBe(true);
+        });
+        const bodyFontSelect = host.querySelectorAll<HTMLSelectElement>("select")[1];
+        const inter = bodyFontSelect?.querySelector<HTMLOptionElement>(
+            'option[value="inter"]',
+        );
+        const segoe = bodyFontSelect?.querySelector<HTMLOptionElement>(
+            'option[value="segoe-ui"]',
+        );
+
+        expect(inter?.textContent?.trim()).toBe("Inter（未安装）");
+        expect(segoe?.disabled).toBe(false);
     });
 });

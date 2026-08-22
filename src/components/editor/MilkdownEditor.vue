@@ -35,7 +35,7 @@ import {
     wrapInHeadingCommand,
     wrapInOrderedListCommand,
 } from "@milkdown/kit/preset/commonmark";
-import { toggleStrikethroughCommand } from "@milkdown/kit/preset/gfm";
+import { insertTableCommand, toggleStrikethroughCommand } from "@milkdown/kit/preset/gfm";
 import { redo, undo } from "@milkdown/kit/prose/history";
 import { selectAll } from "@milkdown/kit/prose/commands";
 import { EditorState, Selection, TextSelection } from "@milkdown/kit/prose/state";
@@ -417,6 +417,9 @@ function execute(command: EditorCommand): void {
                 return;
             case "codeBlock":
                 commands.call(createCodeBlockCommand.key);
+                return;
+            case "table":
+                commands.call(insertTableCommand.key, { row: 3, col: 3 });
                 return;
         }
     });

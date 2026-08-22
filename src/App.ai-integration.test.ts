@@ -236,11 +236,14 @@ beforeEach(() => {
         }
         return undefined;
     });
-    vi.stubGlobal("matchMedia", vi.fn(() => ({
-        matches: false,
-        addEventListener: vi.fn(),
-        removeEventListener: vi.fn(),
-    })));
+    vi.stubGlobal(
+        "matchMedia",
+        vi.fn(() => ({
+            matches: false,
+            addEventListener: vi.fn(),
+            removeEventListener: vi.fn(),
+        })),
+    );
     vi.stubGlobal("crypto", { randomUUID: () => "ai-resource" });
     Object.defineProperty(URL, "createObjectURL", {
         configurable: true,
@@ -268,6 +271,8 @@ describe("App WYSIWYG AI 接线", () => {
         expect(provider).toBeTypeOf("function");
 
         findButton(host, "偏好设置").click();
+        await nextTick();
+        findButton(host, "AI").click();
         await nextTick();
         updateInput(host, "AI Base URL", "https://new.example.com/v1");
         updateInput(host, "AI 模型", "new-model");
@@ -303,29 +308,22 @@ describe("App WYSIWYG AI 接线", () => {
         const preview = mocks.editors[mocks.editors.length - 1];
         expect(preview?.aiProvider).toBeUndefined();
         const milkdownEditors = host.querySelectorAll(".milkdown-editor-stub");
-        expect(
-            milkdownEditors[0]?.getAttribute("data-readonly"),
-        ).toBe("true");
-        expect(
-            milkdownEditors[0]?.getAttribute("data-has-ai"),
-        ).toBe("true");
-        expect(
-            milkdownEditors[1]?.getAttribute("data-has-ai"),
-        ).toBe("false");
+        expect(milkdownEditors[0]?.getAttribute("data-readonly")).toBe("true");
+        expect(milkdownEditors[0]?.getAttribute("data-has-ai")).toBe("true");
+        expect(milkdownEditors[1]?.getAttribute("data-has-ai")).toBe("false");
     });
 
-    it.each([
-        "请先配置 AI Base URL",
-        "请先配置 AI 模型",
-        "未找到 API Key",
-    ])("把配置错误显示为 AI 生成失败并引导到偏好设置：%s", async (message) => {
-        const host = await mountApp();
+    it.each(["请先配置 AI Base URL", "请先配置 AI 模型", "未找到 API Key"])(
+        "把配置错误显示为 AI 生成失败并引导到偏好设置：%s",
+        async (message) => {
+            const host = await mountApp();
 
-        mocks.editors[0].emitAiError(message);
-        await nextTick();
+            mocks.editors[0].emitAiError(message);
+            await nextTick();
 
-        expect(host.textContent).toContain("AI 生成失败");
-        expect(host.textContent).toContain(message);
-        expect(host.textContent).toContain("偏好设置");
-    });
+            expect(host.textContent).toContain("AI 生成失败");
+            expect(host.textContent).toContain(message);
+            expect(host.textContent).toContain("偏好设置");
+        },
+    );
 });

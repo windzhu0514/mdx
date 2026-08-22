@@ -21,8 +21,21 @@ describe("Tauri 主窗口权限", () => {
         expect(capability.permissions).toContain("core:window:allow-minimize");
         expect(capability.permissions).toContain("core:window:allow-toggle-maximize");
         expect(capability.permissions).toContain("core:window:allow-start-dragging");
-        expect(capability.permissions).not.toContain(
-            "core:window:allow-set-decorations",
-        );
+        expect(capability.permissions).not.toContain("core:window:allow-set-decorations");
+    });
+
+    it("只开放更新检查、安装和重启所需权限", () => {
+        expect(capability.permissions).toContain("updater:default");
+        expect(capability.permissions).toContain("process:allow-restart");
+    });
+
+    it("只从 GitHub Releases HTTPS endpoint 获取签名更新", () => {
+        expect(tauriConfig.bundle.createUpdaterArtifacts).toBe(true);
+        expect(tauriConfig.plugins.updater.endpoints).toEqual([
+            "https://github.com/windzhu0514/mdx/releases/latest/download/latest.json",
+        ]);
+        expect(tauriConfig.plugins.updater.pubkey).not.toMatch(/placeholder|replace/i);
+        expect(tauriConfig.plugins.updater.pubkey.length).toBeGreaterThan(40);
+        expect(tauriConfig.plugins.updater.windows.installMode).toBe("passive");
     });
 });

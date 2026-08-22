@@ -19,6 +19,7 @@ import SettingsPanel from "./components/SettingsPanel.vue";
 import StatusBar from "./components/StatusBar.vue";
 import TableOfContents from "./components/TableOfContents.vue";
 import ThemePicker from "./components/ThemePicker.vue";
+import UpdateDialog from "./components/UpdateDialog.vue";
 import WindowControls from "./components/WindowControls.vue";
 import WorkspaceSidebar from "./components/WorkspaceSidebar.vue";
 import MoraEditor from "./components/editor/MoraEditor.vue";
@@ -44,6 +45,7 @@ import {
     type OpenDocument,
     type SessionDocument,
 } from "./composables/useDocumentSession";
+import { useAppUpdater } from "./composables/useAppUpdater";
 import { isDarkTheme, usePreferences, type ThemeId } from "./composables/usePreferences";
 import type { HistoryListItem, HistorySnapshot } from "./types/history";
 import type { NoteListItem, NoteSearchResult } from "./types/library";
@@ -76,6 +78,9 @@ const APP_NAME = "Mora";
 const APP_CN_NAME = "墨笺";
 const APP_TAGLINE = "Mora 墨笺，一款所见即所得的 MDX 扩展笔记编辑器";
 const tauriRuntime = isTauri();
+const updatesEnabled =
+    tauriRuntime && (import.meta.env.PROD || import.meta.env.MODE === "test");
+const appUpdater = useAppUpdater(updatesEnabled);
 const session = useDocumentSession(tauriRuntime);
 const documents = session.documents;
 const folders = session.folders;
@@ -144,11 +149,13 @@ const historyLoading = ref(false);
 let historyRequestId = 0;
 const showSettings = ref(false);
 const showThemePicker = ref(false);
+const showUpdateDialog = ref(false);
 const mermaidViewerRequest = ref<MermaidViewerRequest | null>(null);
 const mermaidExporting = ref(false);
 const mermaidExportError = ref("");
 const aiKeyConfigured = ref(false);
 const aiKeySaving = ref(false);
+const installedFontFamilies = ref<string[] | null>(null);
 let aiKeyStatusRequestId = 0;
 
 const {
@@ -191,7 +198,7 @@ const markdownResourcesPlan = ref<MarkdownResourcePlan>({
 });
 let markdownResourcesResolver: ((decision: MarkdownResourceDecision) => void) | null =
     null;
-const blockingModalOpen = computed(
+const commandPaletteBlocked = computed(
     () =>
         showRecentFiles.value ||
         showLibrary.value ||
@@ -200,6 +207,7 @@ const blockingModalOpen = computed(
         showLeavePrompt.value ||
         showConflictPrompt.value ||
         showMarkdownResourcesPrompt.value ||
+        showUpdateDialog.value ||
         mermaidViewerRequest.value !== null,
 );
 const savingDocumentIds = new Set<string>();
@@ -664,17 +672,17 @@ const viewMenu = computed<MarkdownCommand[]>(() => [
         disabled: !activeDocument.value,
     },
     {
-        id: "view.split",
-        label: "垂直双栏",
+        id: "view.source",
+        label: "仅源码",
         shortcut: "Alt+2",
-        action: () => setSourcePreview(true),
+        action: () => setSourcePreview(false),
         disabled: !activeDocument.value,
     },
     {
-        id: "view.source",
-        label: "仅源码",
+        id: "view.split",
+        label: "垂直双栏",
         shortcut: "Alt+3",
-        action: () => setSourcePreview(false),
+        action: () => setSourcePreview(true),
         disabled: !activeDocument.value,
     },
     {
@@ -701,6 +709,12 @@ const viewMenu = computed<MarkdownCommand[]>(() => [
 ]);
 
 const aboutMenu = computed<MarkdownCommand[]>(() => [
+    {
+        id: "about.check-updates",
+        label: "检查更新",
+        action: checkForAppUpdate,
+        disabled: !updatesEnabled || appUpdater.busy.value,
+    },
     { id: "about.app", label: `关于 ${APP_NAME} ${APP_CN_NAME}`, action: showAbout },
 ]);
 
@@ -785,12 +799,12 @@ function runPaletteCommand(id: string): void {
     restorePaletteFocus.value = true;
     showCommandPalette.value = false;
     const action = command.action();
-    restorePaletteFocus.value = !blockingModalOpen.value;
+    restorePaletteFocus.value = !commandPaletteBlocked.value;
     void action;
 }
 
 function openCommandPalette(): void {
-    if (blockingModalOpen.value) return;
+    if (commandPaletteBlocked.value) return;
     restorePaletteFocus.value = true;
     showCommandPalette.value = true;
 }
@@ -903,9 +917,30 @@ async function refreshAiKeyConfigured() {
     }
 }
 
+async function refreshInstalledFontFamilies() {
+    if (!tauriRuntime || installedFontFamilies.value !== null) return;
+
+    try {
+        const families = await invoke<unknown>("list_system_font_families");
+        if (
+            Array.isArray(families) &&
+            families.every((family): family is string => typeof family === "string")
+        ) {
+            installedFontFamilies.value = families;
+        }
+    } catch (error) {
+        console.warn("读取系统字体列表失败", error);
+    }
+}
+
 async function openSettingsPanel() {
     showSettings.value = true;
-    await refreshAiKeyConfigured();
+    await Promise.all([refreshAiKeyConfigured(), refreshInstalledFontFamilies()]);
+}
+
+function closeSettingsPanel() {
+    showSettings.value = false;
+    void nextTick(() => editorRef.value?.focus());
 }
 
 function selectTheme(theme: ThemeId) {
@@ -1011,6 +1046,9 @@ onMounted(async () => {
     });
 
     await loadRecentFiles();
+    void appUpdater.checkForUpdate({ silent: true }).then((result) => {
+        if (result === "available") showUpdateDialog.value = true;
+    });
 });
 
 onBeforeUnmount(() => {
@@ -1668,6 +1706,62 @@ const closeActions = {
     save: saveDocument,
 };
 
+async function checkForAppUpdate() {
+    if (!updatesEnabled || appUpdater.busy.value) return;
+    errorMessage.value = "";
+    statusMessage.value = "正在检查更新…";
+    const result = await appUpdater.checkForUpdate({ silent: false });
+    if (result === "available") {
+        showUpdateDialog.value = true;
+        statusMessage.value = `发现新版本 ${appUpdater.version.value}`;
+    } else if (result === "current") {
+        statusMessage.value = "已是最新版";
+    } else if (result === "failed") {
+        showUpdateDialog.value = true;
+        statusMessage.value = "检查更新失败";
+    }
+}
+
+async function downloadAppUpdate() {
+    const downloaded = await appUpdater.downloadUpdate();
+    statusMessage.value = downloaded ? "更新下载完成" : "更新下载失败";
+}
+
+let updateInstallInProgress = false;
+async function installDownloadedUpdate() {
+    if (updateInstallInProgress || appUpdater.phase.value !== "downloaded") return;
+    updateInstallInProgress = true;
+    try {
+        const canRestart = await session.prepareWindowClose(closeActions);
+        if (!canRestart) {
+            statusMessage.value = "更新安装已取消";
+            return;
+        }
+        const installed = await appUpdater.installUpdate();
+        if (!installed) statusMessage.value = "更新安装失败";
+    } catch (error) {
+        errorMessage.value = `安装更新前处理失败：${stringifyError(error)}`;
+        statusMessage.value = "更新安装已取消";
+    } finally {
+        updateInstallInProgress = false;
+    }
+}
+
+async function retryAppUpdate() {
+    appUpdater.clearError();
+    if (appUpdater.phase.value === "available") {
+        await downloadAppUpdate();
+    } else if (appUpdater.phase.value === "downloaded") {
+        await installDownloadedUpdate();
+    } else {
+        await checkForAppUpdate();
+    }
+}
+
+function closeUpdateDialog() {
+    if (!appUpdater.busy.value) showUpdateDialog.value = false;
+}
+
 async function focusWorkspaceTarget(id: string | null) {
     if (compactLayout.value) compactPanel.value = "workspace";
     else if (sidebarCollapsed.value) updateSidebarCollapsed(false);
@@ -1834,6 +1928,7 @@ function toEditorCommand(
         case "outdent":
         case "hr":
         case "codeBlock":
+        case "table":
             return { name };
         default:
             return null;
@@ -2051,10 +2146,10 @@ function handleWindowKeyDown(event: KeyboardEvent) {
             setEditorMode("wysiwyg");
         } else if (key === "2") {
             event.preventDefault();
-            setSourcePreview(true);
+            setSourcePreview(false);
         } else if (key === "3") {
             event.preventDefault();
-            setSourcePreview(false);
+            setSourcePreview(true);
         }
     }
 }
@@ -2235,9 +2330,7 @@ function insertImageReference() {
 }
 
 function insertTable() {
-    insertMarkdownSnippet(
-        "\n\n| 列 1 | 列 2 | 列 3 |\n| --- | --- | --- |\n| 内容 | 内容 | 内容 |\n\n",
-    );
+    runEditorCommand("table");
 }
 
 function insertMarkdownSnippet(markdown: string) {
@@ -2413,15 +2506,11 @@ function stringifyError(error: unknown) {
                 </div>
             </details>
 
-            <div
-                class="menu-document-name"
-                :title="title"
-                data-tauri-drag-region
-            >
+            <div class="menu-document-name" :title="title" data-tauri-drag-region>
                 {{ title }}
             </div>
 
-            <div class="mode-switch compact" aria-label="编辑模式">
+            <div v-if="!showSettings" class="mode-switch compact" aria-label="编辑模式">
                 <button
                     type="button"
                     :disabled="!activeDocument"
@@ -2430,11 +2519,7 @@ function stringifyError(error: unknown) {
                     title="所见即所得"
                     @click="setEditorMode('wysiwyg')"
                 >
-                    <svg
-                        class="mode-switch-icon"
-                        viewBox="0 0 16 16"
-                        aria-hidden="true"
-                    >
+                    <svg class="mode-switch-icon" viewBox="0 0 16 16" aria-hidden="true">
                         <path d="m10.7 2.3 3 3-7.9 7.9-3.5.5.5-3.5z" />
                         <path d="m9.6 3.4 3 3M2.8 10.2l3 3" />
                     </svg>
@@ -2449,11 +2534,7 @@ function stringifyError(error: unknown) {
                     title="仅源码"
                     @click="setSourcePreview(false)"
                 >
-                    <svg
-                        class="mode-switch-icon"
-                        viewBox="0 0 16 16"
-                        aria-hidden="true"
-                    >
+                    <svg class="mode-switch-icon" viewBox="0 0 16 16" aria-hidden="true">
                         <path d="m5.5 3.5-4 4.5 4 4.5M10.5 3.5l4 4.5-4 4.5M9 2.5l-2 11" />
                     </svg>
                 </button>
@@ -2467,11 +2548,7 @@ function stringifyError(error: unknown) {
                     title="垂直双栏"
                     @click="setSourcePreview(true)"
                 >
-                    <svg
-                        class="mode-switch-icon"
-                        viewBox="0 0 16 16"
-                        aria-hidden="true"
-                    >
+                    <svg class="mode-switch-icon" viewBox="0 0 16 16" aria-hidden="true">
                         <rect x="1.75" y="2.25" width="12.5" height="11.5" rx="1.5" />
                         <path d="M8 2.5v11" />
                     </svg>
@@ -2481,100 +2558,109 @@ function stringifyError(error: unknown) {
         </nav>
 
         <div class="main-body">
-            <WorkspaceSidebar
-                ref="workspaceSidebarRef"
-                :documents="documents"
-                :folders="folders"
-                :active-document-id="activeDocumentId"
-                :expanded-paths="expandedPaths"
-                :visible="workspaceVisible"
-                :compact="compactLayout"
-                :width="sidebarWidth"
-                @activate="activateWorkspaceDocument"
-                @open-path="openWorkspacePath"
-                @open-folder="openFolder"
-                @close-document="closeDocument"
-                @close-folder="closeFolder"
-                @toggle-expanded="toggleWorkspacePath"
-                @update:width="updateSidebarWidth"
-            />
+            <div v-show="!showSettings" class="editor-workspace">
+                <WorkspaceSidebar
+                    ref="workspaceSidebarRef"
+                    :documents="documents"
+                    :folders="folders"
+                    :active-document-id="activeDocumentId"
+                    :expanded-paths="expandedPaths"
+                    :visible="workspaceVisible"
+                    :compact="compactLayout"
+                    :width="sidebarWidth"
+                    @activate="activateWorkspaceDocument"
+                    @open-path="openWorkspacePath"
+                    @open-folder="openFolder"
+                    @close-document="closeDocument"
+                    @close-folder="closeFolder"
+                    @toggle-expanded="toggleWorkspacePath"
+                    @update:width="updateSidebarWidth"
+                />
 
-            <div class="workspace-center">
-                <section
-                    v-if="activeDocument"
-                    id="document-editor-panel"
-                    class="note-panel"
-                    role="region"
-                    aria-label="文档编辑区"
-                    :aria-busy="loading"
-                >
-                    <div class="editor-card">
-                        <FindReplacePanel
-                            ref="findPanel"
-                            v-model:query="findQuery"
-                            v-model:replacement="replaceQuery"
-                            :open="showFindPanel"
-                            :replace-open="showReplacePanel"
-                            :match-count="findMatchCount"
-                            @previous="navigateFindResult(true)"
-                            @next="navigateFindResult(false)"
-                            @expand="expandReplacePanel"
-                            @close="closeFindPanel"
-                            @replace-current="replaceCurrentMatch"
-                            @replace-all="replaceAllMatches"
-                        />
-                        <div class="markdown-editor">
-                            <MoraEditor
-                                ref="editorRef"
-                                :document-id="activeDocument.id"
-                                :model-value="content"
-                                :display-value="displayContent"
-                                :mode="editorMode"
-                                :source-preview="sourcePreview"
-                                :upload-image="registerPastedImage"
-                                :ai-provider="tauriRuntime ? aiProvider : undefined"
-                                @update:model-value="handleEditorUpdate"
-                                @ai-error="handleAiError"
-                                @open-mermaid="openMermaidViewer"
+                <div class="workspace-center">
+                    <section
+                        v-if="activeDocument"
+                        id="document-editor-panel"
+                        class="note-panel"
+                        role="region"
+                        aria-label="文档编辑区"
+                        :aria-busy="loading"
+                    >
+                        <div class="editor-card">
+                            <FindReplacePanel
+                                ref="findPanel"
+                                v-model:query="findQuery"
+                                v-model:replacement="replaceQuery"
+                                :open="showFindPanel"
+                                :replace-open="showReplacePanel"
+                                :match-count="findMatchCount"
+                                @previous="navigateFindResult(true)"
+                                @next="navigateFindResult(false)"
+                                @expand="expandReplacePanel"
+                                @close="closeFindPanel"
+                                @replace-current="replaceCurrentMatch"
+                                @replace-all="replaceAllMatches"
                             />
+                            <div class="markdown-editor">
+                                <MoraEditor
+                                    ref="editorRef"
+                                    :document-id="activeDocument.id"
+                                    :model-value="content"
+                                    :display-value="displayContent"
+                                    :mode="editorMode"
+                                    :source-preview="sourcePreview"
+                                    :upload-image="registerPastedImage"
+                                    :ai-provider="tauriRuntime ? aiProvider : undefined"
+                                    @update:model-value="handleEditorUpdate"
+                                    @ai-error="handleAiError"
+                                    @open-mermaid="openMermaidViewer"
+                                />
+                            </div>
                         </div>
-                    </div>
-                </section>
-                <section v-else class="workspace-welcome" aria-label="开始使用 Mora">
-                    <div class="workspace-welcome-card">
-                        <p class="workspace-welcome-eyebrow">Mora 墨笺</p>
-                        <h1>开始写作</h1>
-                        <p>新建一篇文档，或打开已有文件和工作区文件夹。</p>
-                        <div class="workspace-welcome-actions">
-                            <button type="button" class="primary" @click="createNewNote">
-                                新建文档
-                            </button>
-                            <button type="button" @click="openFiles">打开文件</button>
-                            <button type="button" @click="openFolder">打开文件夹</button>
+                    </section>
+                    <section v-else class="workspace-welcome" aria-label="开始使用 Mora">
+                        <div class="workspace-welcome-card">
+                            <p class="workspace-welcome-eyebrow">Mora 墨笺</p>
+                            <h1>开始写作</h1>
+                            <p>新建一篇文档，或打开已有文件和工作区文件夹。</p>
+                            <div class="workspace-welcome-actions">
+                                <button
+                                    type="button"
+                                    class="primary"
+                                    @click="createNewNote"
+                                >
+                                    新建文档
+                                </button>
+                                <button type="button" @click="openFiles">打开文件</button>
+                                <button type="button" @click="openFolder">
+                                    打开文件夹
+                                </button>
+                            </div>
                         </div>
-                    </div>
-                </section>
+                    </section>
+                </div>
+
+                <TableOfContents
+                    v-if="activeDocument"
+                    :items="toc"
+                    :visible="outlineVisible"
+                    :compact="compactLayout"
+                    @select="scrollToHeading"
+                />
             </div>
 
-            <TableOfContents
-                v-if="activeDocument"
-                :items="toc"
-                :visible="outlineVisible"
-                :compact="compactLayout"
-                @select="scrollToHeading"
+            <SettingsPanel
+                :open="showSettings"
+                :preferences="preferences"
+                :ai-key-configured="aiKeyConfigured"
+                :ai-key-saving="aiKeySaving"
+                :installed-font-families="installedFontFamilies"
+                @close="closeSettingsPanel"
+                @update="updatePreferences"
+                @save-ai-key="saveAiApiKey"
+                @delete-ai-key="deleteAiApiKey"
             />
         </div>
-
-        <SettingsPanel
-            :open="showSettings"
-            :preferences="preferences"
-            :ai-key-configured="aiKeyConfigured"
-            :ai-key-saving="aiKeySaving"
-            @close="showSettings = false"
-            @update="updatePreferences"
-            @save-ai-key="saveAiApiKey"
-            @delete-ai-key="deleteAiApiKey"
-        />
         <CommandPalette
             :open="showCommandPalette"
             :commands="paletteCommands"
@@ -2624,6 +2710,20 @@ function stringifyError(error: unknown) {
             :open="showConflictPrompt"
             :document-name="conflictPromptDocumentName"
             @decide="resolveConflictDecision"
+        />
+        <UpdateDialog
+            :open="showUpdateDialog"
+            :phase="appUpdater.phase.value"
+            :version="appUpdater.version.value"
+            :date="appUpdater.date.value"
+            :notes="appUpdater.notes.value"
+            :downloaded-bytes="appUpdater.downloadedBytes.value"
+            :total-bytes="appUpdater.totalBytes.value"
+            :error="appUpdater.error.value"
+            @close="closeUpdateDialog"
+            @download="downloadAppUpdate"
+            @install="installDownloadedUpdate"
+            @retry="retryAppUpdate"
         />
         <MermaidViewer
             :request="mermaidViewerRequest"

@@ -90,6 +90,12 @@ export function transformSourceSelection(
             return createChange(from, from, "\n---\n");
         case "codeBlock":
             return createChange(from, to, `\`\`\`\n${selection}\n\`\`\``);
+        case "table":
+            return createChange(
+                from,
+                to,
+                "\n\n| 列 1 | 列 2 | 列 3 |\n| --- | --- | --- |\n| 内容 | 内容 | 内容 |\n\n",
+            );
         case "undo":
         case "redo":
         case "selectAll":
