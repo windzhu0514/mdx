@@ -2,6 +2,7 @@
 
 import { createApp, nextTick } from "vue";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { WorkspaceIndexRefresh, WorkspaceRefreshResult } from "./types/workspace";
 
 const mocks = vi.hoisted(() => ({
     closeHandler: undefined as
@@ -104,6 +105,16 @@ const mocks = vi.hoisted(() => ({
             children: [];
         }>
     >(),
+    workspaceIndexReports: new Map<string, WorkspaceIndexRefresh>(),
+    nextWorkspaceRefresh: undefined as Promise<WorkspaceRefreshResult> | undefined,
+    libraryNotes: [] as Array<{
+        path: string;
+        title: string;
+        tags: string[];
+        summary: string;
+        updatedAt: string;
+        content: string;
+    }>,
     workspaceSession: null as null | {
         version: 1;
         documents: Array<{
@@ -348,11 +359,27 @@ const mocks = vi.hoisted(() => ({
                 },
             };
         }
-        if (command === "scan_workspace_folder") {
+        if (command === "refresh_workspace_folder") {
             const path = (args as { path: string }).path;
             const entries = mocks.workspaceFolderEntries.get(path.toLowerCase()) ?? [];
-            return { path, entries, entryCount: entries.length, truncated: false };
+            if (mocks.nextWorkspaceRefresh) {
+                const pending = mocks.nextWorkspaceRefresh;
+                mocks.nextWorkspaceRefresh = undefined;
+                return pending;
+            }
+            return {
+                folder: {
+                    path,
+                    entries,
+                    entryCount: entries.length,
+                    truncated: false,
+                },
+                index:
+                    mocks.workspaceIndexReports.get(path.toLowerCase()) ?? indexRefresh(),
+            } satisfies WorkspaceRefreshResult;
         }
+        if (command === "list_notes") return [...mocks.libraryNotes];
+        if (command === "search_notes") return [];
         if (command === "create_mdx") {
             return {
                 path: null,
@@ -517,6 +544,36 @@ function findButton(host: HTMLElement, label: string) {
             button.textContent?.trim() === label ||
             button.querySelector("span")?.textContent?.trim() === label,
     );
+}
+
+function indexRefresh(
+    overrides: Partial<WorkspaceIndexRefresh> = {},
+): WorkspaceIndexRefresh {
+    return {
+        discovered: 2,
+        indexed: 2,
+        unchanged: 0,
+        removed: 0,
+        failed: [],
+        truncated: false,
+        ...overrides,
+    };
+}
+
+function workspaceRefreshResult(
+    path: string,
+    report: WorkspaceIndexRefresh,
+): WorkspaceRefreshResult {
+    const entries = mocks.workspaceFolderEntries.get(path.toLowerCase()) ?? [];
+    return {
+        folder: {
+            path,
+            entries,
+            entryCount: entries.length,
+            truncated: false,
+        },
+        index: report,
+    };
 }
 
 async function mountApp() {
@@ -773,6 +830,9 @@ beforeEach(() => {
     mocks.diskRevisions.clear();
     mocks.unavailableDiskPaths.clear();
     mocks.workspaceFolderEntries.clear();
+    mocks.workspaceIndexReports.clear();
+    mocks.nextWorkspaceRefresh = undefined;
+    mocks.libraryNotes = [];
     mocks.workspaceSession = null;
     mocks.updaterCheck.mockReset().mockResolvedValue("current");
     mocks.updaterDownload.mockReset().mockResolvedValue(true);
@@ -1413,6 +1473,144 @@ describe("App 多文档工作区", () => {
         expect(status?.firstElementChild?.getAttribute("aria-label")).toBe("隐藏工作区");
         expect(status?.lastElementChild?.getAttribute("aria-label")).toBe(
             "当前文档没有目录",
+        );
+    });
+
+    it("refreshes only the selected sidebar root and reports its index totals", async () => {
+        mocks.isTauri.mockReturnValue(true);
+        mocks.workspaceSession = {
+            version: 1,
+            documents: [],
+            folderPaths: [],
+            expandedPaths: [],
+            activeDocumentId: null,
+            sidebarCollapsed: false,
+            sidebarWidth: 260,
+        };
+        mocks.openDialog.mockResolvedValue("C:\\notes");
+        const host = await mountApp();
+
+        findButton(host, "打开文件夹")?.click();
+        await vi.waitFor(() =>
+            expect(host.querySelector('[aria-label="刷新 notes"]')).not.toBeNull(),
+        );
+        mocks.invoke.mockClear();
+        mocks.workspaceIndexReports.set(
+            "c:\\notes",
+            indexRefresh({ indexed: 3, removed: 1, unchanged: 8 }),
+        );
+
+        host.querySelector<HTMLButtonElement>('[aria-label="刷新 notes"]')?.click();
+
+        await vi.waitFor(() =>
+            expect(mocks.invoke).toHaveBeenCalledWith("refresh_workspace_folder", {
+                path: "C:\\notes",
+            }),
+        );
+        expect(
+            mocks.invoke.mock.calls.filter(
+                ([command]) => command === "refresh_workspace_folder",
+            ),
+        ).toHaveLength(1);
+        await vi.waitFor(() =>
+            expect(host.querySelector(".status-bar")?.textContent).toContain(
+                "索引已刷新：更新 3，移除 1，跳过 8，失败 0",
+            ),
+        );
+    });
+
+    it("opens workspace search from the existing index without rescanning folders", async () => {
+        mocks.isTauri.mockReturnValue(true);
+        mocks.workspaceSession = {
+            version: 1,
+            documents: [],
+            folderPaths: ["C:\\notes"],
+            expandedPaths: [],
+            activeDocumentId: null,
+            sidebarCollapsed: false,
+            sidebarWidth: 260,
+        };
+        const host = await mountApp();
+        await vi.waitFor(() =>
+            expect(mocks.invoke).toHaveBeenCalledWith("refresh_workspace_folder", {
+                path: "C:\\notes",
+            }),
+        );
+        const refreshCalls = mocks.invoke.mock.calls.filter(
+            ([command]) => command === "refresh_workspace_folder",
+        ).length;
+
+        findButton(host, "工作区查找")?.click();
+
+        await vi.waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("list_notes"));
+        expect(
+            mocks.invoke.mock.calls.filter(
+                ([command]) => command === "refresh_workspace_folder",
+            ),
+        ).toHaveLength(refreshCalls);
+    });
+
+    it("waits for incremental folder refresh before reloading workspace search", async () => {
+        mocks.isTauri.mockReturnValue(true);
+        mocks.workspaceSession = {
+            version: 1,
+            documents: [],
+            folderPaths: ["C:\\notes"],
+            expandedPaths: [],
+            activeDocumentId: null,
+            sidebarCollapsed: false,
+            sidebarWidth: 260,
+        };
+        const host = await mountApp();
+        await vi.waitFor(() =>
+            expect(mocks.invoke).toHaveBeenCalledWith("refresh_workspace_folder", {
+                path: "C:\\notes",
+            }),
+        );
+        findButton(host, "工作区查找")?.click();
+        await vi.waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("list_notes"));
+        const initialListCalls = mocks.invoke.mock.calls.filter(
+            ([command]) => command === "list_notes",
+        ).length;
+        const pending = deferred<WorkspaceRefreshResult>();
+        mocks.nextWorkspaceRefresh = pending.promise;
+
+        findButton(host, "刷新列表")?.click();
+
+        await vi.waitFor(() =>
+            expect(mocks.invoke).toHaveBeenCalledWith("refresh_workspace_folder", {
+                path: "C:\\notes",
+            }),
+        );
+        expect(
+            mocks.invoke.mock.calls.filter(([command]) => command === "list_notes"),
+        ).toHaveLength(initialListCalls);
+
+        pending.resolve(
+            workspaceRefreshResult(
+                "C:\\notes",
+                indexRefresh({ indexed: 1, removed: 2, unchanged: 5 }),
+            ),
+        );
+        await vi.waitFor(() =>
+            expect(
+                mocks.invoke.mock.calls.filter(([command]) => command === "list_notes"),
+            ).toHaveLength(initialListCalls + 1),
+        );
+        expect(host.querySelector(".status-bar")?.textContent).toContain(
+            "索引已刷新：更新 1，移除 2，跳过 5，失败 0",
+        );
+    });
+
+    it("explains workspace auto-indexing when search has no results", async () => {
+        const host = await mountApp();
+
+        findButton(host, "工作区查找")?.click();
+
+        await vi.waitFor(() =>
+            expect(host.textContent).toContain(
+                "打开工作区会自动建立索引，也可以刷新当前工作区。",
+            ),
         );
     });
 

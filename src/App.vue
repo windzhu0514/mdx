@@ -50,7 +50,11 @@ import { isDarkTheme, usePreferences, type ThemeId } from "./composables/usePref
 import type { HistoryListItem, HistorySnapshot } from "./types/history";
 import type { NoteListItem, NoteSearchResult } from "./types/library";
 import type { ResourceSaveData } from "./types/mdx";
-import type { MarkdownResourcePlan, RecentFileEntry } from "./types/workspace";
+import type {
+    MarkdownResourcePlan,
+    RecentFileEntry,
+    WorkspaceIndexRefresh,
+} from "./types/workspace";
 import type { LeaveDecision } from "./utils/leaveGuard";
 import { base64ToBlob } from "./utils/base64";
 import { isTextInputTarget } from "./utils/shortcuts";
@@ -1008,7 +1012,10 @@ onMounted(async () => {
     const appWindow = getCurrentWindow();
     unlistenFocus = await appWindow.onFocusChanged(async (event) => {
         if (!event.payload) return;
-        await session.refreshFolders();
+        const reports = await session.refreshFolders();
+        if (reports.some((report) => report.failed.length > 0)) {
+            statusMessage.value = formatIndexRefresh(reports);
+        }
         const reloadedIds = await session.refreshDiskState();
         for (const id of reloadedIds) editorRef.value?.releaseDocument(id);
         const activeId = activeDocumentId.value;
@@ -1385,10 +1392,17 @@ async function openFolder() {
         return;
     }
     await runAction(async () => {
-        await session.openFolder(selected);
+        const folder = await session.openFolder(selected);
         if (compactLayout.value) compactPanel.value = "workspace";
         else updateSidebarCollapsed(false);
-        statusMessage.value = "已打开文件夹";
+        statusMessage.value = `已打开文件夹；${formatIndexRefresh([folder.index])}`;
+    });
+}
+
+async function refreshWorkspaceFolder(path: string) {
+    await runAction(async () => {
+        const report = await session.refreshFolder(path);
+        statusMessage.value = report ? formatIndexRefresh([report]) : "工作区刷新失败";
     });
 }
 
@@ -2154,11 +2168,33 @@ function handleWindowKeyDown(event: KeyboardEvent) {
     }
 }
 
+function formatIndexRefresh(reports: WorkspaceIndexRefresh[]) {
+    const totals = reports.reduce(
+        (result, report) => ({
+            indexed: result.indexed + report.indexed,
+            removed: result.removed + report.removed,
+            unchanged: result.unchanged + report.unchanged,
+            failed: result.failed + report.failed.length,
+        }),
+        { indexed: 0, removed: 0, unchanged: 0, failed: 0 },
+    );
+    return `索引已刷新：更新 ${totals.indexed}，移除 ${totals.removed}，跳过 ${totals.unchanged}，失败 ${totals.failed}`;
+}
+
+async function loadLibraryEntries() {
+    libraryNotes.value = await invoke<NoteListItem[]>("list_notes");
+    const query = libraryQuery.value.trim();
+    libraryResults.value = query
+        ? await invoke<NoteSearchResult[]>("search_notes", { query })
+        : [];
+}
+
 async function refreshLibrary() {
     libraryLoading.value = true;
     try {
-        libraryNotes.value = await invoke<NoteListItem[]>("list_notes");
-        if (libraryQuery.value.trim()) await runLibrarySearch();
+        const reports = await session.refreshFolders();
+        await loadLibraryEntries();
+        statusMessage.value = formatIndexRefresh(reports);
     } finally {
         libraryLoading.value = false;
     }
@@ -2182,7 +2218,12 @@ async function runLibrarySearch() {
 
 async function openLibrary() {
     showLibrary.value = true;
-    await refreshLibrary();
+    libraryLoading.value = true;
+    try {
+        await loadLibraryEntries();
+    } finally {
+        libraryLoading.value = false;
+    }
 }
 
 async function openLibraryNote(path: string) {
@@ -2573,6 +2614,7 @@ function stringifyError(error: unknown) {
                     @open-folder="openFolder"
                     @close-document="closeDocument"
                     @close-folder="closeFolder"
+                    @refresh-folder="refreshWorkspaceFolder"
                     @toggle-expanded="toggleWorkspacePath"
                     @update:width="updateSidebarWidth"
                 />

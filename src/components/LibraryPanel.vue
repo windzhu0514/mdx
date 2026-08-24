@@ -67,7 +67,7 @@ const emit = defineEmits<{
                     <small>{{ item.path }}</small>
                 </button>
                 <p v-if="!(query.trim() ? results : notes).length" class="panel-empty">
-                    暂无匹配笔记。打开或保存笔记后会自动加入索引。
+                    暂无匹配笔记。打开工作区会自动建立索引，也可以刷新当前工作区。
                 </p>
             </div>
         </section>
