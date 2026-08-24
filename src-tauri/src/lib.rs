@@ -230,6 +230,8 @@ struct MdxSaveRequest {
     meta: Option<MdxMetadata>,
     #[serde(default)]
     new_assets: Vec<ResourceData>,
+    #[serde(default)]
+    removed_resources: Vec<String>,
 }
 
 #[tauri::command]
@@ -347,6 +349,8 @@ fn save_mdx_as(app: AppHandle, request: MdxSaveRequest, path: String) -> Result<
 
 fn save_to_path(request: MdxSaveRequest, path: PathBuf) -> Result<MdxNote, String> {
     let target_path = ensure_mdx_extension(path);
+    let source_path = request.path.as_deref().map(PathBuf::from);
+    let removed_resources = validated_resource_paths(&request.removed_resources)?;
     let mut meta = request.meta.unwrap_or_default();
     let now = current_time_rfc3339();
 
@@ -360,10 +364,19 @@ fn save_to_path(request: MdxSaveRequest, path: PathBuf) -> Result<MdxNote, Strin
     meta.title = normalize_title(&request.title);
     meta.updated_at = now;
     meta.word_count = count_words(&request.content);
+    meta.assets
+        .retain(|resource| !removed_resources.contains(&resource.path));
+    meta.attachments
+        .retain(|resource| !removed_resources.contains(&resource.path));
     apply_resource_metadata(&mut meta, &request.new_assets);
 
-    let archive_bytes =
-        build_mdx_archive(&target_path, &meta, &request.content, &request.new_assets)?;
+    let archive_bytes = build_mdx_archive(
+        source_path.as_deref(),
+        &meta,
+        &request.content,
+        &request.new_assets,
+        &removed_resources,
+    )?;
     safe_write_file(&target_path, &archive_bytes)?;
 
     Ok(MdxNote {
@@ -669,38 +682,67 @@ fn apply_resource_metadata(meta: &mut MdxMetadata, resources: &[ResourceData]) {
             ResourceKind::Asset => &mut meta.assets,
             ResourceKind::Attachment => &mut meta.attachments,
         };
-        target.retain(|entry| entry.path != resource.name);
-        target.push(ResourceMeta {
-            id: new_resource_id(),
-            original_name: resource.original_name.clone(),
-            stored_name: resource
-                .name
-                .rsplit('/')
-                .next()
-                .unwrap_or(&resource.name)
-                .to_string(),
-            path: resource.name.clone(),
-            mime_type: resource.mime_type.clone(),
-            size: resource.size,
-            width: None,
-            height: None,
-            created_at: current_time_rfc3339(),
-        });
+        let stored_name = resource
+            .name
+            .rsplit('/')
+            .next()
+            .unwrap_or(&resource.name)
+            .to_string();
+        if let Some(entry) = target.iter_mut().find(|entry| entry.path == resource.name) {
+            entry.original_name = resource.original_name.clone();
+            entry.stored_name = stored_name;
+            entry.mime_type = resource.mime_type.clone();
+            entry.size = resource.size;
+        } else {
+            target.push(ResourceMeta {
+                id: new_resource_id(),
+                original_name: resource.original_name.clone(),
+                stored_name,
+                path: resource.name.clone(),
+                mime_type: resource.mime_type.clone(),
+                size: resource.size,
+                width: None,
+                height: None,
+                created_at: current_time_rfc3339(),
+            });
+        }
     }
 }
 
+fn validated_resource_paths(
+    paths: &[String],
+) -> Result<std::collections::BTreeSet<String>, String> {
+    let mut validated = std::collections::BTreeSet::new();
+    for path in paths {
+        validate_new_resource_name(path).map_err(|error| format!("资源路径无效：{error}"))?;
+        validated.insert(path.clone());
+    }
+    Ok(validated)
+}
+
 fn build_mdx_archive(
-    target_path: &Path,
+    source_path: Option<&Path>,
     meta: &MdxMetadata,
     content: &str,
     new_assets: &[ResourceData],
+    removed_resources: &std::collections::BTreeSet<String>,
 ) -> Result<Vec<u8>, String> {
-    let mut preserved_entries: Vec<HistoryArchiveEntry> = collect_preserved_entries(target_path)?
+    let replacement_resources = new_assets
+        .iter()
+        .map(|resource| resource.name.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut preserved_entries: Vec<HistoryArchiveEntry> = source_path
+        .map(collect_preserved_entries)
+        .transpose()?
+        .unwrap_or_default()
         .into_iter()
+        .filter(|(name, _)| {
+            !removed_resources.contains(name) && !replacement_resources.contains(name.as_str())
+        })
         .map(|(name, bytes)| HistoryArchiveEntry { name, bytes })
         .collect();
-    if target_path.exists() {
-        if let Ok(previous) = read_mdx(target_path) {
+    if let Some(source_path) = source_path.filter(|path| path.exists()) {
+        if let Ok(previous) = read_mdx(source_path) {
             let meta_value = serde_json::to_value(&previous.meta).map_err(|err| err.to_string())?;
             preserved_entries.push(new_history_entry(
                 &previous.title,
@@ -1035,6 +1077,112 @@ mod tests {
     }
 
     #[test]
+    fn saved_attachment_deletion_removes_metadata_and_zip_bytes() {
+        let dir = temp_test_dir("attachment-delete");
+        fs::create_dir_all(&dir).unwrap();
+        let source = dir.join("source.mdx");
+        write_note_with_resources(
+            &source,
+            &[
+                ("attachments/keep.txt", b"keep"),
+                ("attachments/delete.txt", b"delete"),
+            ],
+        );
+
+        let request = save_request_for(
+            &source,
+            vec!["attachments/delete.txt".to_string()],
+            Vec::new(),
+        );
+        let saved = save_to_path(request, source.clone()).unwrap();
+
+        assert_eq!(
+            saved
+                .meta
+                .attachments
+                .iter()
+                .map(|item| item.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["attachments/keep.txt"]
+        );
+        assert_eq!(
+            read_zip_bytes(&source, "attachments/keep.txt").unwrap(),
+            b"keep"
+        );
+        assert!(read_zip_bytes(&source, "attachments/delete.txt").is_err());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn save_as_copies_source_resources_and_ignores_target_resources() {
+        let dir = temp_test_dir("attachment-save-as");
+        fs::create_dir_all(&dir).unwrap();
+        let source = dir.join("source.mdx");
+        let target = dir.join("target.mdx");
+        write_note_with_resources(&source, &[("attachments/source.txt", b"source")]);
+        write_note_with_resources(&target, &[("attachments/target.txt", b"target")]);
+
+        save_to_path(
+            save_request_for(&source, Vec::new(), Vec::new()),
+            target.clone(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            read_zip_bytes(&target, "attachments/source.txt").unwrap(),
+            b"source"
+        );
+        assert!(read_zip_bytes(&target, "attachments/target.txt").is_err());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn attachment_deletion_rejects_unsafe_paths() {
+        let dir = temp_test_dir("attachment-delete-invalid");
+        fs::create_dir_all(&dir).unwrap();
+        let source = dir.join("source.mdx");
+        write_note_with_resources(&source, &[("attachments/keep.txt", b"keep")]);
+
+        let error = save_to_path(
+            save_request_for(
+                &source,
+                vec!["attachments/../keep.txt".to_string()],
+                Vec::new(),
+            ),
+            source.clone(),
+        )
+        .unwrap_err();
+
+        assert!(error.contains("资源路径"));
+        assert_eq!(
+            read_zip_bytes(&source, "attachments/keep.txt").unwrap(),
+            b"keep"
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn new_attachment_replaces_preserved_bytes_without_duplicate_entries() {
+        let dir = temp_test_dir("attachment-replace");
+        fs::create_dir_all(&dir).unwrap();
+        let source = dir.join("source.mdx");
+        write_note_with_resources(&source, &[("attachments/a.txt", b"old")]);
+        let replacement = resource_data("attachments/a.txt", b"new");
+
+        save_to_path(
+            save_request_for(&source, Vec::new(), vec![replacement]),
+            source.clone(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            read_zip_bytes(&source, "attachments/a.txt").unwrap(),
+            b"new"
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn diagram_png_export_decodes_and_validates_png_bytes() {
         let dir = temp_test_dir("diagram-png");
         fs::create_dir_all(&dir).unwrap();
@@ -1074,6 +1222,71 @@ mod tests {
         std::env::temp_dir().join(format!("mora-{}-{}", label, Uuid::new_v4().simple()))
     }
 
+    fn resource_data(name: &str, bytes: &[u8]) -> ResourceData {
+        use base64::{engine::general_purpose, Engine as _};
+        ResourceData {
+            name: name.to_string(),
+            original_name: name.rsplit('/').next().unwrap().to_string(),
+            mime_type: "application/octet-stream".to_string(),
+            size: bytes.len() as u64,
+            kind: if name.starts_with("assets/") {
+                ResourceKind::Asset
+            } else {
+                ResourceKind::Attachment
+            },
+            base64: general_purpose::STANDARD.encode(bytes),
+        }
+    }
+
+    fn write_note_with_resources(path: &Path, resources: &[(&str, &[u8])]) {
+        let new_assets = resources
+            .iter()
+            .map(|(name, bytes)| resource_data(name, bytes))
+            .collect();
+        save_to_path(
+            MdxSaveRequest {
+                path: None,
+                title: "Fixture".to_string(),
+                content: String::new(),
+                meta: Some(MdxMetadata::default()),
+                new_assets,
+                removed_resources: Vec::new(),
+            },
+            path.to_path_buf(),
+        )
+        .unwrap();
+    }
+
+    fn save_request_for(
+        source: &Path,
+        removed_resources: Vec<String>,
+        new_assets: Vec<ResourceData>,
+    ) -> MdxSaveRequest {
+        let note = read_mdx(source).unwrap();
+        let mut request: MdxSaveRequest = serde_json::from_value(serde_json::json!({
+            "path": source.to_string_lossy(),
+            "title": note.title,
+            "content": note.content,
+            "meta": note.meta,
+            "newAssets": [],
+            "removedResources": removed_resources,
+        }))
+        .unwrap();
+        request.new_assets = new_assets;
+        request
+    }
+
+    fn read_zip_bytes(path: &Path, name: &str) -> Result<Vec<u8>, String> {
+        let mut archive = ZipArchive::new(File::open(path).map_err(|error| error.to_string())?)
+            .map_err(|error| error.to_string())?;
+        let mut entry = archive.by_name(name).map_err(|error| error.to_string())?;
+        let mut bytes = Vec::new();
+        entry
+            .read_to_end(&mut bytes)
+            .map_err(|error| error.to_string())?;
+        Ok(bytes)
+    }
+
     #[test]
     fn index_loader_maps_markdown_front_matter() {
         let dir = temp_test_dir("index-markdown");
@@ -1109,6 +1322,7 @@ mod tests {
                 content: "正文内容".to_string(),
                 meta: Some(meta),
                 new_assets: Vec::new(),
+                removed_resources: Vec::new(),
             },
             path.clone(),
         )
