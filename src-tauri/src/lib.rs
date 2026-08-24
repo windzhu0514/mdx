@@ -47,13 +47,14 @@ pub use resource_import::{
     MAX_IMPORTED_RESOURCE_BYTES, MAX_TOTAL_IMPORTED_RESOURCE_BYTES,
 };
 pub use workspace::{
-    disk_revision, scan_folder, DiskRevision, DiskRevisionResult, FolderScan, WorkspaceTreeEntry,
+    disk_revision, markdown_file_paths, scan_folder, DiskRevision, DiskRevisionResult, FolderScan,
+    WorkspaceTreeEntry,
 };
 pub use workspace_session::{
     read_workspace_session_file, write_workspace_session_file, WorkspaceSessionRead,
 };
 
-use chrono::Local;
+use chrono::{DateTime, Local, Utc};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::fs::File;
@@ -263,9 +264,33 @@ fn resolve_path(path: String) -> Result<PathIdentity, String> {
     })
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkspaceRefreshResult {
+    folder: FolderScan,
+    index: WorkspaceIndexRefresh,
+}
+
 #[tauri::command]
-fn scan_workspace_folder(path: String) -> Result<FolderScan, String> {
-    scan_folder(Path::new(&path), 10_000)
+async fn refresh_workspace_folder(
+    app: AppHandle,
+    path: String,
+) -> Result<WorkspaceRefreshResult, String> {
+    let index_path = note_index_path(&app)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let folder = scan_folder(Path::new(&path), 10_000)?;
+        let files = markdown_file_paths(&folder);
+        let index = refresh_workspace_index(
+            &index_path,
+            Path::new(&folder.path),
+            &files,
+            folder.truncated,
+            load_index_entry,
+        )?;
+        Ok(WorkspaceRefreshResult { folder, index })
+    })
+    .await
+    .map_err(|error| format!("工作区索引任务失败：{error}"))?
 }
 
 #[tauri::command]
@@ -379,6 +404,45 @@ fn read_mdx(path: &Path) -> Result<MdxNote, String> {
     })
 }
 
+fn load_index_entry(path: &Path) -> Result<NoteIndexEntry, String> {
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default();
+    if extension.eq_ignore_ascii_case("mdx") {
+        let note = read_mdx(path)?;
+        return Ok(NoteIndexEntry {
+            path: note
+                .path
+                .unwrap_or_else(|| path.to_string_lossy().to_string()),
+            title: note.title,
+            tags: note.meta.tags,
+            summary: note.meta.summary,
+            updated_at: note.meta.updated_at,
+            content: note.content,
+            source_revision: None,
+        });
+    }
+    if extension.eq_ignore_ascii_case("md") {
+        let imported = markdown_import::import_markdown_file(path)?;
+        let front_matter = imported.front_matter.unwrap_or_default();
+        let modified = fs::metadata(path)
+            .and_then(|metadata| metadata.modified())
+            .map_err(|error| format!("无法读取文件版本：{error}"))?;
+        let updated_at = DateTime::<Utc>::from(modified).to_rfc3339();
+        return Ok(NoteIndexEntry {
+            path: path.to_string_lossy().to_string(),
+            title: imported.title,
+            tags: front_matter.tags,
+            summary: front_matter.summary,
+            updated_at,
+            content: imported.content,
+            source_revision: None,
+        });
+    }
+    Err("索引仅支持 .md 和 .mdx 文件。".to_string())
+}
+
 #[tauri::command]
 fn export_markdown(source_path: String, destination_path: String) -> Result<(), String> {
     export_markdown_file(Path::new(&source_path), Path::new(&destination_path))
@@ -443,7 +507,7 @@ fn index_note(app: &AppHandle, note: &MdxNote) -> Result<(), String> {
             summary: note.meta.summary.clone(),
             updated_at: note.meta.updated_at.clone(),
             content: note.content.clone(),
-            source_revision: None,
+            source_revision: source_revision(Path::new(path)).ok(),
         },
     )
 }
@@ -906,7 +970,7 @@ pub fn run() {
             push_recent_file,
             remove_recent_file,
             clear_recent_files,
-            scan_workspace_folder,
+            refresh_workspace_folder,
             get_disk_revisions,
             system_fonts::list_system_font_families
         ])
@@ -1008,6 +1072,66 @@ mod tests {
 
     fn temp_test_dir(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!("mora-{}-{}", label, Uuid::new_v4().simple()))
+    }
+
+    #[test]
+    fn index_loader_maps_markdown_front_matter() {
+        let dir = temp_test_dir("index-markdown");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("note.md");
+        fs::write(
+            &path,
+            "---\ntitle: 项目计划\ntags: [工作, 计划]\nsummary: 本周目标\n---\n正文内容",
+        )
+        .unwrap();
+
+        let entry = load_index_entry(&path).unwrap();
+
+        assert_eq!(entry.title, "项目计划");
+        assert_eq!(entry.tags, ["工作", "计划"]);
+        assert_eq!(entry.summary, "本周目标");
+        assert_eq!(entry.content, "正文内容");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn index_loader_maps_valid_mdx_metadata_and_content() {
+        let dir = temp_test_dir("index-mdx");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("note.mdx");
+        let mut meta = MdxMetadata::default();
+        meta.tags = vec!["工作".to_string(), "计划".to_string()];
+        meta.summary = "本周目标".to_string();
+        save_to_path(
+            MdxSaveRequest {
+                path: Some(path.to_string_lossy().to_string()),
+                title: "项目计划".to_string(),
+                content: "正文内容".to_string(),
+                meta: Some(meta),
+                new_assets: Vec::new(),
+            },
+            path.clone(),
+        )
+        .unwrap();
+
+        let entry = load_index_entry(&path).unwrap();
+
+        assert_eq!(entry.title, "项目计划");
+        assert_eq!(entry.tags, ["工作", "计划"]);
+        assert_eq!(entry.summary, "本周目标");
+        assert_eq!(entry.content, "正文内容");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn index_loader_rejects_invalid_mdx_without_falling_back_to_markdown() {
+        let dir = temp_test_dir("invalid-index-mdx");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("invalid.mdx");
+        fs::write(&path, b"not-a-zip").unwrap();
+
+        assert_eq!(load_index_entry(&path).unwrap_err(), INVALID_MDX_ERROR);
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

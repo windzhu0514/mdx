@@ -2,7 +2,7 @@ use crate::{normalize_path, path_identity};
 use serde::Serialize;
 use std::cmp::Ordering;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -66,6 +66,21 @@ pub fn scan_folder(root: &Path, limit: usize) -> Result<FolderScan, String> {
         entry_count: limit.saturating_sub(remaining),
         truncated,
     })
+}
+
+pub fn markdown_file_paths(scan: &FolderScan) -> Vec<PathBuf> {
+    fn collect(entries: &[WorkspaceTreeEntry], files: &mut Vec<PathBuf>) {
+        for entry in entries {
+            match &entry.kind {
+                EntryKind::Directory => collect(&entry.children, files),
+                EntryKind::Md | EntryKind::Mdx => files.push(PathBuf::from(&entry.path)),
+            }
+        }
+    }
+
+    let mut files = Vec::new();
+    collect(&scan.entries, &mut files);
+    files
 }
 
 pub fn disk_revision(path: &Path) -> DiskRevisionResult {

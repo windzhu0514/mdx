@@ -1,4 +1,4 @@
-use mdxnote_lib::{disk_revision, scan_folder};
+use mdxnote_lib::{disk_revision, markdown_file_paths, scan_folder};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -70,6 +70,22 @@ fn scan_filters_hidden_symlink_and_non_markdown_entries() {
     assert!(!result.truncated);
 
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn collects_only_markdown_files_from_the_existing_scan_tree() {
+    let root = test_dir();
+    fs::create_dir(root.join("nested")).unwrap();
+    write(&root.join("root.mdx"), "not parsed by this test");
+    write(&root.join("nested").join("child.md"), "child");
+
+    let scan = scan_folder(&root, 10_000).unwrap();
+    fs::remove_dir_all(&root).unwrap();
+    let files = markdown_file_paths(&scan);
+
+    assert_eq!(files.len(), 2);
+    assert!(files.iter().any(|path| path.ends_with("root.mdx")));
+    assert!(files.iter().any(|path| path.ends_with("child.md")));
 }
 
 #[test]
