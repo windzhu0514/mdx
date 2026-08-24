@@ -553,6 +553,392 @@ describe("App 安全安装更新", () => {
 });
 
 describe("App 编辑器状态集成", () => {
+    it("lists all metadata attachments and adds one without changing content", async () => {
+        const opened = createNote("[方案](attachments/a.pdf)");
+        opened.meta.attachments = [
+            {
+                id: "attachment-a",
+                originalName: "方案.pdf",
+                storedName: "a.pdf",
+                path: "attachments/a.pdf",
+                type: "application/pdf",
+                size: 12,
+                createdAt: "2026-08-24T00:00:00Z",
+            },
+            {
+                id: "attachment-b",
+                originalName: "资料.zip",
+                storedName: "b.zip",
+                path: "attachments/b.zip",
+                type: "application/zip",
+                size: 24,
+                createdAt: "2026-08-24T00:00:00Z",
+            },
+        ];
+        mocks.openedNote = opened;
+        const host = await mountApp();
+        findButton(host, "打开文件").click();
+        await vi.waitFor(() =>
+            expect(mocks.invoke).toHaveBeenCalledWith("read_asset", {
+                path: "C:\\notes\\test.mdx",
+                assetName: "attachments/a.pdf",
+            }),
+        );
+
+        findButton(host, "附件管理").click();
+        await vi.waitFor(() =>
+            expect(host.querySelectorAll(".attachment-row")).toHaveLength(2),
+        );
+        expect(host.textContent).toContain("方案.pdf");
+        expect(host.textContent).toContain("资料.zip");
+        expect(
+            host.querySelector<HTMLButtonElement>(
+                '[data-path="attachments/a.pdf"] .danger',
+            )?.disabled,
+        ).toBe(true);
+        expect(
+            host.querySelector<HTMLButtonElement>(
+                '[data-path="attachments/b.zip"] .danger',
+            )?.disabled,
+        ).toBe(false);
+
+        mocks.openDialog.mockResolvedValueOnce(["C:\\files\\new.pdf"]);
+        mocks.nextImportedResource = Promise.resolve({
+            name: "attachments/new.pdf",
+            originalName: "new.pdf",
+            mimeType: "application/pdf",
+            size: 30,
+            kind: "attachment",
+            base64: "bmV3",
+        });
+        findButton(host, "添加附件").click();
+
+        await vi.waitFor(() =>
+            expect(host.querySelectorAll(".attachment-row")).toHaveLength(3),
+        );
+        expect(host.textContent).toContain("已添加 1 个附件");
+        expect(mocks.replaceSelection).not.toHaveBeenCalled();
+
+        host.querySelector<HTMLButtonElement>('[aria-label="关闭附件管理"]')?.click();
+        findButton(host, "保存").click();
+        await vi.waitFor(() =>
+            expect(
+                mocks.invoke.mock.calls.some(([command]) => command === "save_mdx"),
+            ).toBe(true),
+        );
+        const saveCall = mocks.invoke.mock.calls.find(
+            ([command]) => command === "save_mdx",
+        );
+        const request = (
+            saveCall?.[1] as {
+                request: {
+                    content: string;
+                    meta: MdxMetadata;
+                    newAssets: ResourceSaveData[];
+                };
+            }
+        ).request;
+        expect(request.content).toBe("[方案](attachments/a.pdf)");
+        expect(request.meta.attachments.map((item) => item.path)).toEqual([
+            "attachments/a.pdf",
+            "attachments/b.zip",
+            "attachments/new.pdf",
+        ]);
+        expect(request.newAssets).toEqual([
+            expect.objectContaining({ name: "attachments/new.pdf", base64: "bmV3" }),
+        ]);
+    });
+
+    it("cancels a delayed manager import when the active document changes", async () => {
+        const imported = createDeferred<ResourceSaveData>();
+        mocks.openDialog.mockResolvedValueOnce(["C:\\files\\late.pdf"]);
+        mocks.nextImportedResource = imported.promise;
+        const host = await mountApp();
+
+        findButton(host, "附件管理").click();
+        await nextTick();
+        findButton(host, "添加附件").click();
+        await vi.waitFor(() =>
+            expect(mocks.invoke).toHaveBeenCalledWith("import_resource", {
+                path: "C:\\files\\late.pdf",
+            }),
+        );
+        findButton(host, "新建").click();
+        await vi.waitFor(() =>
+            expect(host.querySelector(".menu-document-name")?.textContent).toContain(
+                "未命名文档 2",
+            ),
+        );
+
+        imported.resolve({
+            name: "attachments/late.pdf",
+            originalName: "late.pdf",
+            mimeType: "application/pdf",
+            size: 4,
+            kind: "attachment",
+            base64: "bGF0ZQ==",
+        });
+
+        await vi.waitFor(() => expect(host.textContent).toContain("附件添加已取消"));
+        expect(host.querySelector(".attachment-row")).toBeNull();
+        expect(mocks.replaceSelection).not.toHaveBeenCalled();
+    });
+
+    it("binds the attachment picker to the document that opened it", async () => {
+        const selection = createDeferred<string[] | null>();
+        mocks.openDialog.mockReturnValueOnce(selection.promise);
+        mocks.nextImportedResource = Promise.resolve({
+            name: "attachments/late.pdf",
+            originalName: "late.pdf",
+            mimeType: "application/pdf",
+            size: 4,
+            kind: "attachment",
+            base64: "bGF0ZQ==",
+        });
+        const host = await mountApp();
+
+        findButton(host, "附件管理").click();
+        await nextTick();
+        findButton(host, "添加附件").click();
+        await vi.waitFor(() => expect(mocks.openDialog).toHaveBeenCalled());
+        findButton(host, "新建").click();
+        selection.resolve(["C:\\files\\late.pdf"]);
+
+        await vi.waitFor(() => expect(host.textContent).toContain("附件添加已取消"));
+        findButton(host, "附件管理").click();
+        await nextTick();
+        expect(host.querySelector(".attachment-row")).toBeNull();
+    });
+
+    it("skips image resources selected from attachment management", async () => {
+        mocks.openDialog.mockResolvedValueOnce(["C:\\files\\photo.png"]);
+        mocks.nextImportedResource = Promise.resolve({
+            name: "assets/photo.png",
+            originalName: "photo.png",
+            mimeType: "image/png",
+            size: 8,
+            kind: "asset",
+            base64: "cGhvdG8=",
+        });
+        const host = await mountApp();
+
+        findButton(host, "附件管理").click();
+        await nextTick();
+        findButton(host, "添加附件").click();
+
+        await vi.waitFor(() =>
+            expect(host.textContent).toContain("已添加 0 个附件，已跳过 1 个图片"),
+        );
+        expect(host.querySelector(".attachment-row")).toBeNull();
+    });
+
+    it("inserts, renames, and defers deleting an unreferenced attachment", async () => {
+        const opened = createNote("");
+        opened.meta.attachments = [
+            {
+                id: "attachment-b",
+                originalName: "资料.zip",
+                storedName: "b.zip",
+                path: "attachments/b.zip",
+                type: "application/zip",
+                size: 24,
+                createdAt: "2026-08-24T00:00:00Z",
+            },
+        ];
+        mocks.openedNote = opened;
+        const host = await mountApp();
+        findButton(host, "打开文件").click();
+        await vi.waitFor(() =>
+            expect(host.querySelector(".menu-document-name")?.textContent).toContain(
+                "test",
+            ),
+        );
+
+        findButton(host, "附件管理").click();
+        await vi.waitFor(() =>
+            expect(host.querySelector(".attachment-row")).not.toBeNull(),
+        );
+        findButton(host, "插入引用").click();
+        expect(mocks.replaceSelection).toHaveBeenCalledWith(
+            "[资料.zip](attachments/b.zip)",
+        );
+
+        findButton(host, "重命名").click();
+        await nextTick();
+        const input = host.querySelector<HTMLInputElement>(".attachment-rename-input");
+        if (!input) throw new Error("未找到附件重命名输入框");
+        input.value = "资料终稿.zip";
+        input.dispatchEvent(new Event("input"));
+        findButton(host, "保存名称").click();
+        await vi.waitFor(() => expect(host.textContent).toContain("资料终稿.zip"));
+
+        findButton(host, "删除").click();
+        await nextTick();
+        expect(host.textContent).toContain("确认从文档中删除此附件？");
+        findButton(host, "确认删除").click();
+        await vi.waitFor(() => expect(host.querySelector(".attachment-row")).toBeNull());
+
+        findButton(host, "保存").click();
+        await vi.waitFor(() =>
+            expect(
+                mocks.invoke.mock.calls.some(([command]) => command === "save_mdx"),
+            ).toBe(true),
+        );
+        const saveCall = mocks.invoke.mock.calls.find(
+            ([command]) => command === "save_mdx",
+        );
+        const request = (
+            saveCall?.[1] as {
+                request: {
+                    meta: MdxMetadata;
+                    removedResources: string[];
+                };
+            }
+        ).request;
+        expect(request.meta.attachments).toEqual([]);
+        expect(request.removedResources).toEqual(["attachments/b.zip"]);
+    });
+
+    it("opens a pending attachment from its in-memory bytes", async () => {
+        mocks.openDialog.mockResolvedValueOnce(["C:\\files\\new.pdf"]);
+        mocks.nextImportedResource = Promise.resolve({
+            name: "attachments/new.pdf",
+            originalName: "new.pdf",
+            mimeType: "application/pdf",
+            size: 30,
+            kind: "attachment",
+            base64: "bmV3",
+        });
+        const host = await mountApp();
+
+        findButton(host, "附件管理").click();
+        await nextTick();
+        findButton(host, "添加附件").click();
+        await vi.waitFor(() =>
+            expect(host.querySelector(".attachment-row")).not.toBeNull(),
+        );
+        findButton(host, "打开").click();
+
+        await vi.waitFor(() =>
+            expect(mocks.invoke).toHaveBeenCalledWith("open_attachment", {
+                request: {
+                    documentId: expect.any(String),
+                    sourcePath: null,
+                    resourcePath: "attachments/new.pdf",
+                    originalName: "new.pdf",
+                    base64: "bmV3",
+                },
+            }),
+        );
+    });
+
+    it("opens and exports an unloaded saved attachment from its source archive", async () => {
+        const opened = createNote("");
+        opened.meta.attachments = [
+            {
+                id: "attachment-b",
+                originalName: "资料.zip",
+                storedName: "b.zip",
+                path: "attachments/b.zip",
+                type: "application/zip",
+                size: 24,
+                createdAt: "2026-08-24T00:00:00Z",
+            },
+        ];
+        mocks.openedNote = opened;
+        const host = await mountApp();
+        findButton(host, "打开文件").click();
+        await vi.waitFor(() =>
+            expect(host.querySelector(".menu-document-name")?.textContent).toContain(
+                "test",
+            ),
+        );
+        findButton(host, "附件管理").click();
+        await vi.waitFor(() =>
+            expect(host.querySelector(".attachment-row")).not.toBeNull(),
+        );
+
+        findButton(host, "打开").click();
+        const request = {
+            documentId: "note-1",
+            sourcePath: "C:\\notes\\test.mdx",
+            resourcePath: "attachments/b.zip",
+            originalName: "资料.zip",
+            base64: null,
+        };
+        await vi.waitFor(() =>
+            expect(mocks.invoke).toHaveBeenCalledWith("open_attachment", { request }),
+        );
+        const attachmentSaveButton = () => {
+            const button = Array.from(
+                host.querySelectorAll<HTMLButtonElement>(".attachment-row button"),
+            ).find((candidate) => candidate.textContent?.trim() === "另存为");
+            if (!button) throw new Error("未找到附件另存为按钮");
+            return button;
+        };
+        await vi.waitFor(() => expect(attachmentSaveButton().disabled).toBe(false));
+
+        mocks.saveDialog.mockResolvedValueOnce(null);
+        attachmentSaveButton().click();
+        await vi.waitFor(() => expect(mocks.saveDialog).toHaveBeenCalled());
+        expect(
+            mocks.invoke.mock.calls.some(([command]) => command === "export_attachment"),
+        ).toBe(false);
+
+        mocks.saveDialog.mockResolvedValueOnce("C:\\exports\\资料.zip");
+        await vi.waitFor(() => expect(attachmentSaveButton().disabled).toBe(false));
+        attachmentSaveButton().click();
+        await vi.waitFor(() =>
+            expect(mocks.invoke).toHaveBeenCalledWith("export_attachment", {
+                request,
+                destinationPath: "C:\\exports\\资料.zip",
+            }),
+        );
+    });
+
+    it("cancels attachment export when the active document changes in the save dialog", async () => {
+        const opened = createNote("");
+        opened.meta.attachments = [
+            {
+                id: "attachment-b",
+                originalName: "资料.zip",
+                storedName: "b.zip",
+                path: "attachments/b.zip",
+                type: "application/zip",
+                size: 24,
+                createdAt: "2026-08-24T00:00:00Z",
+            },
+        ];
+        mocks.openedNote = opened;
+        const destination = createDeferred<string | null>();
+        mocks.saveDialog.mockReturnValueOnce(destination.promise);
+        const host = await mountApp();
+        findButton(host, "打开文件").click();
+        await vi.waitFor(() =>
+            expect(host.querySelector(".menu-document-name")?.textContent).toContain(
+                "test",
+            ),
+        );
+        findButton(host, "附件管理").click();
+        await vi.waitFor(() =>
+            expect(host.querySelector(".attachment-row")).not.toBeNull(),
+        );
+        const saveAttachmentButton = Array.from(
+            host.querySelectorAll<HTMLButtonElement>(".attachment-row button"),
+        ).find((candidate) => candidate.textContent?.trim() === "另存为");
+        if (!saveAttachmentButton) throw new Error("未找到附件另存为按钮");
+
+        saveAttachmentButton.click();
+        await vi.waitFor(() => expect(mocks.saveDialog).toHaveBeenCalled());
+        findButton(host, "新建").click();
+        destination.resolve("C:\\exports\\资料.zip");
+
+        await vi.waitFor(() => expect(host.textContent).toContain("附件另存已取消"));
+        expect(
+            mocks.invoke.mock.calls.some(([command]) => command === "export_attachment"),
+        ).toBe(false);
+    });
+
     it.each([
         ["wysiwyg", null, "milkdown"],
         ["source", "仅源码", "source"],
