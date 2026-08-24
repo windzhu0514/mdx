@@ -42,13 +42,7 @@ describe("resource markdown mapping", () => {
                 "[附件](attachments/a.pdf) ![图](assets/a.png) " +
                     '<a href="attachments/a.pdf">重复</a><img src="assets/b.png">',
             ),
-        ).toEqual(
-            new Set([
-                "attachments/a.pdf",
-                "assets/a.png",
-                "assets/b.png",
-            ]),
-        );
+        ).toEqual(new Set(["attachments/a.pdf", "assets/a.png", "assets/b.png"]));
     });
 
     it("ignores external, local and blob destinations", () => {

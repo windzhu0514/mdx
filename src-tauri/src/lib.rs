@@ -878,11 +878,19 @@ fn build_mdx_archive(
     new_assets: &[ResourceData],
     removed_resources: &std::collections::BTreeSet<String>,
 ) -> Result<Vec<u8>, String> {
+    let preservation_source = source_path.map(|path| {
+        if path.exists() {
+            path.to_path_buf()
+        } else {
+            document_export::companion_path(path, ".bak")
+        }
+    });
     let replacement_resources = new_assets
         .iter()
         .map(|resource| resource.name.as_str())
         .collect::<std::collections::BTreeSet<_>>();
-    let mut preserved_entries: Vec<HistoryArchiveEntry> = source_path
+    let mut preserved_entries: Vec<HistoryArchiveEntry> = preservation_source
+        .as_deref()
         .map(collect_preserved_entries)
         .transpose()?
         .unwrap_or_default()
@@ -892,7 +900,7 @@ fn build_mdx_archive(
         })
         .map(|(name, bytes)| HistoryArchiveEntry { name, bytes })
         .collect();
-    if let Some(source_path) = source_path.filter(|path| path.exists()) {
+    if let Some(source_path) = preservation_source.as_deref().filter(|path| path.exists()) {
         if let Ok(previous) = read_mdx(source_path) {
             let meta_value = serde_json::to_value(&previous.meta).map_err(|err| err.to_string())?;
             preserved_entries.push(new_history_entry(
@@ -964,31 +972,22 @@ fn zip_file_options() -> FileOptions {
         .unix_permissions(0o644)
 }
 
-fn collect_preserved_entries(target_path: &Path) -> Result<Vec<(String, Vec<u8>)>, String> {
-    if !target_path.exists() {
-        return Ok(Vec::new());
+fn collect_preserved_entries(source_path: &Path) -> Result<Vec<(String, Vec<u8>)>, String> {
+    if !source_path.exists() {
+        return Err("源 MDX 文件不可用，无法保留资源。".to_string());
     }
 
-    let file = File::open(target_path).map_err(|err| err.to_string())?;
-    let mut archive = match ZipArchive::new(file) {
-        Ok(archive) => archive,
-        Err(_) => return Ok(Vec::new()),
-    };
-    if validate_archive(&mut archive).is_err() {
-        return Ok(Vec::new());
-    }
+    let invalid_source = || "源 MDX 文件无效，无法保留资源。".to_string();
+    let file = File::open(source_path)
+        .map_err(|error| format!("源 MDX 文件不可用，无法保留资源：{error}"))?;
+    let mut archive = ZipArchive::new(file).map_err(|_| invalid_source())?;
+    validate_archive(&mut archive).map_err(|_| invalid_source())?;
 
-    let manifest_text = match read_zip_text(&mut archive, "manifest.json") {
-        Ok(text) => text,
-        Err(_) => return Ok(Vec::new()),
-    };
-    let manifest: MdxManifest = match serde_json::from_str(&manifest_text) {
-        Ok(manifest) => manifest,
-        Err(_) => return Ok(Vec::new()),
-    };
-    if validate_manifest(&manifest).is_err() {
-        return Ok(Vec::new());
-    }
+    let manifest_text =
+        read_zip_text(&mut archive, "manifest.json").map_err(|_| invalid_source())?;
+    let manifest: MdxManifest =
+        serde_json::from_str(&manifest_text).map_err(|_| invalid_source())?;
+    validate_manifest(&manifest).map_err(|_| invalid_source())?;
 
     let mut entries = Vec::new();
 
@@ -1290,6 +1289,43 @@ mod tests {
     }
 
     #[test]
+    fn save_as_rejects_a_missing_source_instead_of_dropping_resources() {
+        let dir = temp_test_dir("attachment-save-as-missing-source");
+        fs::create_dir_all(&dir).unwrap();
+        let source = dir.join("source.mdx");
+        let target = dir.join("target.mdx");
+        write_note_with_resources(&source, &[("attachments/source.txt", b"source")]);
+        let request = save_request_for(&source, Vec::new(), Vec::new());
+        fs::remove_file(&source).unwrap();
+
+        let error = save_to_path(request, target.clone()).unwrap_err();
+
+        assert!(error.contains("源 MDX 文件"));
+        assert!(!target.exists());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn save_recovers_an_interrupted_backup_without_dropping_resources() {
+        let dir = temp_test_dir("attachment-save-backup-source");
+        fs::create_dir_all(&dir).unwrap();
+        let source = dir.join("source.mdx");
+        write_note_with_resources(&source, &[("attachments/source.txt", b"source")]);
+        let request = save_request_for(&source, Vec::new(), Vec::new());
+        let backup = document_export::companion_path(&source, ".bak");
+        fs::rename(&source, &backup).unwrap();
+
+        save_to_path(request, source.clone()).unwrap();
+
+        assert_eq!(
+            read_zip_bytes(&source, "attachments/source.txt").unwrap(),
+            b"source"
+        );
+        assert!(!backup.exists());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn attachment_deletion_rejects_unsafe_paths() {
         let dir = temp_test_dir("attachment-delete-invalid");
         fs::create_dir_all(&dir).unwrap();
@@ -1563,7 +1599,7 @@ mod tests {
         meta.summary = "本周目标".to_string();
         save_to_path(
             MdxSaveRequest {
-                path: Some(path.to_string_lossy().to_string()),
+                path: None,
                 title: "项目计划".to_string(),
                 content: "正文内容".to_string(),
                 meta: Some(meta),

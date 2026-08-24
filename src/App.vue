@@ -2353,7 +2353,7 @@ function attachmentMetadata(resource: ResourceSaveData): ResourceMeta {
     return {
         id: crypto.randomUUID(),
         originalName: resource.originalName,
-        storedName: resource.name.split("/").at(-1) ?? resource.name,
+        storedName: resource.name.split("/").pop() ?? resource.name,
         path: resource.name,
         type: resource.mimeType,
         size: resource.size,
