@@ -57,6 +57,7 @@ import type {
 } from "./types/workspace";
 import type { LeaveDecision } from "./utils/leaveGuard";
 import { base64ToBlob } from "./utils/base64";
+import { referencedResourcePaths } from "./utils/resourcePaths";
 import { isTextInputTarget } from "./utils/shortcuts";
 import {
     countNonWhitespaceCharacters,
@@ -1091,13 +1092,7 @@ function handleAiError(message: string) {
 async function hydrateDocumentResources(runtime: SessionDocument) {
     const persistedContent = runtime.content;
     if (runtime.path && runtime.meta) {
-        const assetRegex =
-            /\]\(((?:assets|attachments)\/[^)]+)\)|(?:src|href)=["']((?:assets|attachments)\/[^"']+)["']/g;
-        const assetPaths = new Set<string>();
-        let match: RegExpExecArray | null;
-        while ((match = assetRegex.exec(persistedContent)) !== null) {
-            assetPaths.add(match[1] || match[2]);
-        }
+        const assetPaths = referencedResourcePaths(persistedContent);
 
         for (const assetPath of assetPaths) {
             try {
