@@ -223,6 +223,16 @@ struct ResourceData {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct AttachmentReadRequest {
+    document_id: String,
+    source_path: Option<String>,
+    resource_path: String,
+    original_name: String,
+    base64: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct MdxSaveRequest {
     path: Option<String>,
     title: String,
@@ -481,22 +491,163 @@ fn prepare_markdown_resources_command(
 
 #[tauri::command]
 fn read_asset(path: String, asset_name: String) -> Result<String, String> {
-    use std::io::Read;
-    let file = File::open(Path::new(&path)).map_err(|_| "无法打开文件。".to_string())?;
-    let mut archive = ZipArchive::new(file).map_err(|_| INVALID_MDX_ERROR.to_string())?;
-    validate_archive(&mut archive)?;
     validate_new_resource_name(&asset_name)?;
-
-    let mut asset_file = archive
-        .by_name(&asset_name)
-        .map_err(|_| "未找到资产".to_string())?;
-    let mut bytes = Vec::new();
-    asset_file
-        .read_to_end(&mut bytes)
-        .map_err(|_| "无法读取资产".to_string())?;
+    let bytes = read_archive_resource_bytes(Path::new(&path), &asset_name)?;
 
     use base64::{engine::general_purpose, Engine as _};
     Ok(general_purpose::STANDARD.encode(&bytes))
+}
+
+fn validate_attachment_path(path: &str) -> Result<(), String> {
+    validate_new_resource_name(path).map_err(|error| format!("附件路径无效：{error}"))?;
+    if !path.starts_with("attachments/") {
+        return Err("附件路径必须位于 attachments/ 根目录。".to_string());
+    }
+    Ok(())
+}
+
+fn read_archive_resource_bytes(path: &Path, resource_path: &str) -> Result<Vec<u8>, String> {
+    let file = File::open(path).map_err(|_| "无法打开文件。".to_string())?;
+    let mut archive = ZipArchive::new(file).map_err(|_| INVALID_MDX_ERROR.to_string())?;
+    validate_archive(&mut archive)?;
+    let mut resource = archive
+        .by_name(resource_path)
+        .map_err(|_| "未找到附件。".to_string())?;
+    let mut bytes = Vec::new();
+    resource
+        .read_to_end(&mut bytes)
+        .map_err(|_| "无法读取附件。".to_string())?;
+    Ok(bytes)
+}
+
+fn read_attachment_bytes(request: &AttachmentReadRequest) -> Result<Vec<u8>, String> {
+    use base64::{engine::general_purpose, Engine as _};
+
+    validate_attachment_path(&request.resource_path)?;
+    if let Some(encoded) = request.base64.as_deref() {
+        let maximum_encoded_length = ((MAX_IMPORTED_RESOURCE_BYTES.saturating_add(2)) / 3) * 4 + 4;
+        if encoded.len() as u64 > maximum_encoded_length {
+            return Err("附件超过 512 MiB 限制。".to_string());
+        }
+        let bytes = general_purpose::STANDARD
+            .decode(encoded)
+            .map_err(|error| format!("附件数据解码失败：{error}"))?;
+        if bytes.len() as u64 > MAX_IMPORTED_RESOURCE_BYTES {
+            return Err("附件超过 512 MiB 限制。".to_string());
+        }
+        return Ok(bytes);
+    }
+
+    let source_path = request
+        .source_path
+        .as_deref()
+        .filter(|path| !path.trim().is_empty())
+        .ok_or_else(|| "附件来源不可用，请先保存文档。".to_string())?;
+    read_archive_resource_bytes(Path::new(source_path), &request.resource_path)
+}
+
+fn attachment_cache_key(value: &str) -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = DefaultHasher::new();
+    value.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
+fn safe_attachment_file_name(original_name: &str) -> String {
+    let file_name = Path::new(original_name)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("attachment");
+    let cleaned = file_name
+        .chars()
+        .map(|character| {
+            if character.is_control()
+                || matches!(
+                    character,
+                    '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*'
+                )
+            {
+                '_'
+            } else {
+                character
+            }
+        })
+        .collect::<String>();
+    let cleaned = cleaned.trim_matches(|character| matches!(character, ' ' | '.'));
+    let cleaned = if cleaned.is_empty() {
+        "attachment"
+    } else {
+        cleaned
+    };
+    let stem = cleaned
+        .split('.')
+        .next()
+        .unwrap_or(cleaned)
+        .to_ascii_uppercase();
+    let reserved = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || (stem.len() == 4
+            && matches!(&stem[..3], "COM" | "LPT")
+            && stem.as_bytes()[3].is_ascii_digit()
+            && stem.as_bytes()[3] != b'0');
+    if reserved {
+        format!("_{cleaned}")
+    } else {
+        cleaned.to_string()
+    }
+}
+
+fn write_attachment_preview(
+    cache_root: &Path,
+    request: &AttachmentReadRequest,
+    bytes: &[u8],
+) -> Result<PathBuf, String> {
+    validate_attachment_path(&request.resource_path)?;
+    let preview_root = cache_root.join("attachment-preview");
+    let preview_directory = preview_root
+        .join(attachment_cache_key(&request.document_id))
+        .join(attachment_cache_key(&request.resource_path));
+    if !preview_directory.starts_with(&preview_root) {
+        return Err("附件预览路径无效。".to_string());
+    }
+    if preview_directory.exists() {
+        fs::remove_dir_all(&preview_directory)
+            .map_err(|error| format!("清理附件预览失败：{error}"))?;
+    }
+    fs::create_dir_all(&preview_directory)
+        .map_err(|error| format!("创建附件预览目录失败：{error}"))?;
+    let preview_path = preview_directory.join(safe_attachment_file_name(&request.original_name));
+    document_export::safe_write_bytes(&preview_path, bytes)?;
+    Ok(preview_path)
+}
+
+fn export_attachment_bytes(target_path: &Path, bytes: &[u8]) -> Result<(), String> {
+    document_export::safe_write_bytes(target_path, bytes)
+}
+
+#[tauri::command]
+fn open_attachment(app: AppHandle, request: AttachmentReadRequest) -> Result<(), String> {
+    let bytes = read_attachment_bytes(&request)?;
+    let cache_root = app
+        .path()
+        .app_cache_dir()
+        .map_err(|error| error.to_string())?;
+    let preview_path = write_attachment_preview(&cache_root, &request, &bytes)?;
+    tauri_plugin_opener::open_path(&preview_path, None::<&str>)
+        .map_err(|error| format!("无法打开附件：{error}"))
+}
+
+#[tauri::command]
+fn export_attachment(
+    request: AttachmentReadRequest,
+    destination_path: String,
+) -> Result<(), String> {
+    if destination_path.trim().is_empty() {
+        return Err("附件导出路径为空。".to_string());
+    }
+    let bytes = read_attachment_bytes(&request)?;
+    export_attachment_bytes(Path::new(&destination_path), &bytes)
 }
 
 fn note_index_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -998,6 +1149,8 @@ pub fn run() {
             import_resource,
             prepare_markdown_resources_command,
             read_asset,
+            open_attachment,
+            export_attachment,
             list_notes,
             search_notes,
             list_history,
@@ -1183,6 +1336,84 @@ mod tests {
     }
 
     #[test]
+    fn attachment_bytes_are_read_from_archive_or_base64() {
+        let dir = temp_test_dir("attachment-bytes");
+        fs::create_dir_all(&dir).unwrap();
+        let source = dir.join("source.mdx");
+        write_note_with_resources(&source, &[("attachments/a.txt", b"archived")]);
+        let archived = attachment_request(Some(source), None, "attachments/a.txt", "a.txt");
+        let pending = attachment_request(None, Some("cGVuZGluZw=="), "attachments/b.txt", "b.txt");
+
+        assert_eq!(read_attachment_bytes(&archived).unwrap(), b"archived");
+        assert_eq!(read_attachment_bytes(&pending).unwrap(), b"pending");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn attachment_bytes_reject_unsafe_non_attachment_and_missing_sources() {
+        for resource_path in ["attachments/../a.txt", "assets/a.png"] {
+            let error = read_attachment_bytes(&attachment_request(
+                None,
+                Some("YQ=="),
+                resource_path,
+                "a.txt",
+            ))
+            .unwrap_err();
+            assert!(error.contains("附件路径"));
+        }
+
+        let error = read_attachment_bytes(&attachment_request(
+            None,
+            None,
+            "attachments/a.txt",
+            "a.txt",
+        ))
+        .unwrap_err();
+        assert!(error.contains("来源"));
+    }
+
+    #[test]
+    fn attachment_preview_stays_in_cache_and_replaces_its_previous_copy() {
+        let dir = temp_test_dir("attachment-preview");
+        let cache = dir.join("cache");
+        fs::create_dir_all(&cache).unwrap();
+        let first_request =
+            attachment_request(None, Some("Zmlyc3Q="), "attachments/a.txt", "../CON");
+        let first = write_attachment_preview(&cache, &first_request, b"first").unwrap();
+
+        assert!(first.starts_with(&cache));
+        assert_eq!(fs::read(&first).unwrap(), b"first");
+        assert!(!first
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .eq_ignore_ascii_case("CON"));
+
+        let second_request =
+            attachment_request(None, Some("c2Vjb25k"), "attachments/a.txt", "second.txt");
+        let second = write_attachment_preview(&cache, &second_request, b"second").unwrap();
+
+        assert!(!first.exists());
+        assert_eq!(fs::read(&second).unwrap(), b"second");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn attachment_export_replaces_an_existing_file_safely() {
+        let dir = temp_test_dir("attachment-export");
+        fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("export.txt");
+        fs::write(&target, b"old").unwrap();
+
+        export_attachment_bytes(&target, b"new").unwrap();
+
+        assert_eq!(fs::read(&target).unwrap(), b"new");
+        assert!(!document_export::companion_path(&target, ".tmp").exists());
+        assert!(!document_export::companion_path(&target, ".bak").exists());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn diagram_png_export_decodes_and_validates_png_bytes() {
         let dir = temp_test_dir("diagram-png");
         fs::create_dir_all(&dir).unwrap();
@@ -1285,6 +1516,21 @@ mod tests {
             .read_to_end(&mut bytes)
             .map_err(|error| error.to_string())?;
         Ok(bytes)
+    }
+
+    fn attachment_request(
+        source_path: Option<PathBuf>,
+        base64: Option<&str>,
+        resource_path: &str,
+        original_name: &str,
+    ) -> AttachmentReadRequest {
+        AttachmentReadRequest {
+            document_id: "note-fixture".to_string(),
+            source_path: source_path.map(|path| path.to_string_lossy().into_owned()),
+            resource_path: resource_path.to_string(),
+            original_name: original_name.to_string(),
+            base64: base64.map(str::to_string),
+        }
     }
 
     #[test]
