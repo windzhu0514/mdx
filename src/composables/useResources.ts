@@ -6,6 +6,7 @@ import { ref } from "vue";
 export type ResourceSession = ReturnType<typeof createResourceSession>;
 export type ResourceSessionSnapshot = {
     newResources: ResourceSaveData[];
+    removedResources?: string[];
 };
 export type ResourceExportSnapshot = {
     revision: number;
@@ -14,6 +15,7 @@ export type ResourceExportSnapshot = {
 
 export function createResourceSession() {
     const resources = new Map<string, PendingResource>();
+    const removed = new Set<string>();
     const revision = ref(0);
 
     function register(resource: PendingResource) {
@@ -22,6 +24,7 @@ export function createResourceSession() {
             URL.revokeObjectURL(previous.objectUrl);
         }
         resources.set(resource.path, { ...resource });
+        removed.delete(resource.path);
         revision.value += 1;
     }
 
@@ -54,6 +57,37 @@ export function createResourceSession() {
             .map(toResourceSaveData);
     }
 
+    function resource(path: string): ResourceSaveData | null {
+        const current = resources.get(path);
+        return current ? toResourceSaveData(current) : null;
+    }
+
+    function rename(path: string, originalName: string) {
+        const current = resources.get(path);
+        if (!current || current.originalName === originalName) return;
+        resources.set(path, { ...current, originalName });
+        revision.value += 1;
+    }
+
+    function remove(path: string) {
+        const current = resources.get(path);
+        let changed = false;
+        if (current) {
+            URL.revokeObjectURL(current.objectUrl);
+            resources.delete(path);
+            changed = true;
+        }
+        if ((!current || !current.isNew) && !removed.has(path)) {
+            removed.add(path);
+            changed = true;
+        }
+        if (changed) revision.value += 1;
+    }
+
+    function removedResources() {
+        return Array.from(removed).sort();
+    }
+
     function exportResources(): ResourceSaveData[] {
         return Array.from(resources.values(), toResourceSaveData);
     }
@@ -70,13 +104,18 @@ export function createResourceSession() {
         for (const resource of resources.values()) {
             resource.isNew = false;
         }
+        removed.clear();
     }
 
     function snapshot(): ResourceSessionSnapshot {
-        return { newResources: newResources() };
+        return {
+            newResources: newResources(),
+            removedResources: removedResources(),
+        };
     }
 
     function restore(state: ResourceSessionSnapshot) {
+        for (const path of state.removedResources ?? []) removed.add(path);
         for (const resource of state.newResources) {
             registerNew({
                 path: resource.name,
@@ -98,6 +137,7 @@ export function createResourceSession() {
             URL.revokeObjectURL(resource.objectUrl);
         }
         resources.clear();
+        removed.clear();
         revision.value += 1;
     }
 
@@ -108,6 +148,10 @@ export function createResourceSession() {
         displayMarkdown,
         persistedMarkdown,
         newResources,
+        resource,
+        rename,
+        remove,
+        removedResources,
         exportResources,
         exportSnapshot,
         resourceRevision,
