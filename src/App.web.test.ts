@@ -1614,6 +1614,58 @@ describe("App 多文档工作区", () => {
         );
     });
 
+    it("waits for workspace indexing before checking document revisions on focus", async () => {
+        mocks.isTauri.mockReturnValue(true);
+        mocks.diskContents.set("c:\\notes\\a.mdx", "# a");
+        mocks.workspaceSession = {
+            version: 1,
+            documents: [
+                {
+                    id: "document-a",
+                    path: "C:\\notes\\a.mdx",
+                    sourceKind: "mdx",
+                    importSourcePath: null,
+                    draftKey: "draft-a",
+                },
+            ],
+            folderPaths: ["C:\\notes"],
+            expandedPaths: ["C:\\notes"],
+            activeDocumentId: "document-a",
+            sidebarCollapsed: false,
+            sidebarWidth: 260,
+        };
+        await mountApp();
+        await vi.waitFor(() => expect(mocks.focusHandler).toBeTypeOf("function"));
+        await vi.waitFor(() =>
+            expect(mocks.invoke).toHaveBeenCalledWith("refresh_workspace_folder", {
+                path: "C:\\notes",
+            }),
+        );
+        mocks.invoke.mockClear();
+        const pending = deferred<WorkspaceRefreshResult>();
+        mocks.nextWorkspaceRefresh = pending.promise;
+
+        const focused = mocks.focusHandler?.({ payload: true });
+
+        await vi.waitFor(() =>
+            expect(mocks.invoke).toHaveBeenCalledWith("refresh_workspace_folder", {
+                path: "C:\\notes",
+            }),
+        );
+        expect(
+            mocks.invoke.mock.calls.some(([command]) => command === "get_disk_revisions"),
+        ).toBe(false);
+
+        pending.resolve(
+            workspaceRefreshResult("C:\\notes", indexRefresh({ unchanged: 1 })),
+        );
+        await focused;
+        const commands = mocks.invoke.mock.calls.map(([command]) => command);
+        expect(commands.indexOf("refresh_workspace_folder")).toBeLessThan(
+            commands.indexOf("get_disk_revisions"),
+        );
+    });
+
     it("关闭文件夹后清空工作树并反馈结果", async () => {
         mocks.isTauri.mockReturnValue(true);
         mocks.workspaceSession = {
