@@ -33,7 +33,9 @@ pub use markdown_resources::{
     prepare_markdown_resources, MarkdownResourceItem, MarkdownResourcePlan,
 };
 pub use note_index::{
-    list_index_entries, search_index_entries, upsert_index_entry, NoteIndexEntry, NoteSearchResult,
+    list_index_entries, refresh_workspace_index, search_index_entries, source_revision,
+    upsert_index_entry, IndexSourceRevision, NoteIndexEntry, NoteSearchResult,
+    WorkspaceIndexFailure, WorkspaceIndexRefresh,
 };
 pub use path_identity::{normalize_path, path_identity};
 pub use recent_files::{
@@ -441,6 +443,7 @@ fn index_note(app: &AppHandle, note: &MdxNote) -> Result<(), String> {
             summary: note.meta.summary.clone(),
             updated_at: note.meta.updated_at.clone(),
             content: note.content.clone(),
+            source_revision: None,
         },
     )
 }
