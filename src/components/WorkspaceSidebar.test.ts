@@ -77,6 +77,14 @@ function folder(path: string, entries: WorkspaceTreeEntry[] = []): WorkspaceFold
         truncated: false,
         unavailable: false,
         error: null,
+        index: {
+            discovered: entries.length,
+            indexed: entries.length,
+            unchanged: 0,
+            removed: 0,
+            failed: [],
+            truncated: false,
+        },
     };
 }
 
