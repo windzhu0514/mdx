@@ -37,6 +37,7 @@ let saveHandler:
               content: string;
               meta: MdxMetadata | null;
               newAssets: Array<{ name: string }>;
+              removedResources?: string[];
           },
       ) => Promise<MdxNote>)
     | null = null;
@@ -193,6 +194,7 @@ describe("document session", () => {
                     content: string;
                     meta: MdxMetadata | null;
                     newAssets: Array<{ name: string }>;
+                    removedResources?: string[];
                 };
                 if (saveHandler) return saveHandler(command, request);
                 const path =
@@ -519,6 +521,40 @@ describe("document session", () => {
                 }),
             }),
         );
+    });
+
+    it("sends pending archive deletions with a normal save", async () => {
+        const session = useDocumentSession(true);
+        const runtime = await session.openMdx("C:\\Notes\\attachment.mdx");
+        runtime.resources.remove("attachments/old.pdf");
+
+        await session.save(runtime.id);
+
+        expect(invoke).toHaveBeenCalledWith(
+            "save_mdx",
+            expect.objectContaining({
+                request: expect.objectContaining({
+                    path: "C:\\Notes\\attachment.mdx",
+                    removedResources: ["attachments/old.pdf"],
+                }),
+            }),
+        );
+        expect(runtime.resources.removedResources()).toEqual([]);
+    });
+
+    it("uses the original document as the resource source during save-as", async () => {
+        const session = useDocumentSession(true);
+        const runtime = await session.openMdx("C:\\Notes\\source.mdx");
+
+        await session.saveAs(runtime.id, "C:\\Notes\\copy.mdx");
+
+        expect(invoke).toHaveBeenCalledWith("save_mdx_as", {
+            request: expect.objectContaining({
+                path: "C:\\Notes\\source.mdx",
+                removedResources: [],
+            }),
+            path: "C:\\Notes\\copy.mdx",
+        });
     });
 
     it("keeps edits and new resources dirty when save resolves with an older snapshot", async () => {
@@ -921,6 +957,61 @@ describe("document session", () => {
         expect(invoke).toHaveBeenCalledWith("read_draft", {
             key: "exact-missing-key",
         });
+    });
+
+    it("restores pending deletions and treats legacy drafts as having none", async () => {
+        workspaceRead = {
+            warning: null,
+            session: {
+                version: 1,
+                documents: [
+                    {
+                        id: "removed-id",
+                        path: "C:\\Notes\\removed.mdx",
+                        sourceKind: "mdx",
+                        importSourcePath: null,
+                        draftKey: "removed-key",
+                    },
+                    {
+                        id: "legacy-id",
+                        path: "C:\\Notes\\legacy.mdx",
+                        sourceKind: "mdx",
+                        importSourcePath: null,
+                        draftKey: "legacy-key",
+                    },
+                ],
+                folderPaths: [],
+                expandedPaths: [],
+                activeDocumentId: "removed-id",
+                sidebarCollapsed: false,
+                sidebarWidth: 260,
+            },
+        };
+        drafts.set("removed-key", {
+            path: "C:\\Notes\\removed.mdx",
+            title: "removed",
+            content: "removed",
+            meta: metadata("removed"),
+            newResources: [],
+            removedResources: ["attachments/old.pdf"],
+            updatedAt: "2026-07-31T01:00:00.000Z",
+        });
+        drafts.set("legacy-key", {
+            path: "C:\\Notes\\legacy.mdx",
+            title: "legacy",
+            content: "legacy",
+            meta: metadata("legacy"),
+            newResources: [],
+            updatedAt: "2026-07-31T01:00:00.000Z",
+        });
+        const session = useDocumentSession(true);
+
+        await session.restore();
+
+        expect(session.document("removed-id").resources.removedResources()).toEqual([
+            "attachments/old.pdf",
+        ]);
+        expect(session.document("legacy-id").resources.removedResources()).toEqual([]);
     });
 
     it("rejects an invalid version-one session shape before clearing current state", async () => {

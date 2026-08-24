@@ -94,4 +94,5 @@ export type MdxSaveRequest = {
     content: string;
     meta: MdxMetadata | null;
     newResources: ResourceSaveData[];
+    removedResources: string[];
 };
