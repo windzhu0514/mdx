@@ -7,6 +7,8 @@ import type {
     DiskRevisionResult,
     FolderScan,
     PathIdentity,
+    WorkspaceIndexRefresh,
+    WorkspaceRefreshResult,
     WorkspaceSessionRead,
     WorkspaceSessionSnapshot,
 } from "../types/workspace";
@@ -21,6 +23,8 @@ const diskRevisions = new Map<string, number>();
 const draftWriteAttempts: string[] = [];
 let failNextDraftWrite = false;
 const workspaceWriteSnapshots: WorkspaceSessionSnapshot[] = [];
+const workspaceIndexReports = new Map<string, WorkspaceIndexRefresh>();
+const workspaceRefreshFailures = new Set<string>();
 let workspaceWriteHandler:
     ((snapshot: WorkspaceSessionSnapshot) => Promise<void>) | null = null;
 let openMdxHandler: ((path: string) => Promise<MdxNote>) | null = null;
@@ -103,6 +107,20 @@ function pathKey(path: string) {
     return normalizedPath(path).toLocaleLowerCase("en-US");
 }
 
+function indexRefresh(
+    overrides: Partial<WorkspaceIndexRefresh> = {},
+): WorkspaceIndexRefresh {
+    return {
+        discovered: 2,
+        indexed: 2,
+        unchanged: 0,
+        removed: 0,
+        failed: [],
+        truncated: false,
+        ...overrides,
+    };
+}
+
 const pendingImage: PendingResource = {
     path: "assets/a.png",
     originalName: "a.png",
@@ -124,6 +142,8 @@ describe("document session", () => {
         draftWriteAttempts.length = 0;
         failNextDraftWrite = false;
         workspaceWriteSnapshots.length = 0;
+        workspaceIndexReports.clear();
+        workspaceRefreshFailures.clear();
         workspaceWriteHandler = null;
         openMdxHandler = null;
         saveHandler = null;
@@ -189,15 +209,23 @@ describe("document session", () => {
                     meta: request.meta ?? metadata(request.title),
                 };
             }
-            if (command === "scan_workspace_folder") {
+            if (command === "refresh_workspace_folder") {
                 const path = normalizedPath(String(payload.path));
-                if (/offline/i.test(path)) throw new Error("unavailable");
+                if (
+                    /offline/i.test(path) ||
+                    workspaceRefreshFailures.has(pathKey(path))
+                ) {
+                    throw new Error("unavailable");
+                }
                 return {
-                    path,
-                    entries: [],
-                    entryCount: 0,
-                    truncated: false,
-                } satisfies FolderScan;
+                    folder: {
+                        path,
+                        entries: [],
+                        entryCount: 0,
+                        truncated: false,
+                    } satisfies FolderScan,
+                    index: workspaceIndexReports.get(pathKey(path)) ?? indexRefresh(),
+                } satisfies WorkspaceRefreshResult;
             }
             if (command === "get_disk_revisions") {
                 return (payload.paths as string[]).map((path): DiskRevisionResult => ({
@@ -259,12 +287,62 @@ describe("document session", () => {
         const folder = await session.openFolder("C:\\Root");
 
         expect(session.expandedPaths.value).toEqual([folder.path]);
+        expect(folder.index).toEqual(indexRefresh());
 
         session.expandedPaths.value = [];
         await session.openFolder("c:\\root");
 
         expect(session.expandedPaths.value).toEqual([folder.path]);
         expect(invoke).toHaveBeenCalledTimes(3);
+    });
+
+    it("refreshes only the requested workspace root and returns its index report", async () => {
+        const session = useDocumentSession(true);
+        await session.openFolder("C:\\Root");
+        await session.openFolder("D:\\Other");
+        workspaceIndexReports.set(
+            pathKey("C:\\Root"),
+            indexRefresh({ indexed: 1, unchanged: 4, removed: 2 }),
+        );
+        invoke.mockClear();
+
+        const report = await session.refreshFolder("c:/root/");
+
+        expect(report).toEqual(indexRefresh({ indexed: 1, unchanged: 4, removed: 2 }));
+        expect(session.folders.value[0].index).toEqual(report);
+        expect(session.folders.value[1].index).toEqual(indexRefresh());
+        expect(
+            invoke.mock.calls.filter(
+                ([command]) => command === "refresh_workspace_folder",
+            ),
+        ).toEqual([["refresh_workspace_folder", { path: "C:\\Root" }]]);
+    });
+
+    it("refreshes available roots while isolating a failed workspace root", async () => {
+        const session = useDocumentSession(true);
+        await session.openFolder("C:\\Root");
+        await session.openFolder("D:\\Other");
+        workspaceIndexReports.set(
+            pathKey("D:\\Other"),
+            indexRefresh({ indexed: 0, unchanged: 2 }),
+        );
+        workspaceRefreshFailures.add(pathKey("C:\\Root"));
+
+        const reports = await session.refreshFolders();
+
+        expect(reports).toEqual([indexRefresh({ indexed: 0, unchanged: 2 })]);
+        expect(session.folders.value[0]).toMatchObject({
+            path: "C:\\Root",
+            unavailable: true,
+            entries: [],
+            index: indexRefresh({ discovered: 0, indexed: 0 }),
+        });
+        expect(session.folders.value[1]).toMatchObject({
+            path: "D:\\Other",
+            unavailable: false,
+            index: indexRefresh({ indexed: 0, unchanged: 2 }),
+        });
+        expect(session.warnings.value.join(" ")).toContain("unavailable");
     });
 
     it("closes an open folder from its recorded identity without resolving its path again", async () => {

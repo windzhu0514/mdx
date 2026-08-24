@@ -10,9 +10,10 @@ import type {
 import type {
     DiskRevision,
     DiskRevisionResult,
-    FolderScan,
     PathIdentity,
     WorkspaceFolder,
+    WorkspaceIndexRefresh,
+    WorkspaceRefreshResult,
     WorkspaceSessionRead,
     WorkspaceSessionSnapshot,
 } from "../types/workspace";
@@ -61,6 +62,17 @@ function mdxTargetPath(path: string) {
 
 function workspacePathKey(path: string) {
     return path.replace(/\//gu, "\\").replace(/\\+$/u, "").toLocaleLowerCase("en-US");
+}
+
+function emptyIndexRefresh(): WorkspaceIndexRefresh {
+    return {
+        discovered: 0,
+        indexed: 0,
+        unchanged: 0,
+        removed: 0,
+        failed: [],
+        truncated: false,
+    };
 }
 
 export function sameResources(left: ResourceSaveData[], right: ResourceSaveData[]) {
@@ -234,6 +246,21 @@ export function useDocumentSession(desktop: boolean) {
         return result?.revision ?? null;
     }
 
+    async function loadFolder(resolved: PathIdentity) {
+        const result = await invoke<WorkspaceRefreshResult>("refresh_workspace_folder", {
+            path: resolved.path,
+        });
+        const folder: WorkspaceFolder = {
+            ...result.folder,
+            name: baseName(result.folder.path),
+            unavailable: false,
+            error: null,
+            index: result.index,
+        };
+        folderIdentities.set(folder.path, resolved.identity);
+        return folder;
+    }
+
     function existingByIdentity(identity: string) {
         return documents.value.find((item) => item.pathIdentity === identity);
     }
@@ -404,16 +431,7 @@ export function useDocumentSession(desktop: boolean) {
             return existing;
         }
 
-        const scan = await invoke<FolderScan>("scan_workspace_folder", {
-            path: resolved.path,
-        });
-        const folder: WorkspaceFolder = {
-            ...scan,
-            name: baseName(scan.path),
-            unavailable: !resolved.available,
-            error: null,
-        };
-        folderIdentities.set(folder.path, resolved.identity);
+        const folder = await loadFolder(resolved);
         folders.value = [...folders.value, folder];
         expandedPaths.value = [...expandedPaths.value, folder.path];
         scheduleSessionWrite();
@@ -792,16 +810,7 @@ export function useDocumentSession(desktop: boolean) {
                 if (restoredFolderIdentities.has(resolved.identity)) continue;
                 restoredFolderIdentities.add(resolved.identity);
                 if (!resolved.available) throw new Error("文件夹暂时不可用");
-                const scan = await invoke<FolderScan>("scan_workspace_folder", {
-                    path: resolved.path,
-                });
-                const folder: WorkspaceFolder = {
-                    ...scan,
-                    name: baseName(scan.path),
-                    unavailable: false,
-                    error: null,
-                };
-                folderIdentities.set(folder.path, resolved.identity);
+                const folder = await loadFolder(resolved);
                 folders.value = [...folders.value, folder];
             } catch (error) {
                 const normalizedPath = resolved?.path ?? folderPath;
@@ -814,6 +823,7 @@ export function useDocumentSession(desktop: boolean) {
                     truncated: false,
                     unavailable: true,
                     error: String(error),
+                    index: emptyIndexRefresh(),
                 };
                 folderIdentities.set(folder.path, identity);
                 folders.value = [...folders.value, folder];
@@ -923,24 +933,54 @@ export function useDocumentSession(desktop: boolean) {
         return reloadedIds;
     }
 
+    async function refreshFolder(path: string) {
+        if (!desktop) return null;
+        const currentIndex = folders.value.findIndex(
+            (folder) => workspacePathKey(folder.path) === workspacePathKey(path),
+        );
+        if (currentIndex < 0) return null;
+        const current = folders.value[currentIndex];
+        try {
+            const resolved = await resolve(current.path);
+            if (!resolved.available) throw new Error("文件夹暂时不可用");
+            const folder = await loadFolder(resolved);
+            folderIdentities.delete(current.path);
+            folderIdentities.set(folder.path, resolved.identity);
+            const refreshed = [...folders.value];
+            refreshed[currentIndex] = folder;
+            folders.value = refreshed;
+            return folder.index;
+        } catch (error) {
+            const unavailable: WorkspaceFolder = {
+                ...current,
+                entries: [],
+                entryCount: 0,
+                truncated: false,
+                unavailable: true,
+                error: String(error),
+                index: emptyIndexRefresh(),
+            };
+            const refreshed = [...folders.value];
+            refreshed[currentIndex] = unavailable;
+            folders.value = refreshed;
+            warnings.value = [...warnings.value, String(error)];
+            return null;
+        }
+    }
+
     async function refreshFolders() {
-        if (!desktop || folders.value.length === 0) return;
+        if (!desktop || folders.value.length === 0) return [];
         const refreshed: WorkspaceFolder[] = [];
+        const reports: WorkspaceIndexRefresh[] = [];
         for (const current of folders.value) {
             try {
                 const resolved = await resolve(current.path);
                 if (!resolved.available) throw new Error("文件夹暂时不可用");
-                const scan = await invoke<FolderScan>("scan_workspace_folder", {
-                    path: resolved.path,
-                });
-                const folder: WorkspaceFolder = {
-                    ...scan,
-                    name: baseName(scan.path),
-                    unavailable: false,
-                    error: null,
-                };
+                const folder = await loadFolder(resolved);
+                folderIdentities.delete(current.path);
                 folderIdentities.set(folder.path, resolved.identity);
                 refreshed.push(folder);
+                reports.push(folder.index);
             } catch (error) {
                 refreshed.push({
                     ...current,
@@ -949,11 +989,13 @@ export function useDocumentSession(desktop: boolean) {
                     truncated: false,
                     unavailable: true,
                     error: String(error),
+                    index: emptyIndexRefresh(),
                 });
                 warnings.value = [...warnings.value, String(error)];
             }
         }
         folders.value = refreshed;
+        return reports;
     }
 
     async function dispose() {
@@ -1018,6 +1060,7 @@ export function useDocumentSession(desktop: boolean) {
         restore,
         persist,
         reloadFromDisk,
+        refreshFolder,
         refreshFolders,
         refreshDiskState,
         dispose,

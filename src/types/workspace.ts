@@ -38,10 +38,30 @@ export type FolderScan = {
     truncated: boolean;
 };
 
+export type WorkspaceIndexFailure = {
+    path: string;
+    error: string;
+};
+
+export type WorkspaceIndexRefresh = {
+    discovered: number;
+    indexed: number;
+    unchanged: number;
+    removed: number;
+    failed: WorkspaceIndexFailure[];
+    truncated: boolean;
+};
+
+export type WorkspaceRefreshResult = {
+    folder: FolderScan;
+    index: WorkspaceIndexRefresh;
+};
+
 export type WorkspaceFolder = FolderScan & {
     name: string;
     unavailable: boolean;
     error: string | null;
+    index: WorkspaceIndexRefresh;
 };
 
 export type WorkspaceSessionDocument = {
