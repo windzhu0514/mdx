@@ -5,6 +5,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import "./experience.css";
+import AttachmentPanel from "./components/AttachmentPanel.vue";
 import CommandPalette, {
     type CommandPaletteCommand,
 } from "./components/CommandPalette.vue";
@@ -49,7 +50,12 @@ import { useAppUpdater } from "./composables/useAppUpdater";
 import { isDarkTheme, usePreferences, type ThemeId } from "./composables/usePreferences";
 import type { HistoryListItem, HistorySnapshot } from "./types/history";
 import type { NoteListItem, NoteSearchResult } from "./types/library";
-import type { ResourceSaveData } from "./types/mdx";
+import type {
+    AttachmentListItem,
+    AttachmentReadRequest,
+    ResourceMeta,
+    ResourceSaveData,
+} from "./types/mdx";
 import type {
     MarkdownResourcePlan,
     RecentFileEntry,
@@ -57,6 +63,8 @@ import type {
 } from "./types/workspace";
 import type { LeaveDecision } from "./utils/leaveGuard";
 import { base64ToBlob } from "./utils/base64";
+import { createEmptyMetadata } from "./utils/note";
+import { referencedResourcePaths } from "./utils/resourcePaths";
 import { isTextInputTarget } from "./utils/shortcuts";
 import {
     countNonWhitespaceCharacters,
@@ -114,6 +122,16 @@ const content = computed({
         if (active) session.updateContent(active.id, markdown);
     },
 });
+const attachmentItems = computed<AttachmentListItem[]>(() => {
+    void documents.value;
+    const active = activeDocument.value;
+    if (!active?.meta) return [];
+    const referencedPaths = referencedResourcePaths(active.content);
+    return active.meta.attachments.map((attachment) => ({
+        ...attachment,
+        referenced: referencedPaths.has(attachment.path),
+    }));
+});
 const dirty = computed(() => {
     void documents.value;
     return activeDocument.value?.dirty ?? false;
@@ -151,6 +169,8 @@ const showHistory = ref(false);
 const historyItems = ref<HistoryListItem[]>([]);
 const historyLoading = ref(false);
 let historyRequestId = 0;
+const showAttachments = ref(false);
+const attachmentBusyPath = ref<string | null>(null);
 const showSettings = ref(false);
 const showThemePicker = ref(false);
 const showUpdateDialog = ref(false);
@@ -207,6 +227,7 @@ const commandPaletteBlocked = computed(
         showRecentFiles.value ||
         showLibrary.value ||
         showHistory.value ||
+        showAttachments.value ||
         showSettings.value ||
         showLeavePrompt.value ||
         showConflictPrompt.value ||
@@ -664,6 +685,14 @@ const insertMenu = computed<MarkdownCommand[]>(() => [
         action: insertImageReference,
     },
     { id: "insert.resource", label: "导入图片或附件", action: chooseResources },
+    {
+        id: "insert.attachments",
+        label: "附件管理",
+        action: () => {
+            showAttachments.value = true;
+        },
+        disabled: !activeDocument.value,
+    },
     { id: "insert.table", label: "表格", action: insertTable },
 ]);
 
@@ -893,6 +922,8 @@ watch(activeDocumentId, (current, previous) => {
     showHistory.value = false;
     historyItems.value = [];
     historyLoading.value = false;
+    showAttachments.value = false;
+    attachmentBusyPath.value = null;
 });
 
 watch(
@@ -1091,13 +1122,7 @@ function handleAiError(message: string) {
 async function hydrateDocumentResources(runtime: SessionDocument) {
     const persistedContent = runtime.content;
     if (runtime.path && runtime.meta) {
-        const assetRegex =
-            /\]\(((?:assets|attachments)\/[^)]+)\)|(?:src|href)=["']((?:assets|attachments)\/[^"']+)["']/g;
-        const assetPaths = new Set<string>();
-        let match: RegExpExecArray | null;
-        while ((match = assetRegex.exec(persistedContent)) !== null) {
-            assetPaths.add(match[1] || match[2]);
-        }
+        const assetPaths = referencedResourcePaths(persistedContent);
 
         for (const assetPath of assetPaths) {
             try {
@@ -2324,6 +2349,170 @@ function importedResourceToSession(documentId: string, resource: ResourceSaveDat
     );
 }
 
+function attachmentMetadata(resource: ResourceSaveData): ResourceMeta {
+    return {
+        id: crypto.randomUUID(),
+        originalName: resource.originalName,
+        storedName: resource.name.split("/").pop() ?? resource.name,
+        path: resource.name,
+        type: resource.mimeType,
+        size: resource.size,
+        createdAt: new Date().toISOString(),
+    };
+}
+
+async function addAttachmentPaths(paths: string[], targetId: string | null) {
+    if (!paths.length || !targetId) return;
+    if (activeDocumentId.value !== targetId) {
+        statusMessage.value = "附件添加已取消：活动文档已切换";
+        return;
+    }
+    await runAction(async () => {
+        let addedCount = 0;
+        let skippedImageCount = 0;
+        for (const path of paths) {
+            const resource = await invoke<ResourceSaveData>("import_resource", { path });
+            if (activeDocumentId.value !== targetId) {
+                statusMessage.value = "附件添加已取消：活动文档已切换";
+                return;
+            }
+            if (resource.kind !== "attachment") {
+                skippedImageCount += 1;
+                continue;
+            }
+
+            registerResourceInSession(targetId, resource);
+            const target = session.document(targetId);
+            const metadata = target.meta ?? createEmptyMetadata(target.displayName);
+            session.updateMetadata(targetId, {
+                ...metadata,
+                attachments: [...metadata.attachments, attachmentMetadata(resource)],
+            });
+            addedCount += 1;
+        }
+        statusMessage.value = `已添加 ${addedCount} 个附件${
+            skippedImageCount ? `，已跳过 ${skippedImageCount} 个图片` : ""
+        }`;
+    });
+}
+
+async function chooseAttachments() {
+    const targetId = activeDocumentId.value;
+    if (!targetId) return;
+    const selected = await open({
+        multiple: true,
+        title: "选择要添加的附件",
+    });
+    if (!selected) return;
+    await addAttachmentPaths(Array.isArray(selected) ? selected : [selected], targetId);
+}
+
+function insertAttachmentReference(path: string) {
+    const attachment = activeDocument.value?.meta?.attachments.find(
+        (item) => item.path === path,
+    );
+    if (!attachment) return;
+    insertMarkdownSnippet(`[${attachment.originalName}](${attachment.path})`);
+}
+
+function renameAttachment(path: string, originalName: string) {
+    const target = activeDocument.value;
+    if (!target?.meta || !target.meta.attachments.some((item) => item.path === path)) {
+        return;
+    }
+    target.resources.rename(path, originalName);
+    session.updateMetadata(target.id, {
+        ...target.meta,
+        attachments: target.meta.attachments.map((attachment) =>
+            attachment.path === path ? { ...attachment, originalName } : attachment,
+        ),
+    });
+    statusMessage.value = "已重命名附件，保存后生效";
+}
+
+function removeAttachment(path: string) {
+    const target = activeDocument.value;
+    if (!target?.meta || !target.meta.attachments.some((item) => item.path === path)) {
+        return;
+    }
+    if (referencedResourcePaths(target.content).has(path)) {
+        statusMessage.value = "请先移除正文引用，再删除附件";
+        return;
+    }
+    target.resources.remove(path);
+    session.updateMetadata(target.id, {
+        ...target.meta,
+        attachments: target.meta.attachments.filter(
+            (attachment) => attachment.path !== path,
+        ),
+    });
+    statusMessage.value = "已删除附件，保存后生效";
+}
+
+function attachmentReadRequest(
+    documentId: string,
+    resourcePath: string,
+): AttachmentReadRequest | null {
+    const target = session.document(documentId);
+    const attachment = target.meta?.attachments.find(
+        (item) => item.path === resourcePath,
+    );
+    if (!attachment) return null;
+    const pending = target.resources.resource(resourcePath);
+    return {
+        documentId: target.meta?.id ?? target.id,
+        sourcePath: pending ? null : target.path,
+        resourcePath,
+        originalName: attachment.originalName,
+        base64: pending?.base64 ?? null,
+    };
+}
+
+async function openAttachment(path: string) {
+    const targetId = activeDocumentId.value;
+    if (!targetId) return;
+    const request = attachmentReadRequest(targetId, path);
+    if (!request) return;
+    attachmentBusyPath.value = path;
+    try {
+        await runAction(async () => {
+            await invoke("open_attachment", { request });
+            if (activeDocumentId.value === targetId) {
+                statusMessage.value = `已打开附件：${request.originalName}`;
+            }
+        });
+    } finally {
+        if (attachmentBusyPath.value === path) attachmentBusyPath.value = null;
+    }
+}
+
+async function exportAttachment(path: string) {
+    const targetId = activeDocumentId.value;
+    if (!targetId) return;
+    const request = attachmentReadRequest(targetId, path);
+    if (!request) return;
+    attachmentBusyPath.value = path;
+    try {
+        await runAction(async () => {
+            const destinationPath = await save({
+                title: "附件另存为",
+                defaultPath: request.originalName,
+            });
+            if (!destinationPath) return;
+            if (activeDocumentId.value !== targetId) {
+                statusMessage.value = "附件另存已取消：活动文档已切换";
+                return;
+            }
+            await invoke("export_attachment", { request, destinationPath });
+            if (activeDocumentId.value === targetId) {
+                statusMessage.value = `附件已另存为：${destinationPath}`;
+            }
+        });
+    } finally {
+        if (attachmentBusyPath.value === path) attachmentBusyPath.value = null;
+    }
+}
+
 async function importResourcePaths(paths: string[]) {
     const targetId = activeDocumentId.value;
     if (!paths.length || !targetId) return;
@@ -2717,6 +2906,19 @@ function stringifyError(error: unknown) {
             @close="showHistory = false"
             @refresh="refreshHistory"
             @restore="restoreHistory"
+        />
+        <AttachmentPanel
+            :open="showAttachments"
+            :document-name="title"
+            :items="attachmentItems"
+            :busy-path="attachmentBusyPath"
+            @close="showAttachments = false"
+            @add="chooseAttachments"
+            @insert-attachment="insertAttachmentReference"
+            @open-attachment="openAttachment"
+            @save-attachment="exportAttachment"
+            @rename="renameAttachment"
+            @remove="removeAttachment"
         />
         <LibraryPanel
             v-model:query="libraryQuery"

@@ -6,6 +6,7 @@ export type DraftSnapshot = {
     content: string;
     meta: MdxMetadata | null;
     newResources: ResourceSaveData[];
+    removedResources?: string[];
     updatedAt: string;
 };
 

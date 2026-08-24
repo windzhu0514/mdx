@@ -93,6 +93,13 @@ export function sameResources(left: ResourceSaveData[], right: ResourceSaveData[
     );
 }
 
+function sameStrings(left: string[], right: string[]) {
+    return (
+        left.length === right.length &&
+        left.every((value, index) => value === right[index])
+    );
+}
+
 function isInside(identity: string, rootIdentity: string) {
     const root = rootIdentity.replace(/[\\/]+$/, "");
     return (
@@ -208,14 +215,18 @@ export function useDocumentSession(desktop: boolean) {
         const recovery = createDraftRecovery(
             draftStore,
             () => draftKeys.get(runtime.id) ?? draftKey(null, runtime.id),
-            (): DraftSnapshot => ({
-                path: runtime.path,
-                title: runtime.displayName,
-                content: runtime.content,
-                meta: runtime.meta,
-                newResources: runtime.resources.snapshot().newResources,
-                updatedAt: new Date().toISOString(),
-            }),
+            (): DraftSnapshot => {
+                const resourceSnapshot = runtime.resources.snapshot();
+                return {
+                    path: runtime.path,
+                    title: runtime.displayName,
+                    content: runtime.content,
+                    meta: runtime.meta,
+                    newResources: resourceSnapshot.newResources,
+                    removedResources: resourceSnapshot.removedResources,
+                    updatedAt: new Date().toISOString(),
+                };
+            },
         );
         const runtime: SessionDocument = { ...state, resources, draft: recovery };
         return runtime;
@@ -481,6 +492,7 @@ export function useDocumentSession(desktop: boolean) {
         const title = documentNameFromPath(runtime.path);
         const requestedContent = runtime.resources.persistedMarkdown(runtime.content);
         const requestedResources = runtime.resources.newResources();
+        const requestedRemovedResources = runtime.resources.removedResources();
         const requestedMetadata = JSON.stringify(runtime.meta);
         const saved = await invoke<MdxNote>("save_mdx", {
             request: {
@@ -489,6 +501,7 @@ export function useDocumentSession(desktop: boolean) {
                 content: requestedContent,
                 meta: runtime.meta ? { ...runtime.meta, title } : null,
                 newAssets: requestedResources,
+                removedResources: requestedRemovedResources,
             },
         });
 
@@ -502,6 +515,10 @@ export function useDocumentSession(desktop: boolean) {
         const changedWhileSaving =
             runtime.resources.persistedMarkdown(runtime.content) !== requestedContent ||
             !sameResources(runtime.resources.newResources(), requestedResources) ||
+            !sameStrings(
+                runtime.resources.removedResources(),
+                requestedRemovedResources,
+            ) ||
             metadataChanged;
         if (!metadataChanged) runtime.meta = saved.meta;
         if (changedWhileSaving) {
@@ -537,14 +554,16 @@ export function useDocumentSession(desktop: boolean) {
         const title = documentNameFromPath(resolved.path);
         const requestedContent = runtime.resources.persistedMarkdown(runtime.content);
         const requestedResources = runtime.resources.newResources();
+        const requestedRemovedResources = runtime.resources.removedResources();
         const requestedMetadata = JSON.stringify(runtime.meta);
         const saved = await invoke<MdxNote>("save_mdx_as", {
             request: {
-                path: resolved.path,
+                path: runtime.path,
                 title,
                 content: requestedContent,
                 meta: runtime.meta ? { ...runtime.meta, title } : null,
                 newAssets: requestedResources,
+                removedResources: requestedRemovedResources,
             },
             path: resolved.path,
         });
@@ -564,6 +583,10 @@ export function useDocumentSession(desktop: boolean) {
         const changedWhileSaving =
             runtime.resources.persistedMarkdown(runtime.content) !== requestedContent ||
             !sameResources(runtime.resources.newResources(), requestedResources) ||
+            !sameStrings(
+                runtime.resources.removedResources(),
+                requestedRemovedResources,
+            ) ||
             metadataChanged;
         if (!metadataChanged) runtime.meta = saved.meta;
         if (changedWhileSaving) {
@@ -785,6 +808,7 @@ export function useDocumentSession(desktop: boolean) {
                 if (draft) {
                     runtime.resources.restore({
                         newResources: draft.newResources,
+                        removedResources: draft.removedResources ?? [],
                     });
                     runtime.path = draft.path ?? runtime.path;
                     runtime.displayName = draft.title;

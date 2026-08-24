@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { toDisplayMarkdown, toPersistedMarkdown } from "./resourcePaths";
+import {
+    referencedResourcePaths,
+    toDisplayMarkdown,
+    toPersistedMarkdown,
+} from "./resourcePaths";
 
 describe("resource markdown mapping", () => {
     const urls = new Map([["assets/photo.png", "blob:mora-photo"]]);
@@ -30,5 +34,23 @@ describe("resource markdown mapping", () => {
         expect(toDisplayMarkdown("![图](https://example.com/a.png)", urls)).toBe(
             "![图](https://example.com/a.png)",
         );
+    });
+
+    it("extracts unique package resources from Markdown and HTML", () => {
+        expect(
+            referencedResourcePaths(
+                "[附件](attachments/a.pdf) ![图](assets/a.png) " +
+                    '<a href="attachments/a.pdf">重复</a><img src="assets/b.png">',
+            ),
+        ).toEqual(new Set(["attachments/a.pdf", "assets/a.png", "assets/b.png"]));
+    });
+
+    it("ignores external, local and blob destinations", () => {
+        expect(
+            referencedResourcePaths(
+                "[站点](https://example.com/a.pdf) ![临时](blob:mora) " +
+                    '<a href="file:///C:/a.pdf">本地</a>',
+            ),
+        ).toEqual(new Set());
     });
 });

@@ -223,6 +223,16 @@ struct ResourceData {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct AttachmentReadRequest {
+    document_id: String,
+    source_path: Option<String>,
+    resource_path: String,
+    original_name: String,
+    base64: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct MdxSaveRequest {
     path: Option<String>,
     title: String,
@@ -230,6 +240,8 @@ struct MdxSaveRequest {
     meta: Option<MdxMetadata>,
     #[serde(default)]
     new_assets: Vec<ResourceData>,
+    #[serde(default)]
+    removed_resources: Vec<String>,
 }
 
 #[tauri::command]
@@ -347,6 +359,8 @@ fn save_mdx_as(app: AppHandle, request: MdxSaveRequest, path: String) -> Result<
 
 fn save_to_path(request: MdxSaveRequest, path: PathBuf) -> Result<MdxNote, String> {
     let target_path = ensure_mdx_extension(path);
+    let source_path = request.path.as_deref().map(PathBuf::from);
+    let removed_resources = validated_resource_paths(&request.removed_resources)?;
     let mut meta = request.meta.unwrap_or_default();
     let now = current_time_rfc3339();
 
@@ -360,10 +374,19 @@ fn save_to_path(request: MdxSaveRequest, path: PathBuf) -> Result<MdxNote, Strin
     meta.title = normalize_title(&request.title);
     meta.updated_at = now;
     meta.word_count = count_words(&request.content);
+    meta.assets
+        .retain(|resource| !removed_resources.contains(&resource.path));
+    meta.attachments
+        .retain(|resource| !removed_resources.contains(&resource.path));
     apply_resource_metadata(&mut meta, &request.new_assets);
 
-    let archive_bytes =
-        build_mdx_archive(&target_path, &meta, &request.content, &request.new_assets)?;
+    let archive_bytes = build_mdx_archive(
+        source_path.as_deref(),
+        &meta,
+        &request.content,
+        &request.new_assets,
+        &removed_resources,
+    )?;
     safe_write_file(&target_path, &archive_bytes)?;
 
     Ok(MdxNote {
@@ -468,22 +491,163 @@ fn prepare_markdown_resources_command(
 
 #[tauri::command]
 fn read_asset(path: String, asset_name: String) -> Result<String, String> {
-    use std::io::Read;
-    let file = File::open(Path::new(&path)).map_err(|_| "无法打开文件。".to_string())?;
-    let mut archive = ZipArchive::new(file).map_err(|_| INVALID_MDX_ERROR.to_string())?;
-    validate_archive(&mut archive)?;
     validate_new_resource_name(&asset_name)?;
-
-    let mut asset_file = archive
-        .by_name(&asset_name)
-        .map_err(|_| "未找到资产".to_string())?;
-    let mut bytes = Vec::new();
-    asset_file
-        .read_to_end(&mut bytes)
-        .map_err(|_| "无法读取资产".to_string())?;
+    let bytes = read_archive_resource_bytes(Path::new(&path), &asset_name)?;
 
     use base64::{engine::general_purpose, Engine as _};
     Ok(general_purpose::STANDARD.encode(&bytes))
+}
+
+fn validate_attachment_path(path: &str) -> Result<(), String> {
+    validate_new_resource_name(path).map_err(|error| format!("附件路径无效：{error}"))?;
+    if !path.starts_with("attachments/") {
+        return Err("附件路径必须位于 attachments/ 根目录。".to_string());
+    }
+    Ok(())
+}
+
+fn read_archive_resource_bytes(path: &Path, resource_path: &str) -> Result<Vec<u8>, String> {
+    let file = File::open(path).map_err(|_| "无法打开文件。".to_string())?;
+    let mut archive = ZipArchive::new(file).map_err(|_| INVALID_MDX_ERROR.to_string())?;
+    validate_archive(&mut archive)?;
+    let mut resource = archive
+        .by_name(resource_path)
+        .map_err(|_| "未找到附件。".to_string())?;
+    let mut bytes = Vec::new();
+    resource
+        .read_to_end(&mut bytes)
+        .map_err(|_| "无法读取附件。".to_string())?;
+    Ok(bytes)
+}
+
+fn read_attachment_bytes(request: &AttachmentReadRequest) -> Result<Vec<u8>, String> {
+    use base64::{engine::general_purpose, Engine as _};
+
+    validate_attachment_path(&request.resource_path)?;
+    if let Some(encoded) = request.base64.as_deref() {
+        let maximum_encoded_length = ((MAX_IMPORTED_RESOURCE_BYTES.saturating_add(2)) / 3) * 4 + 4;
+        if encoded.len() as u64 > maximum_encoded_length {
+            return Err("附件超过 512 MiB 限制。".to_string());
+        }
+        let bytes = general_purpose::STANDARD
+            .decode(encoded)
+            .map_err(|error| format!("附件数据解码失败：{error}"))?;
+        if bytes.len() as u64 > MAX_IMPORTED_RESOURCE_BYTES {
+            return Err("附件超过 512 MiB 限制。".to_string());
+        }
+        return Ok(bytes);
+    }
+
+    let source_path = request
+        .source_path
+        .as_deref()
+        .filter(|path| !path.trim().is_empty())
+        .ok_or_else(|| "附件来源不可用，请先保存文档。".to_string())?;
+    read_archive_resource_bytes(Path::new(source_path), &request.resource_path)
+}
+
+fn attachment_cache_key(value: &str) -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = DefaultHasher::new();
+    value.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
+fn safe_attachment_file_name(original_name: &str) -> String {
+    let file_name = Path::new(original_name)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("attachment");
+    let cleaned = file_name
+        .chars()
+        .map(|character| {
+            if character.is_control()
+                || matches!(
+                    character,
+                    '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*'
+                )
+            {
+                '_'
+            } else {
+                character
+            }
+        })
+        .collect::<String>();
+    let cleaned = cleaned.trim_matches(|character| matches!(character, ' ' | '.'));
+    let cleaned = if cleaned.is_empty() {
+        "attachment"
+    } else {
+        cleaned
+    };
+    let stem = cleaned
+        .split('.')
+        .next()
+        .unwrap_or(cleaned)
+        .to_ascii_uppercase();
+    let reserved = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || (stem.len() == 4
+            && matches!(&stem[..3], "COM" | "LPT")
+            && stem.as_bytes()[3].is_ascii_digit()
+            && stem.as_bytes()[3] != b'0');
+    if reserved {
+        format!("_{cleaned}")
+    } else {
+        cleaned.to_string()
+    }
+}
+
+fn write_attachment_preview(
+    cache_root: &Path,
+    request: &AttachmentReadRequest,
+    bytes: &[u8],
+) -> Result<PathBuf, String> {
+    validate_attachment_path(&request.resource_path)?;
+    let preview_root = cache_root.join("attachment-preview");
+    let preview_directory = preview_root
+        .join(attachment_cache_key(&request.document_id))
+        .join(attachment_cache_key(&request.resource_path));
+    if !preview_directory.starts_with(&preview_root) {
+        return Err("附件预览路径无效。".to_string());
+    }
+    if preview_directory.exists() {
+        fs::remove_dir_all(&preview_directory)
+            .map_err(|error| format!("清理附件预览失败：{error}"))?;
+    }
+    fs::create_dir_all(&preview_directory)
+        .map_err(|error| format!("创建附件预览目录失败：{error}"))?;
+    let preview_path = preview_directory.join(safe_attachment_file_name(&request.original_name));
+    document_export::safe_write_bytes(&preview_path, bytes)?;
+    Ok(preview_path)
+}
+
+fn export_attachment_bytes(target_path: &Path, bytes: &[u8]) -> Result<(), String> {
+    document_export::safe_write_bytes(target_path, bytes)
+}
+
+#[tauri::command]
+fn open_attachment(app: AppHandle, request: AttachmentReadRequest) -> Result<(), String> {
+    let bytes = read_attachment_bytes(&request)?;
+    let cache_root = app
+        .path()
+        .app_cache_dir()
+        .map_err(|error| error.to_string())?;
+    let preview_path = write_attachment_preview(&cache_root, &request, &bytes)?;
+    tauri_plugin_opener::open_path(&preview_path, None::<&str>)
+        .map_err(|error| format!("无法打开附件：{error}"))
+}
+
+#[tauri::command]
+fn export_attachment(
+    request: AttachmentReadRequest,
+    destination_path: String,
+) -> Result<(), String> {
+    if destination_path.trim().is_empty() {
+        return Err("附件导出路径为空。".to_string());
+    }
+    let bytes = read_attachment_bytes(&request)?;
+    export_attachment_bytes(Path::new(&destination_path), &bytes)
 }
 
 fn note_index_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -669,38 +833,75 @@ fn apply_resource_metadata(meta: &mut MdxMetadata, resources: &[ResourceData]) {
             ResourceKind::Asset => &mut meta.assets,
             ResourceKind::Attachment => &mut meta.attachments,
         };
-        target.retain(|entry| entry.path != resource.name);
-        target.push(ResourceMeta {
-            id: new_resource_id(),
-            original_name: resource.original_name.clone(),
-            stored_name: resource
-                .name
-                .rsplit('/')
-                .next()
-                .unwrap_or(&resource.name)
-                .to_string(),
-            path: resource.name.clone(),
-            mime_type: resource.mime_type.clone(),
-            size: resource.size,
-            width: None,
-            height: None,
-            created_at: current_time_rfc3339(),
-        });
+        let stored_name = resource
+            .name
+            .rsplit('/')
+            .next()
+            .unwrap_or(&resource.name)
+            .to_string();
+        if let Some(entry) = target.iter_mut().find(|entry| entry.path == resource.name) {
+            entry.original_name = resource.original_name.clone();
+            entry.stored_name = stored_name;
+            entry.mime_type = resource.mime_type.clone();
+            entry.size = resource.size;
+        } else {
+            target.push(ResourceMeta {
+                id: new_resource_id(),
+                original_name: resource.original_name.clone(),
+                stored_name,
+                path: resource.name.clone(),
+                mime_type: resource.mime_type.clone(),
+                size: resource.size,
+                width: None,
+                height: None,
+                created_at: current_time_rfc3339(),
+            });
+        }
     }
 }
 
+fn validated_resource_paths(
+    paths: &[String],
+) -> Result<std::collections::BTreeSet<String>, String> {
+    let mut validated = std::collections::BTreeSet::new();
+    for path in paths {
+        validate_new_resource_name(path).map_err(|error| format!("资源路径无效：{error}"))?;
+        validated.insert(path.clone());
+    }
+    Ok(validated)
+}
+
 fn build_mdx_archive(
-    target_path: &Path,
+    source_path: Option<&Path>,
     meta: &MdxMetadata,
     content: &str,
     new_assets: &[ResourceData],
+    removed_resources: &std::collections::BTreeSet<String>,
 ) -> Result<Vec<u8>, String> {
-    let mut preserved_entries: Vec<HistoryArchiveEntry> = collect_preserved_entries(target_path)?
+    let preservation_source = source_path.map(|path| {
+        if path.exists() {
+            path.to_path_buf()
+        } else {
+            document_export::companion_path(path, ".bak")
+        }
+    });
+    let replacement_resources = new_assets
+        .iter()
+        .map(|resource| resource.name.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut preserved_entries: Vec<HistoryArchiveEntry> = preservation_source
+        .as_deref()
+        .map(collect_preserved_entries)
+        .transpose()?
+        .unwrap_or_default()
         .into_iter()
+        .filter(|(name, _)| {
+            !removed_resources.contains(name) && !replacement_resources.contains(name.as_str())
+        })
         .map(|(name, bytes)| HistoryArchiveEntry { name, bytes })
         .collect();
-    if target_path.exists() {
-        if let Ok(previous) = read_mdx(target_path) {
+    if let Some(source_path) = preservation_source.as_deref().filter(|path| path.exists()) {
+        if let Ok(previous) = read_mdx(source_path) {
             let meta_value = serde_json::to_value(&previous.meta).map_err(|err| err.to_string())?;
             preserved_entries.push(new_history_entry(
                 &previous.title,
@@ -771,31 +972,22 @@ fn zip_file_options() -> FileOptions {
         .unix_permissions(0o644)
 }
 
-fn collect_preserved_entries(target_path: &Path) -> Result<Vec<(String, Vec<u8>)>, String> {
-    if !target_path.exists() {
-        return Ok(Vec::new());
+fn collect_preserved_entries(source_path: &Path) -> Result<Vec<(String, Vec<u8>)>, String> {
+    if !source_path.exists() {
+        return Err("源 MDX 文件不可用，无法保留资源。".to_string());
     }
 
-    let file = File::open(target_path).map_err(|err| err.to_string())?;
-    let mut archive = match ZipArchive::new(file) {
-        Ok(archive) => archive,
-        Err(_) => return Ok(Vec::new()),
-    };
-    if validate_archive(&mut archive).is_err() {
-        return Ok(Vec::new());
-    }
+    let invalid_source = || "源 MDX 文件无效，无法保留资源。".to_string();
+    let file = File::open(source_path)
+        .map_err(|error| format!("源 MDX 文件不可用，无法保留资源：{error}"))?;
+    let mut archive = ZipArchive::new(file).map_err(|_| invalid_source())?;
+    validate_archive(&mut archive).map_err(|_| invalid_source())?;
 
-    let manifest_text = match read_zip_text(&mut archive, "manifest.json") {
-        Ok(text) => text,
-        Err(_) => return Ok(Vec::new()),
-    };
-    let manifest: MdxManifest = match serde_json::from_str(&manifest_text) {
-        Ok(manifest) => manifest,
-        Err(_) => return Ok(Vec::new()),
-    };
-    if validate_manifest(&manifest).is_err() {
-        return Ok(Vec::new());
-    }
+    let manifest_text =
+        read_zip_text(&mut archive, "manifest.json").map_err(|_| invalid_source())?;
+    let manifest: MdxManifest =
+        serde_json::from_str(&manifest_text).map_err(|_| invalid_source())?;
+    validate_manifest(&manifest).map_err(|_| invalid_source())?;
 
     let mut entries = Vec::new();
 
@@ -956,6 +1148,8 @@ pub fn run() {
             import_resource,
             prepare_markdown_resources_command,
             read_asset,
+            open_attachment,
+            export_attachment,
             list_notes,
             search_notes,
             list_history,
@@ -1035,6 +1229,227 @@ mod tests {
     }
 
     #[test]
+    fn saved_attachment_deletion_removes_metadata_and_zip_bytes() {
+        let dir = temp_test_dir("attachment-delete");
+        fs::create_dir_all(&dir).unwrap();
+        let source = dir.join("source.mdx");
+        write_note_with_resources(
+            &source,
+            &[
+                ("attachments/keep.txt", b"keep"),
+                ("attachments/delete.txt", b"delete"),
+            ],
+        );
+
+        let request = save_request_for(
+            &source,
+            vec!["attachments/delete.txt".to_string()],
+            Vec::new(),
+        );
+        let saved = save_to_path(request, source.clone()).unwrap();
+
+        assert_eq!(
+            saved
+                .meta
+                .attachments
+                .iter()
+                .map(|item| item.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["attachments/keep.txt"]
+        );
+        assert_eq!(
+            read_zip_bytes(&source, "attachments/keep.txt").unwrap(),
+            b"keep"
+        );
+        assert!(read_zip_bytes(&source, "attachments/delete.txt").is_err());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn save_as_copies_source_resources_and_ignores_target_resources() {
+        let dir = temp_test_dir("attachment-save-as");
+        fs::create_dir_all(&dir).unwrap();
+        let source = dir.join("source.mdx");
+        let target = dir.join("target.mdx");
+        write_note_with_resources(&source, &[("attachments/source.txt", b"source")]);
+        write_note_with_resources(&target, &[("attachments/target.txt", b"target")]);
+
+        save_to_path(
+            save_request_for(&source, Vec::new(), Vec::new()),
+            target.clone(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            read_zip_bytes(&target, "attachments/source.txt").unwrap(),
+            b"source"
+        );
+        assert!(read_zip_bytes(&target, "attachments/target.txt").is_err());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn save_as_rejects_a_missing_source_instead_of_dropping_resources() {
+        let dir = temp_test_dir("attachment-save-as-missing-source");
+        fs::create_dir_all(&dir).unwrap();
+        let source = dir.join("source.mdx");
+        let target = dir.join("target.mdx");
+        write_note_with_resources(&source, &[("attachments/source.txt", b"source")]);
+        let request = save_request_for(&source, Vec::new(), Vec::new());
+        fs::remove_file(&source).unwrap();
+
+        let error = save_to_path(request, target.clone()).unwrap_err();
+
+        assert!(error.contains("源 MDX 文件"));
+        assert!(!target.exists());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn save_recovers_an_interrupted_backup_without_dropping_resources() {
+        let dir = temp_test_dir("attachment-save-backup-source");
+        fs::create_dir_all(&dir).unwrap();
+        let source = dir.join("source.mdx");
+        write_note_with_resources(&source, &[("attachments/source.txt", b"source")]);
+        let request = save_request_for(&source, Vec::new(), Vec::new());
+        let backup = document_export::companion_path(&source, ".bak");
+        fs::rename(&source, &backup).unwrap();
+
+        save_to_path(request, source.clone()).unwrap();
+
+        assert_eq!(
+            read_zip_bytes(&source, "attachments/source.txt").unwrap(),
+            b"source"
+        );
+        assert!(!backup.exists());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn attachment_deletion_rejects_unsafe_paths() {
+        let dir = temp_test_dir("attachment-delete-invalid");
+        fs::create_dir_all(&dir).unwrap();
+        let source = dir.join("source.mdx");
+        write_note_with_resources(&source, &[("attachments/keep.txt", b"keep")]);
+
+        let error = save_to_path(
+            save_request_for(
+                &source,
+                vec!["attachments/../keep.txt".to_string()],
+                Vec::new(),
+            ),
+            source.clone(),
+        )
+        .unwrap_err();
+
+        assert!(error.contains("资源路径"));
+        assert_eq!(
+            read_zip_bytes(&source, "attachments/keep.txt").unwrap(),
+            b"keep"
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn new_attachment_replaces_preserved_bytes_without_duplicate_entries() {
+        let dir = temp_test_dir("attachment-replace");
+        fs::create_dir_all(&dir).unwrap();
+        let source = dir.join("source.mdx");
+        write_note_with_resources(&source, &[("attachments/a.txt", b"old")]);
+        let replacement = resource_data("attachments/a.txt", b"new");
+
+        save_to_path(
+            save_request_for(&source, Vec::new(), vec![replacement]),
+            source.clone(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            read_zip_bytes(&source, "attachments/a.txt").unwrap(),
+            b"new"
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn attachment_bytes_are_read_from_archive_or_base64() {
+        let dir = temp_test_dir("attachment-bytes");
+        fs::create_dir_all(&dir).unwrap();
+        let source = dir.join("source.mdx");
+        write_note_with_resources(&source, &[("attachments/a.txt", b"archived")]);
+        let archived = attachment_request(Some(source), None, "attachments/a.txt", "a.txt");
+        let pending = attachment_request(None, Some("cGVuZGluZw=="), "attachments/b.txt", "b.txt");
+
+        assert_eq!(read_attachment_bytes(&archived).unwrap(), b"archived");
+        assert_eq!(read_attachment_bytes(&pending).unwrap(), b"pending");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn attachment_bytes_reject_unsafe_non_attachment_and_missing_sources() {
+        for resource_path in ["attachments/../a.txt", "assets/a.png"] {
+            let error = read_attachment_bytes(&attachment_request(
+                None,
+                Some("YQ=="),
+                resource_path,
+                "a.txt",
+            ))
+            .unwrap_err();
+            assert!(error.contains("附件路径"));
+        }
+
+        let error = read_attachment_bytes(&attachment_request(
+            None,
+            None,
+            "attachments/a.txt",
+            "a.txt",
+        ))
+        .unwrap_err();
+        assert!(error.contains("来源"));
+    }
+
+    #[test]
+    fn attachment_preview_stays_in_cache_and_replaces_its_previous_copy() {
+        let dir = temp_test_dir("attachment-preview");
+        let cache = dir.join("cache");
+        fs::create_dir_all(&cache).unwrap();
+        let first_request =
+            attachment_request(None, Some("Zmlyc3Q="), "attachments/a.txt", "../CON");
+        let first = write_attachment_preview(&cache, &first_request, b"first").unwrap();
+
+        assert!(first.starts_with(&cache));
+        assert_eq!(fs::read(&first).unwrap(), b"first");
+        assert!(!first
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .eq_ignore_ascii_case("CON"));
+
+        let second_request =
+            attachment_request(None, Some("c2Vjb25k"), "attachments/a.txt", "second.txt");
+        let second = write_attachment_preview(&cache, &second_request, b"second").unwrap();
+
+        assert!(!first.exists());
+        assert_eq!(fs::read(&second).unwrap(), b"second");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn attachment_export_replaces_an_existing_file_safely() {
+        let dir = temp_test_dir("attachment-export");
+        fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("export.txt");
+        fs::write(&target, b"old").unwrap();
+
+        export_attachment_bytes(&target, b"new").unwrap();
+
+        assert_eq!(fs::read(&target).unwrap(), b"new");
+        assert!(!document_export::companion_path(&target, ".tmp").exists());
+        assert!(!document_export::companion_path(&target, ".bak").exists());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn diagram_png_export_decodes_and_validates_png_bytes() {
         let dir = temp_test_dir("diagram-png");
         fs::create_dir_all(&dir).unwrap();
@@ -1074,6 +1489,86 @@ mod tests {
         std::env::temp_dir().join(format!("mora-{}-{}", label, Uuid::new_v4().simple()))
     }
 
+    fn resource_data(name: &str, bytes: &[u8]) -> ResourceData {
+        use base64::{engine::general_purpose, Engine as _};
+        ResourceData {
+            name: name.to_string(),
+            original_name: name.rsplit('/').next().unwrap().to_string(),
+            mime_type: "application/octet-stream".to_string(),
+            size: bytes.len() as u64,
+            kind: if name.starts_with("assets/") {
+                ResourceKind::Asset
+            } else {
+                ResourceKind::Attachment
+            },
+            base64: general_purpose::STANDARD.encode(bytes),
+        }
+    }
+
+    fn write_note_with_resources(path: &Path, resources: &[(&str, &[u8])]) {
+        let new_assets = resources
+            .iter()
+            .map(|(name, bytes)| resource_data(name, bytes))
+            .collect();
+        save_to_path(
+            MdxSaveRequest {
+                path: None,
+                title: "Fixture".to_string(),
+                content: String::new(),
+                meta: Some(MdxMetadata::default()),
+                new_assets,
+                removed_resources: Vec::new(),
+            },
+            path.to_path_buf(),
+        )
+        .unwrap();
+    }
+
+    fn save_request_for(
+        source: &Path,
+        removed_resources: Vec<String>,
+        new_assets: Vec<ResourceData>,
+    ) -> MdxSaveRequest {
+        let note = read_mdx(source).unwrap();
+        let mut request: MdxSaveRequest = serde_json::from_value(serde_json::json!({
+            "path": source.to_string_lossy(),
+            "title": note.title,
+            "content": note.content,
+            "meta": note.meta,
+            "newAssets": [],
+            "removedResources": removed_resources,
+        }))
+        .unwrap();
+        request.new_assets = new_assets;
+        request
+    }
+
+    fn read_zip_bytes(path: &Path, name: &str) -> Result<Vec<u8>, String> {
+        let mut archive = ZipArchive::new(File::open(path).map_err(|error| error.to_string())?)
+            .map_err(|error| error.to_string())?;
+        let mut entry = archive.by_name(name).map_err(|error| error.to_string())?;
+        let mut bytes = Vec::new();
+        entry
+            .read_to_end(&mut bytes)
+            .map_err(|error| error.to_string())?;
+        Ok(bytes)
+    }
+
+    fn attachment_request(
+        source_path: Option<PathBuf>,
+        base64: Option<&str>,
+        resource_path: &str,
+        original_name: &str,
+    ) -> AttachmentReadRequest {
+        AttachmentReadRequest {
+            document_id: "note-fixture".to_string(),
+            source_path: source_path.map(|path| path.to_string_lossy().into_owned()),
+            resource_path: resource_path.to_string(),
+            original_name: original_name.to_string(),
+            base64: base64.map(str::to_string),
+        }
+    }
+
     #[test]
     fn index_loader_maps_markdown_front_matter() {
         let dir = temp_test_dir("index-markdown");
@@ -1104,11 +1599,12 @@ mod tests {
         meta.summary = "本周目标".to_string();
         save_to_path(
             MdxSaveRequest {
-                path: Some(path.to_string_lossy().to_string()),
+                path: None,
                 title: "项目计划".to_string(),
                 content: "正文内容".to_string(),
                 meta: Some(meta),
                 new_assets: Vec::new(),
+                removed_resources: Vec::new(),
             },
             path.clone(),
         )

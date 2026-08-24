@@ -932,6 +932,10 @@ describe("App Web 预览启动", () => {
         expect(editLabels).not.toContain("笔记库与全文搜索...");
 
         expect(insertLabels).toContain("导入图片或附件");
+        expect(insertLabels).toContain("附件管理");
+        expect(insertLabels.indexOf("导入图片或附件")).toBeLessThan(
+            insertLabels.indexOf("附件管理"),
+        );
         expect(insertLabels).not.toContain("导入图片或附件...");
         expect(shortcutOf("插入", "无序列表")).toBe("Ctrl+L");
         expect(shortcutOf("插入", "有序列表")).toBe("Ctrl+Alt+L");
@@ -955,6 +959,23 @@ describe("App Web 预览启动", () => {
         expect(viewLabels).not.toContain("偏好设置");
         expect(viewLabels).not.toContain("光标移到文首");
         expect(viewLabels).not.toContain("光标移到文末");
+    });
+
+    it("opens current-document attachment management from the insert menu", async () => {
+        const host = await mountApp();
+        findButton(host, "新建文档")?.click();
+        await vi.waitFor(() =>
+            expect(findButton(host, "附件管理")?.disabled).toBe(false),
+        );
+
+        findButton(host, "附件管理")?.click();
+        await nextTick();
+
+        const dialog = host.querySelector<HTMLElement>(
+            '[aria-labelledby="attachment-title"]',
+        );
+        expect(dialog?.textContent).toContain("附件管理");
+        expect(dialog?.textContent).toContain("还没有附件");
     });
 
     it("执行应用级快捷键并切换对应界面", async () => {

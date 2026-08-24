@@ -1,9 +1,31 @@
+const MARKDOWN_DESTINATION_SOURCE = String.raw`(!?\[[^\]]*\]\()([^\s)]+)(\))`;
+const HTML_ATTRIBUTE_SOURCE = String.raw`\b(src|href)=(['"])([^'"]+)\2`;
+
+function markdownDestinationPattern() {
+    return new RegExp(MARKDOWN_DESTINATION_SOURCE, "gu");
+}
+
+function htmlAttributePattern() {
+    return new RegExp(HTML_ATTRIBUTE_SOURCE, "gu");
+}
+
+function* resourceDestinations(markdown: string) {
+    for (const match of markdown.matchAll(markdownDestinationPattern())) {
+        const destination = match[2];
+        if (destination) yield destination;
+    }
+    for (const match of markdown.matchAll(htmlAttributePattern())) {
+        const destination = match[3];
+        if (destination) yield destination;
+    }
+}
+
 function replaceMarkdownDestinations(
     markdown: string,
     replacements: ReadonlyMap<string, string>,
 ) {
     return markdown.replace(
-        /(!?\[[^\]]*\]\()([^\s)]+)(\))/g,
+        markdownDestinationPattern(),
         (match, prefix: string, destination: string, suffix: string) => {
             const replacement = replacements.get(destination);
             return replacement ? `${prefix}${replacement}${suffix}` : match;
@@ -16,12 +38,22 @@ function replaceHtmlAttributes(
     replacements: ReadonlyMap<string, string>,
 ) {
     return markdown.replace(
-        /\b(src|href)=(['"])([^'"]+)\2/g,
+        htmlAttributePattern(),
         (match, attribute: string, quote: string, value: string) => {
             const replacement = replacements.get(value);
             return replacement ? `${attribute}=${quote}${replacement}${quote}` : match;
         },
     );
+}
+
+export function referencedResourcePaths(markdown: string) {
+    const paths = new Set<string>();
+    for (const destination of resourceDestinations(markdown)) {
+        if (/^(?:assets|attachments)\/[^/\\]+$/u.test(destination)) {
+            paths.add(destination);
+        }
+    }
+    return paths;
 }
 
 function replaceResourceReferences(

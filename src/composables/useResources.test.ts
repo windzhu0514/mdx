@@ -164,4 +164,52 @@ describe("resource session", () => {
         restored.clear();
         expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:restored");
     });
+
+    it("renames a copied resource view without exposing internal state", () => {
+        const session = createResourceSession();
+        session.registerNew(newImage);
+
+        session.rename("assets/a.png", "新名称.png");
+
+        const resource = session.resource("assets/a.png");
+        expect(resource?.originalName).toBe("新名称.png");
+        if (resource) resource.originalName = "外部修改.png";
+        expect(session.resource("assets/a.png")?.originalName).toBe("新名称.png");
+    });
+
+    it("removes a new resource without scheduling an archive deletion", () => {
+        const session = createResourceSession();
+        session.registerNew(newImage);
+
+        session.remove("assets/a.png");
+
+        expect(session.newResources()).toEqual([]);
+        expect(session.removedResources()).toEqual([]);
+        expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:a");
+    });
+
+    it("schedules an existing or unloaded resource for deletion", () => {
+        const session = createResourceSession();
+        session.registerLoaded({ ...newImage, isNew: false });
+
+        session.remove("assets/a.png");
+        session.remove("attachments/unloaded.pdf");
+
+        expect(session.removedResources()).toEqual([
+            "assets/a.png",
+            "attachments/unloaded.pdf",
+        ]);
+    });
+
+    it("round trips removed resources through a draft snapshot", () => {
+        const source = createResourceSession();
+        source.remove("attachments/a.pdf");
+        const restored = createResourceSession();
+
+        restored.restore(source.snapshot());
+
+        expect(restored.removedResources()).toEqual(["attachments/a.pdf"]);
+        restored.markSaved();
+        expect(restored.removedResources()).toEqual([]);
+    });
 });

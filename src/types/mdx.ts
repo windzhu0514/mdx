@@ -12,6 +12,10 @@ export type ResourceMeta = {
     createdAt: string;
 };
 
+export type AttachmentListItem = ResourceMeta & {
+    referenced: boolean;
+};
+
 export type MdxManifest = {
     format: string;
     formatVersion: string;
@@ -88,10 +92,19 @@ export type ResourceSaveData = {
     base64: string;
 };
 
+export type AttachmentReadRequest = {
+    documentId: string;
+    sourcePath: string | null;
+    resourcePath: string;
+    originalName: string;
+    base64: string | null;
+};
+
 export type MdxSaveRequest = {
     path: string | null;
     title: string;
     content: string;
     meta: MdxMetadata | null;
     newResources: ResourceSaveData[];
+    removedResources: string[];
 };
