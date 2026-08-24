@@ -12,6 +12,10 @@ export type ResourceMeta = {
     createdAt: string;
 };
 
+export type AttachmentListItem = ResourceMeta & {
+    referenced: boolean;
+};
+
 export type MdxManifest = {
     format: string;
     formatVersion: string;

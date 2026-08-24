@@ -495,6 +495,194 @@ summary:focus-visible,
     text-align: center;
 }
 
+.attachment-panel {
+    width: min(840px, 100%);
+    max-height: min(760px, calc(100vh - 48px));
+    padding: 22px;
+    overflow: auto;
+    border: 1px solid var(--color-border);
+    border-radius: 18px;
+    background: var(--color-bg-elevated);
+    color: var(--color-text-main);
+    box-shadow: var(--shadow-lg);
+}
+
+.attachment-panel-header,
+.attachment-toolbar,
+.attachment-actions,
+.attachment-delete-confirm,
+.attachment-rename-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.attachment-panel-header {
+    align-items: flex-start;
+    justify-content: space-between;
+}
+
+.attachment-panel h2 {
+    margin: 0;
+    font-size: 22px;
+}
+
+.attachment-summary {
+    margin: 6px 0 0;
+    color: var(--color-text-muted);
+    font-size: 12px;
+}
+
+.attachment-toolbar {
+    justify-content: flex-end;
+    margin: 18px 0 12px;
+}
+
+.attachment-toolbar button,
+.attachment-actions button,
+.attachment-delete-confirm button,
+.attachment-rename-controls button,
+.attachment-empty button {
+    padding: 7px 10px;
+    border: 1px solid var(--color-border);
+    border-radius: 7px;
+    background: var(--color-bg-surface);
+    color: var(--color-text-main);
+    cursor: pointer;
+}
+
+.attachment-toolbar .primary {
+    border-color: var(--color-primary);
+    background: var(--color-primary);
+    color: white;
+}
+
+.attachment-list {
+    display: grid;
+    gap: 8px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.attachment-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 10px 16px;
+    padding: 13px 14px;
+    border: 1px solid var(--color-border);
+    border-radius: 10px;
+    background: var(--color-bg-surface);
+}
+
+.attachment-info {
+    display: grid;
+    min-width: 0;
+    gap: 5px;
+}
+
+.attachment-info strong,
+.attachment-meta {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.attachment-info label,
+.attachment-meta,
+.attachment-reference-help {
+    color: var(--color-text-muted);
+    font-size: 12px;
+}
+
+.attachment-reference-state {
+    width: max-content;
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: var(--color-bg-control-hover);
+    color: var(--color-text-muted);
+    font-size: 11px;
+}
+
+.attachment-reference-state.referenced {
+    background: var(--color-primary-light);
+    color: var(--color-primary);
+}
+
+.attachment-actions {
+    align-self: center;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
+.attachment-actions button:disabled,
+.attachment-rename-controls button:disabled {
+    cursor: default;
+    opacity: 0.48;
+}
+
+.attachment-actions .danger {
+    color: var(--color-danger);
+}
+
+.attachment-delete-confirm {
+    align-self: center;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    color: var(--color-danger);
+    font-size: 12px;
+}
+
+.attachment-delete-confirm .danger-filled {
+    border-color: var(--color-danger);
+    background: var(--color-danger);
+    color: white;
+}
+
+.attachment-reference-help,
+.attachment-inline-error {
+    grid-column: 1 / -1;
+    margin: 0;
+}
+
+.attachment-inline-error {
+    color: var(--color-danger);
+    font-size: 12px;
+}
+
+.attachment-rename-controls {
+    flex-wrap: wrap;
+}
+
+.attachment-rename-input {
+    min-width: min(280px, 100%);
+    flex: 1 1 220px;
+    padding: 7px 9px;
+    border: 1px solid var(--color-border);
+    border-radius: 7px;
+    background: var(--color-bg-base);
+    color: var(--color-text-main);
+}
+
+.attachment-empty {
+    display: grid;
+    justify-items: center;
+    gap: 8px;
+    padding: 42px 18px;
+    border: 1px dashed var(--color-border);
+    border-radius: 12px;
+    color: var(--color-text-muted);
+    text-align: center;
+}
+
+.attachment-empty strong {
+    color: var(--color-text-main);
+}
+
+.attachment-empty p {
+    margin: 0;
+}
+
 .recent-files-dialog::backdrop,
 .workspace-decision-dialog::backdrop,
 .update-dialog::backdrop,
@@ -1421,6 +1609,20 @@ button.mermaid-preview:focus-visible {
 
     .conflict-actions button {
         flex: 1 1 45%;
+    }
+
+    .attachment-panel {
+        max-height: calc(100vh - 24px);
+        padding: 16px;
+    }
+
+    .attachment-row {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .attachment-actions,
+    .attachment-delete-confirm {
+        justify-content: flex-start;
     }
 }
 

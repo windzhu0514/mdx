@@ -4,6 +4,7 @@ import { createApp, h, nextTick, type Component } from "vue";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { DEFAULT_PREFERENCES } from "../composables/usePreferences";
+import AttachmentPanel from "./AttachmentPanel.vue";
 import HistoryPanel from "./HistoryPanel.vue";
 import LibraryPanel from "./LibraryPanel.vue";
 import SettingsPanel from "./SettingsPanel.vue";
@@ -46,6 +47,16 @@ describe("面板关闭按钮", () => {
                 query: "",
             },
             label: "关闭工作区查找",
+        },
+        {
+            name: "附件管理",
+            component: AttachmentPanel,
+            props: {
+                open: true,
+                documentName: "项目.mdx",
+                items: [],
+            },
+            label: "关闭附件管理",
         },
     ])("$name 提供明确的无障碍名称", ({ component, props, label }) => {
         const host = mountPanel(component, props);
