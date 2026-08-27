@@ -49,6 +49,7 @@ describe("GitHub Draft Release workflow", () => {
         expect(workflow).toContain("--bundles appimage,deb");
         expect(workflow).toContain("max-parallel: 1");
         expect(workflow).toContain("libwebkit2gtk-4.1-dev");
+        expect(workflow).toContain("fonts-noto-cjk");
         expect(workflow).toContain("retryAttempts: 3");
         expect(workflow).toContain("app-v*");
         expect(workflow).toContain("npm ci");
