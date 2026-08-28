@@ -271,6 +271,46 @@ describe("document session", () => {
         });
     });
 
+    it("guards agent replacement with the current live revision", () => {
+        const session = useDocumentSession(false);
+        const runtime = session.newDocument();
+        const base = runtime.liveRevision;
+
+        session.replaceContent(runtime.id, "agent text", base);
+
+        expect(runtime.content).toBe("agent text");
+        expect(runtime.dirty).toBe(true);
+        expect(runtime.liveRevision).not.toBe(base);
+        expect(runtime.changeSource).toBe("agent");
+        expect(() => session.replaceContent(runtime.id, "stale", base)).toThrowError(
+            expect.objectContaining({ code: "REVISION_CONFLICT" }),
+        );
+    });
+
+    it("does not advance the revision for a canonical no-op", () => {
+        const session = useDocumentSession(false);
+        const runtime = session.newDocument();
+        const base = runtime.liveRevision;
+
+        session.updateContent(runtime.id, runtime.content);
+
+        expect(runtime.liveRevision).toBe(base);
+    });
+
+    it("advances the revision and marks the source after a disk reload", async () => {
+        const session = useDocumentSession(true);
+        const runtime = await session.openMdx("C:\\Notes\\reload-revision.mdx");
+        const base = runtime.liveRevision;
+        diskContents.set(pathKey(runtime.path!), "reloaded from disk");
+        diskRevisions.set(pathKey(runtime.path!), 2);
+
+        await expect(session.refreshDiskState([runtime.path!])).resolves.toEqual([runtime.id]);
+
+        expect(runtime.content).toBe("reloaded from disk");
+        expect(runtime.liveRevision).not.toBe(base);
+        expect(runtime.changeSource).toBe("disk");
+    });
+
     afterEach(() => vi.useRealTimers());
 
     it("deduplicates saved and imported paths but permits multiple untitled documents", async () => {

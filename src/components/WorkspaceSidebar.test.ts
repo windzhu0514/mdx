@@ -27,6 +27,8 @@ function documentItem(path: string, overrides: Partial<OpenDocument> = {}): Open
         content: "",
         meta: null,
         dirty: false,
+        liveRevision: "test:1",
+        changeSource: "editor",
         diskRevision: null,
         conflict: false,
         unavailable: false,

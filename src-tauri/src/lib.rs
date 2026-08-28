@@ -1,3 +1,4 @@
+pub mod agent_protocol;
 mod ai;
 mod archive_security;
 mod document_export;

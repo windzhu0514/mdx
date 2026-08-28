@@ -36,6 +36,8 @@ export type OpenDocument = {
     content: string;
     meta: MdxMetadata | null;
     dirty: boolean;
+    liveRevision: string;
+    changeSource: "editor" | "agent" | "disk";
     diskRevision: DiskRevision | null;
     conflict: boolean;
     unavailable: boolean;
@@ -174,6 +176,8 @@ export function useDocumentSession(desktop: boolean) {
     const discardedForWindowClose = new Set<string>();
     let nextDocumentId = 1;
     let nextUntitledNumber = 1;
+    const liveSessionId = globalThis.crypto.randomUUID();
+    let nextLiveRevision = 0;
     let sessionWriteTimer: ReturnType<typeof setTimeout> | null = null;
     let sessionWriteTail: Promise<void> = Promise.resolve();
     const noSessionWriteError = Symbol("no-session-write-error");
@@ -203,8 +207,17 @@ export function useDocumentSession(desktop: boolean) {
         return found;
     }
 
+    function issueLiveRevision() {
+        nextLiveRevision += 1;
+        return `${liveSessionId}:${nextLiveRevision}`;
+    }
+
+    function touchLiveRevision(runtime: SessionDocument) {
+        runtime.liveRevision = issueLiveRevision();
+    }
+
     function sessionDocument(
-        state: OpenDocument,
+        state: Omit<OpenDocument, "liveRevision" | "changeSource">,
         resources = createResourceSession(),
         restoredDraftKey?: string,
     ): SessionDocument {
@@ -228,7 +241,13 @@ export function useDocumentSession(desktop: boolean) {
                 };
             },
         );
-        const runtime: SessionDocument = { ...state, resources, draft: recovery };
+        const runtime: SessionDocument = {
+            ...state,
+            liveRevision: issueLiveRevision(),
+            changeSource: "editor",
+            resources,
+            draft: recovery,
+        };
         return runtime;
     }
 
@@ -449,14 +468,38 @@ export function useDocumentSession(desktop: boolean) {
         return folder;
     }
 
-    function updateContent(id: string, markdown: string) {
+    function updateContent(
+        id: string,
+        markdown: string,
+        source: OpenDocument["changeSource"] = "editor",
+    ) {
         const runtime = document(id);
         const canonical = runtime.resources.persistedMarkdown(markdown);
         if (canonical === runtime.content) return;
         runtime.content = canonical;
         runtime.dirty = true;
+        runtime.changeSource = source;
+        touchLiveRevision(runtime);
         runtime.draft.schedule();
         triggerRef(documents);
+    }
+
+    function assertLiveRevision(id: string, baseLiveRevision: string) {
+        const runtime = document(id);
+        if (runtime.liveRevision !== baseLiveRevision) {
+            throw {
+                code: "REVISION_CONFLICT",
+                documentId: id,
+                currentLiveRevision: runtime.liveRevision,
+            };
+        }
+        return runtime;
+    }
+
+    function replaceContent(id: string, markdown: string, baseLiveRevision: string) {
+        const runtime = assertLiveRevision(id, baseLiveRevision);
+        updateContent(id, markdown, "agent");
+        return runtime;
     }
 
     function updateMetadata(id: string, meta: MdxMetadata) {
@@ -892,15 +935,22 @@ export function useDocumentSession(desktop: boolean) {
         runtime.diskRevision = revision;
         runtime.conflict = false;
         runtime.unavailable = false;
+        runtime.changeSource = "disk";
+        touchLiveRevision(runtime);
         documents.value = [...documents.value];
         return runtime;
     }
 
-    async function refreshDiskState() {
+    async function refreshDiskState(paths?: readonly string[]) {
         if (!desktop) return [];
+        const requestedPathKeys = paths
+            ? new Set(paths.map((path) => workspacePathKey(path)))
+            : null;
         const saved = documents.value.filter(
             (runtime): runtime is SessionDocument & { path: string } =>
-                runtime.path !== null,
+                runtime.path !== null &&
+                (requestedPathKeys === null ||
+                    requestedPathKeys.has(workspacePathKey(runtime.path))),
         );
         if (saved.length === 0) return [];
         const results = await invoke<DiskRevisionResult[]>("get_disk_revisions", {
@@ -947,6 +997,8 @@ export function useDocumentSession(desktop: boolean) {
                 runtime.meta = note.meta;
                 runtime.diskRevision = result.revision;
                 runtime.conflict = false;
+                runtime.changeSource = "disk";
+                touchLiveRevision(runtime);
                 reloadedIds.push(runtime.id);
             } catch (error) {
                 runtime.unavailable = true;
@@ -1074,6 +1126,8 @@ export function useDocumentSession(desktop: boolean) {
         openFolder,
         activate,
         updateContent,
+        assertLiveRevision,
+        replaceContent,
         updateMetadata,
         save,
         saveAs,
