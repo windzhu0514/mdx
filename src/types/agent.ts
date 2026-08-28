@@ -1,6 +1,26 @@
 import type { MdxMetadata } from "./mdx";
 import type { DiskRevision } from "./workspace";
 
+export const AGENT_ERROR_CODES = [
+    "AGENT_ACCESS_DISABLED",
+    "MORA_NOT_RUNNING",
+    "BRIDGE_UNAVAILABLE",
+    "BRIDGE_ALREADY_RUNNING",
+    "DOCUMENT_NOT_FOUND",
+    "DOCUMENT_NOT_OPEN",
+    "DOCUMENT_BUSY",
+    "SAVE_AS_REQUIRED",
+    "REVISION_CONFLICT",
+    "DISK_CONFLICT",
+    "INVALID_MDX",
+    "REQUEST_TOO_LARGE",
+    "PERMISSION_DENIED",
+    "TIMEOUT",
+    "PROTOCOL_MISMATCH",
+] as const;
+
+export type AgentErrorCode = (typeof AGENT_ERROR_CODES)[number];
+
 export type AgentDocumentChangeSource = "editor" | "agent" | "disk";
 
 export type AgentDocumentSummary = {
@@ -65,7 +85,7 @@ export type AgentFrontendRequest =
       };
 
 export type AgentFrontendError = {
-    code: string;
+    code: AgentErrorCode;
     message: string;
     detail?: Record<string, unknown>;
 };

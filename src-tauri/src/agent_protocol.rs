@@ -1,4 +1,5 @@
-use serde::{Deserialize, Serialize};
+use serde::ser::SerializeStruct;
+use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 use std::time::Duration;
 
@@ -59,13 +60,30 @@ pub enum AgentRequestKind {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentError {
     pub code: String,
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<Value>,
+}
+
+impl Serialize for AgentError {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let detail = self.detail.clone().and_then(sanitize_error_detail);
+        let mut state =
+            serializer.serialize_struct("AgentError", if detail.is_some() { 3 } else { 2 })?;
+        state.serialize_field("code", &self.code)?;
+        state.serialize_field("message", &self.message)?;
+        if let Some(detail) = detail {
+            state.serialize_field("detail", &detail)?;
+        }
+        state.end()
+    }
 }
 
 impl AgentError {
@@ -78,7 +96,7 @@ impl AgentError {
     }
 
     pub fn with_detail(mut self, detail: Value) -> Self {
-        self.detail = Some(detail);
+        self.detail = sanitize_error_detail(detail);
         self
     }
 }
@@ -201,6 +219,7 @@ pub fn encode_frame(payload: &[u8]) -> Result<Vec<u8>, AgentError> {
     if payload.len() > MAX_FRAME_BYTES {
         return Err(frame_too_large());
     }
+    validate_json_payload(payload)?;
 
     let payload_length = u32::try_from(payload.len()).map_err(|_| frame_too_large())?;
     let mut frame = Vec::with_capacity(4 + payload.len());
@@ -228,7 +247,54 @@ pub fn decode_frame(frame: &[u8]) -> Result<Vec<u8>, AgentError> {
         ));
     }
 
+    validate_json_payload(&frame[4..])?;
+
     Ok(frame[4..].to_vec())
+}
+
+fn sanitize_error_detail(detail: Value) -> Option<Value> {
+    let Value::Object(detail) = detail else {
+        return None;
+    };
+    let mut stable_detail = serde_json::Map::new();
+    for key in ["documentId", "currentLiveRevision", "currentDiskRevision"] {
+        if let Some(value) = detail.get(key) {
+            stable_detail.insert(key.to_string(), remove_document_content(value.clone()));
+        }
+    }
+    (!stable_detail.is_empty()).then(|| Value::Object(stable_detail))
+}
+
+fn remove_document_content(value: Value) -> Value {
+    match value {
+        Value::Array(values) => {
+            Value::Array(values.into_iter().map(remove_document_content).collect())
+        }
+        Value::Object(values) => Value::Object(
+            values
+                .into_iter()
+                .filter(|(key, _)| key != "content")
+                .map(|(key, value)| (key, remove_document_content(value)))
+                .collect(),
+        ),
+        value => value,
+    }
+}
+
+fn validate_json_payload(payload: &[u8]) -> Result<(), AgentError> {
+    let payload = std::str::from_utf8(payload).map_err(|_| {
+        AgentError::new(
+            PROTOCOL_MISMATCH,
+            "Agent frame payload must be valid UTF-8 JSON.",
+        )
+    })?;
+    serde_json::from_str::<Value>(payload).map_err(|_| {
+        AgentError::new(
+            PROTOCOL_MISMATCH,
+            "Agent frame payload must be valid UTF-8 JSON.",
+        )
+    })?;
+    Ok(())
 }
 
 fn frame_too_large() -> AgentError {
