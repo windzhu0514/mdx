@@ -1,15 +1,21 @@
 use clap::Parser;
-use mdxnote_lib::agent_cli::{exit_code, run_cli_with_io, Cli, Command};
-use mdxnote_lib::agent_client::AgentClient;
-use mdxnote_lib::agent_ipc::{AgentServer, EndpointRegistry};
+use mdxnote_lib::agent_cli::{
+    exit_code, run_cli_with_io, run_watch_stream_with_shutdown, Cli, Command,
+};
+use mdxnote_lib::agent_client::{AgentClient, AgentEventStream};
+use mdxnote_lib::agent_ipc::{AgentServer, EndpointRegistry, IntoAgentHandlerResult};
 use mdxnote_lib::agent_protocol::{
-    AgentBridgeStatus, AgentChangeSource, AgentDocumentEvent, AgentDocumentSummary, AgentRequest,
-    AgentResult, PROTOCOL_VERSION,
+    AgentBridgeStatus, AgentChangeSource, AgentDocumentEvent, AgentDocumentSnapshot,
+    AgentDocumentSummary, AgentError, AgentRequest, AgentRequestKind, AgentResult,
+    AGENT_ACCESS_DISABLED, BRIDGE_UNAVAILABLE, DISK_CONFLICT, DOCUMENT_BUSY, DOCUMENT_NOT_FOUND,
+    DOCUMENT_NOT_OPEN, INVALID_MDX, MAX_FRAME_BYTES, MORA_NOT_RUNNING, PERMISSION_DENIED,
+    PROTOCOL_MISMATCH, PROTOCOL_VERSION, REQUEST_TOO_LARGE, REVISION_CONFLICT, SAVE_AS_REQUIRED,
+    TIMEOUT,
 };
 use std::io::{Cursor, Write};
 use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
-use tokio::sync::Notify;
+use tokio::sync::{oneshot, Notify};
 
 #[test]
 fn parses_replace_without_accepting_inline_content() {
@@ -109,6 +115,7 @@ async fn watch_jsonl_writes_one_compact_event_per_line_and_never_logs_content() 
         source: AgentChangeSource::Agent,
     });
     stdout.wait_for_contains("\"documentId\":\"doc-1\"").await;
+    assert!(stdout.flush_count() >= 1);
     server.stop().await.unwrap();
 
     assert_eq!(task.await.unwrap(), 1);
@@ -146,10 +153,11 @@ impl IpcFixture {
         }
     }
 
-    async fn start<H, F>(&self, handler: H) -> AgentServer
+    async fn start<H, F, O>(&self, handler: H) -> AgentServer
     where
         H: Fn(AgentRequest) -> F + Send + Sync + 'static,
-        F: std::future::Future<Output = AgentResult> + Send + 'static,
+        F: std::future::Future<Output = O> + Send + 'static,
+        O: IntoAgentHandlerResult + 'static,
     {
         AgentServer::start(self.registry.clone(), handler)
             .await
@@ -161,6 +169,7 @@ impl IpcFixture {
 struct CaptureWriter {
     buffer: Arc<Mutex<Vec<u8>>>,
     written: Arc<Notify>,
+    flushes: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl Default for CaptureWriter {
@@ -168,6 +177,7 @@ impl Default for CaptureWriter {
         Self {
             buffer: Arc::new(Mutex::new(Vec::new())),
             written: Arc::new(Notify::new()),
+            flushes: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
     }
 }
@@ -196,6 +206,10 @@ impl CaptureWriter {
         .await
         .unwrap();
     }
+
+    fn flush_count(&self) -> usize {
+        self.flushes.load(std::sync::atomic::Ordering::SeqCst)
+    }
 }
 
 impl Write for CaptureWriter {
@@ -206,6 +220,8 @@ impl Write for CaptureWriter {
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
+        self.flushes
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(())
     }
 }
@@ -233,4 +249,406 @@ fn document_summary() -> AgentDocumentSummary {
         live_revision: "session:1".into(),
         disk_revision: None,
     }
+}
+
+#[tokio::test]
+async fn watch_eof_is_a_bridge_error_while_explicit_shutdown_is_clean() {
+    let mut stdout = CaptureWriter::default();
+    let mut stderr = CaptureWriter::default();
+    let eof: AgentEventStream = Box::pin(futures_util::stream::empty());
+
+    let code = run_watch_stream_with_shutdown(
+        eof,
+        None,
+        true,
+        &mut stdout,
+        &mut stderr,
+        std::future::pending(),
+    )
+    .await;
+
+    assert_eq!(code, 1);
+    assert_eq!(json_error_code(&stdout.into_string()), BRIDGE_UNAVAILABLE);
+    assert!(stderr.into_string().contains(BRIDGE_UNAVAILABLE));
+
+    let mut stdout = CaptureWriter::default();
+    let mut stderr = CaptureWriter::default();
+    let (shutdown, receiver) = oneshot::channel::<()>();
+    shutdown.send(()).unwrap();
+    let code = run_watch_stream_with_shutdown(
+        Box::pin(futures_util::stream::pending()),
+        None,
+        true,
+        &mut stdout,
+        &mut stderr,
+        async move {
+            let _ = receiver.await;
+        },
+    )
+    .await;
+
+    assert_eq!(code, 0);
+    assert!(stdout.into_string().is_empty());
+    assert!(stderr.into_string().is_empty());
+}
+
+#[tokio::test]
+async fn replace_preflights_the_complete_payload_before_dispatch() {
+    for (document_id, base_revision) in [
+        ("doc-1".to_string(), "session:1".to_string()),
+        ("d".repeat(2048), "r".repeat(3072)),
+    ] {
+        let fixture = IpcFixture::new();
+        let requests = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let requests_for_handler = requests.clone();
+        let server = fixture
+            .start(move |_| {
+                requests_for_handler.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                std::future::ready(AgentResult::Mutation(document_summary()))
+            })
+            .await;
+        let client = AgentClient::connect_to(server.descriptor()).await.unwrap();
+        let exact = replacement_content_len(&document_id, &base_revision);
+        let cli = replace_cli(&document_id, &base_revision, true);
+        let stdout = CaptureWriter::default();
+        let stderr = CaptureWriter::default();
+
+        let code = run_cli_with_io(
+            cli,
+            client.clone(),
+            Cursor::new(vec![b'x'; exact]),
+            stdout.clone(),
+            stderr.clone(),
+        )
+        .await;
+        assert_eq!(code, 0, "exact payload limit must pass");
+        assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        let cli = replace_cli(&document_id, &base_revision, true);
+        let stdout = CaptureWriter::default();
+        let stderr = CaptureWriter::default();
+        let code = run_cli_with_io(
+            cli,
+            client,
+            Cursor::new(vec![b'x'; exact + 1]),
+            stdout.clone(),
+            stderr.clone(),
+        )
+        .await;
+        assert_eq!(code, 1, "one byte beyond full payload must fail");
+        assert_eq!(json_error_code(&stdout.into_string()), REQUEST_TOO_LARGE);
+        assert!(stderr.into_string().contains(REQUEST_TOO_LARGE));
+        assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+}
+
+#[tokio::test]
+async fn replace_input_failures_are_stable_and_do_not_leak_content() {
+    let fixture = IpcFixture::new();
+    let server = fixture
+        .start(|_| std::future::ready(AgentResult::Mutation(document_summary())))
+        .await;
+    let client = AgentClient::connect_to(server.descriptor()).await.unwrap();
+    let cases = [
+        (Cursor::new(vec![0xff]), "INVALID_INPUT"),
+        (
+            Cursor::new(vec![b'x'; MAX_FRAME_BYTES + 1]),
+            REQUEST_TOO_LARGE,
+        ),
+    ];
+    for (input, code) in cases {
+        let stdout = CaptureWriter::default();
+        let stderr = CaptureWriter::default();
+        let result = run_cli_with_io(
+            replace_cli("doc-1", "session:1", true),
+            client.clone(),
+            input,
+            stdout.clone(),
+            stderr.clone(),
+        )
+        .await;
+        assert_eq!(result, 1);
+        assert_eq!(json_error_code(&stdout.into_string()), code);
+        assert!(!stderr.into_string().contains("fixture content"));
+    }
+}
+
+#[tokio::test]
+async fn successful_commands_keep_content_exclusive_to_read_output() {
+    let fixture = IpcFixture::new();
+    let server = fixture
+        .start(|request| async move {
+            match request.request {
+                AgentRequestKind::Status => AgentResult::Status(listening_status()),
+                AgentRequestKind::ListDocuments => AgentResult::Documents(vec![document_summary()]),
+                AgentRequestKind::ReadDocument { .. } => {
+                    AgentResult::Document(AgentDocumentSnapshot {
+                        summary: document_summary(),
+                        content: "fixture content secret-token".into(),
+                        meta: None,
+                    })
+                }
+                AgentRequestKind::ReplaceDocument { .. }
+                | AgentRequestKind::SaveDocument { .. } => {
+                    AgentResult::Mutation(document_summary())
+                }
+                AgentRequestKind::Watch { .. } => AgentResult::Status(listening_status()),
+            }
+        })
+        .await;
+    let client = AgentClient::connect_to(server.descriptor()).await.unwrap();
+    let cases = vec![
+        (
+            Cli::try_parse_from(["mora-agent", "status", "--json"]).unwrap(),
+            Vec::new(),
+            false,
+        ),
+        (
+            Cli::try_parse_from(["mora-agent", "list"]).unwrap(),
+            Vec::new(),
+            false,
+        ),
+        (
+            Cli::try_parse_from(["mora-agent", "read", "doc-1"]).unwrap(),
+            Vec::new(),
+            true,
+        ),
+        (
+            replace_cli("doc-1", "session:1", true),
+            b"replacement".to_vec(),
+            false,
+        ),
+        (
+            Cli::try_parse_from([
+                "mora-agent",
+                "save",
+                "doc-1",
+                "--base-revision",
+                "session:1",
+                "--json",
+            ])
+            .unwrap(),
+            Vec::new(),
+            false,
+        ),
+    ];
+    for (cli, input, contains_content) in cases {
+        let stdout = CaptureWriter::default();
+        let stderr = CaptureWriter::default();
+        assert_eq!(
+            run_cli_with_io(
+                cli,
+                client.clone(),
+                Cursor::new(input),
+                stdout.clone(),
+                stderr.clone()
+            )
+            .await,
+            0
+        );
+        assert_eq!(
+            stdout
+                .into_string()
+                .contains("fixture content secret-token"),
+            contains_content
+        );
+        assert!(stderr.into_string().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn stable_errors_and_mcp_placeholder_use_the_actual_output_path() {
+    let cases = [
+        (MORA_NOT_RUNNING, 2),
+        (AGENT_ACCESS_DISABLED, 3),
+        (REVISION_CONFLICT, 4),
+        (DISK_CONFLICT, 5),
+        (PERMISSION_DENIED, 6),
+        (BRIDGE_UNAVAILABLE, 1),
+        (DOCUMENT_NOT_FOUND, 1),
+        (DOCUMENT_NOT_OPEN, 1),
+        (DOCUMENT_BUSY, 1),
+        (SAVE_AS_REQUIRED, 1),
+        (INVALID_MDX, 1),
+        (REQUEST_TOO_LARGE, 1),
+        (TIMEOUT, 1),
+        (PROTOCOL_MISMATCH, 1),
+    ];
+    for (code, expected_exit) in cases {
+        let fixture = IpcFixture::new();
+        let error_code = code.to_string();
+        let server = fixture
+            .start(move |_| {
+                let error_code = error_code.clone();
+                async move {
+                    Err::<AgentResult, AgentError>(AgentError::new(error_code, "fixture failure"))
+                }
+            })
+            .await;
+        let client = AgentClient::connect_to(server.descriptor()).await.unwrap();
+        let stdout = CaptureWriter::default();
+        let stderr = CaptureWriter::default();
+        let code_result = run_cli_with_io(
+            Cli::try_parse_from(["mora-agent", "list", "--json"]).unwrap(),
+            client,
+            Cursor::new(Vec::new()),
+            stdout.clone(),
+            stderr.clone(),
+        )
+        .await;
+        assert_eq!(code_result, expected_exit, "{code}");
+        assert_eq!(json_error_code(&stdout.into_string()), code);
+        assert!(stderr.into_string().contains(code));
+    }
+}
+
+#[tokio::test]
+async fn mcp_placeholder_and_console_entry_stay_gui_free() {
+    let fixture = IpcFixture::new();
+    let server = fixture
+        .start(|_| std::future::ready(AgentResult::Status(listening_status())))
+        .await;
+    let stdout = CaptureWriter::default();
+    let stderr = CaptureWriter::default();
+    let code = run_cli_with_io(
+        Cli::try_parse_from(["mora-agent", "mcp"]).unwrap(),
+        AgentClient::connect_to(server.descriptor()).await.unwrap(),
+        Cursor::new(Vec::new()),
+        stdout.clone(),
+        stderr.clone(),
+    )
+    .await;
+    assert_eq!(code, 1);
+    assert!(stdout.into_string().is_empty());
+    assert!(stderr.into_string().contains("UNSUPPORTED_COMMAND"));
+    let entry = std::fs::read_to_string("src/bin/mora-agent.rs").unwrap();
+    assert!(entry.contains("agent_cli::main_entry"));
+    assert!(!entry.contains("tauri::Builder"));
+}
+
+#[tokio::test]
+async fn replace_file_inputs_are_validated_before_dispatch() {
+    let fixture = IpcFixture::new();
+    let server = fixture
+        .start(|_| std::future::ready(AgentResult::Mutation(document_summary())))
+        .await;
+    let client = AgentClient::connect_to(server.descriptor()).await.unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let invalid = temp.path().join("invalid.md");
+    std::fs::write(&invalid, [0xff]).unwrap();
+    let missing = temp.path().join("missing.md");
+
+    for (path, expected) in [(invalid, "INVALID_INPUT"), (missing, "INPUT_READ_FAILED")] {
+        let stdout = CaptureWriter::default();
+        let stderr = CaptureWriter::default();
+        let code = run_cli_with_io(
+            Command::Replace {
+                document_id: "doc-1".into(),
+                base_revision: "session:1".into(),
+                content_file: path,
+                json: true,
+            }
+            .into_cli(),
+            client.clone(),
+            Cursor::new(Vec::new()),
+            stdout.clone(),
+            stderr.clone(),
+        )
+        .await;
+        assert_eq!(code, 1);
+        assert_eq!(json_error_code(&stdout.into_string()), expected);
+        assert!(!stderr.into_string().contains("fixture content"));
+    }
+}
+
+#[tokio::test]
+async fn watch_human_prints_ack_then_event_and_flushes_each_record() {
+    let fixture = IpcFixture::new();
+    let server = fixture
+        .start(|_| std::future::ready(AgentResult::Status(listening_status())))
+        .await;
+    let client = AgentClient::connect_to(server.descriptor()).await.unwrap();
+    let stdout = CaptureWriter::default();
+    let stderr = CaptureWriter::default();
+    let mut counts = server.subscribe_connection_counts();
+    let task = tokio::spawn(run_cli_with_io(
+        Cli {
+            command: Command::Watch {
+                document_id: Some("doc-1".into()),
+                jsonl: false,
+            },
+        },
+        client,
+        Cursor::new(Vec::new()),
+        stdout.clone(),
+        stderr.clone(),
+    ));
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while counts.borrow().watcher_clients != 1 {
+            counts.changed().await.unwrap();
+        }
+    })
+    .await
+    .unwrap();
+    stdout.wait_for_contains("Watching doc-1.").await;
+    server.publish_event(AgentDocumentEvent {
+        document_id: "doc-1".into(),
+        live_revision: "session:2".into(),
+        dirty: true,
+        source: AgentChangeSource::Agent,
+    });
+    stdout.wait_for_contains("doc-1\tsession:2").await;
+    assert!(stdout.flush_count() >= 2);
+    server.stop().await.unwrap();
+    assert_eq!(task.await.unwrap(), 1);
+    assert!(!stdout.into_string().contains("fixture content"));
+    assert!(!stderr.into_string().contains("fixture content"));
+}
+
+fn replace_cli(document_id: &str, base_revision: &str, json: bool) -> Cli {
+    Cli::try_parse_from(
+        [
+            "mora-agent",
+            "replace",
+            document_id,
+            "--base-revision",
+            base_revision,
+            "--content-file",
+            "-",
+        ]
+        .into_iter()
+        .chain(json.then_some("--json")),
+    )
+    .unwrap()
+}
+
+trait IntoCli {
+    fn into_cli(self) -> Cli;
+}
+
+impl IntoCli for Command {
+    fn into_cli(self) -> Cli {
+        Cli { command: self }
+    }
+}
+
+fn replacement_content_len(document_id: &str, base_revision: &str) -> usize {
+    let request = AgentRequest {
+        protocol_version: PROTOCOL_VERSION,
+        request_id: "00000000-0000-0000-0000-000000000000".into(),
+        request: AgentRequestKind::ReplaceDocument {
+            document_id: document_id.into(),
+            base_live_revision: base_revision.into(),
+            content: String::new(),
+        },
+    };
+    MAX_FRAME_BYTES - serde_json::to_vec(&request).unwrap().len()
+}
+
+fn json_error_code(output: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(output.lines().last().unwrap()).unwrap()["error"]
+        ["code"]
+        .as_str()
+        .unwrap()
+        .to_string()
 }

@@ -1,10 +1,11 @@
 use crate::agent_client::AgentClient;
 use crate::agent_protocol::{
-    AgentDocumentEvent, AgentError, AgentRequestKind, AgentResult, AGENT_ACCESS_DISABLED,
-    DISK_CONFLICT, MAX_FRAME_BYTES, MORA_NOT_RUNNING, PERMISSION_DENIED, REVISION_CONFLICT,
+    encode_frame, AgentDocumentEvent, AgentError, AgentRequest, AgentRequestKind, AgentResult,
+    AGENT_ACCESS_DISABLED, BRIDGE_UNAVAILABLE, DISK_CONFLICT, MAX_FRAME_BYTES, MORA_NOT_RUNNING,
+    PERMISSION_DENIED, PROTOCOL_VERSION, REVISION_CONFLICT,
 };
 use clap::{Parser, Subcommand};
-use futures_util::StreamExt;
+use futures_util::{Future, StreamExt};
 use serde::Serialize;
 use std::ffi::OsString;
 use std::io::{Read, Write};
@@ -13,6 +14,7 @@ use std::path::PathBuf;
 const INVALID_INPUT: &str = "INVALID_INPUT";
 const INPUT_READ_FAILED: &str = "INPUT_READ_FAILED";
 const UNSUPPORTED_COMMAND: &str = "UNSUPPORTED_COMMAND";
+const REQUEST_ID_PLACEHOLDER: &str = "00000000-0000-0000-0000-000000000000";
 
 #[derive(Debug, Parser)]
 #[command(name = "mora-agent", about = "Mora local Agent command-line client")]
@@ -220,10 +222,30 @@ where
     O: Write,
     E: Write,
 {
-    let mut events = match client.watch(document_id.clone()).await {
+    let events = match client.watch(document_id.clone()).await {
         Ok(events) => events,
         Err(error) => return finish_watch_error(jsonl, error, stdout, stderr),
     };
+    run_watch_stream_with_shutdown(events, document_id, jsonl, stdout, stderr, async {
+        let _ = tokio::signal::ctrl_c().await;
+    })
+    .await
+}
+
+#[doc(hidden)]
+pub async fn run_watch_stream_with_shutdown<O, E, F>(
+    mut events: crate::agent_client::AgentEventStream,
+    document_id: Option<String>,
+    jsonl: bool,
+    stdout: &mut O,
+    stderr: &mut E,
+    shutdown: F,
+) -> i32
+where
+    O: Write,
+    E: Write,
+    F: Future<Output = ()>,
+{
     if !jsonl {
         let scope = document_id.as_deref().unwrap_or("all documents");
         if writeln!(stdout, "Watching {scope}.")
@@ -234,10 +256,10 @@ where
         }
     }
 
-    let mut interrupt = std::pin::pin!(tokio::signal::ctrl_c());
+    let mut shutdown = std::pin::pin!(shutdown);
     loop {
         tokio::select! {
-            _ = &mut interrupt => return 0,
+            _ = &mut shutdown => return 0,
             item = events.next() => match item {
                 Some(Ok(event)) => {
                     if write_watch_event(jsonl, &event, stdout).is_err() {
@@ -245,14 +267,28 @@ where
                     }
                 }
                 Some(Err(error)) => return finish_watch_error(jsonl, error, stdout, stderr),
-                None => return 0,
+                None => return finish_watch_error(
+                    jsonl,
+                    AgentError::new(
+                        BRIDGE_UNAVAILABLE,
+                        "The Agent watch stream ended unexpectedly.",
+                    ),
+                    stdout,
+                    stderr,
+                ),
             },
         }
     }
 }
 
 fn read_replace_content(cli: &Cli, input: &mut impl Read) -> Result<Option<String>, AgentError> {
-    let Command::Replace { content_file, .. } = &cli.command else {
+    let Command::Replace {
+        content_file,
+        document_id,
+        base_revision,
+        ..
+    } = &cli.command
+    else {
         return Ok(None);
     };
     let bytes = if content_file.as_os_str() == std::ffi::OsStr::new("-") {
@@ -268,7 +304,33 @@ fn read_replace_content(cli: &Cli, input: &mut impl Read) -> Result<Option<Strin
     };
     let content = String::from_utf8(bytes)
         .map_err(|_| AgentError::new(INVALID_INPUT, "Replacement content must be valid UTF-8."))?;
+    validate_replace_payload(document_id, base_revision, &content)?;
     Ok(Some(content))
+}
+
+fn validate_replace_payload(
+    document_id: &str,
+    base_live_revision: &str,
+    content: &str,
+) -> Result<(), AgentError> {
+    let request = AgentRequest {
+        protocol_version: PROTOCOL_VERSION,
+        // AgentClient creates UUID v4 request IDs. The fixed placeholder has the
+        // same UTF-8 length, so this preflight exactly matches its frame budget.
+        request_id: REQUEST_ID_PLACEHOLDER.into(),
+        request: AgentRequestKind::ReplaceDocument {
+            document_id: document_id.into(),
+            base_live_revision: base_live_revision.into(),
+            content: content.into(),
+        },
+    };
+    let payload = serde_json::to_vec(&request).map_err(|_| {
+        AgentError::new(
+            crate::agent_protocol::PROTOCOL_MISMATCH,
+            "Could not encode the Agent replacement request.",
+        )
+    })?;
+    encode_frame(&payload).map(|_| ())
 }
 
 fn read_limited(reader: &mut impl Read) -> Result<Vec<u8>, AgentError> {
