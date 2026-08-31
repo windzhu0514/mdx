@@ -3,13 +3,13 @@ use crate::agent_protocol::{
     AgentError, AgentRequestKind, AgentResult, BRIDGE_UNAVAILABLE, PROTOCOL_MISMATCH,
 };
 use rmcp::{
-    handler::server::wrapper::Parameters,
-    model::{CallToolResult, ContentBlock},
+    handler::server::{tool::ToolCallContext, wrapper::Parameters},
+    model::{CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock},
     schemars,
-    service::ServerInitializeError,
-    tool, tool_router, ServiceExt,
+    service::{RequestContext, ServerInitializeError},
+    tool, tool_router, RoleServer, ServiceExt,
 };
-use serde::Deserialize;
+use serde::{de::DeserializeOwned, Deserialize};
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ReadDocumentArgs {
@@ -47,7 +47,7 @@ impl MoraMcpServer {
     }
 }
 
-#[tool_router(server_handler)]
+#[tool_router]
 impl MoraMcpServer {
     #[tool(
         name = "mora_list_documents",
@@ -106,6 +106,35 @@ impl MoraMcpServer {
         })
         .await
     }
+}
+
+#[rmcp::tool_handler(router = Self::tool_router())]
+impl rmcp::ServerHandler for MoraMcpServer {
+    async fn call_tool(
+        &self,
+        request: CallToolRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResponse, rmcp::ErrorData> {
+        match request.name.as_ref() {
+            "mora_read_document" => validate_arguments::<ReadDocumentArgs>(&request)?,
+            "mora_replace_document" => validate_arguments::<ReplaceDocumentArgs>(&request)?,
+            "mora_save_document" => validate_arguments::<SaveDocumentArgs>(&request)?,
+            _ => {}
+        }
+
+        Self::tool_router()
+            .call(ToolCallContext::new(self, request, context))
+            .await
+    }
+}
+
+fn validate_arguments<T: DeserializeOwned>(
+    request: &CallToolRequestParams,
+) -> Result<(), rmcp::ErrorData> {
+    rmcp::handler::server::tool::parse_json_object::<T>(
+        request.arguments.clone().unwrap_or_default(),
+    )?;
+    Ok(())
 }
 
 fn success_result(result: AgentResult) -> CallToolResult {

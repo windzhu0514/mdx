@@ -206,6 +206,16 @@ async fn discovers_and_invokes_exactly_four_stdio_tools_through_agent_client() {
             "mora_save_document",
         ]
     );
+    assert_input_schema(&listed["result"]["tools"][0], &[]);
+    assert_input_schema(&listed["result"]["tools"][1], &["document_id"]);
+    assert_input_schema(
+        &listed["result"]["tools"][2],
+        &["document_id", "base_live_revision", "content"],
+    );
+    assert_input_schema(
+        &listed["result"]["tools"][3],
+        &["document_id", "base_live_revision"],
+    );
 
     let list = mcp.call_tool(3, "mora_list_documents", json!({}));
     assert_eq!(tool_text_json(&list)[0]["id"], "doc-1");
@@ -301,6 +311,7 @@ async fn revision_conflict_is_a_structured_tool_error_without_document_content()
     );
 
     assert_eq!(response["result"]["isError"], true);
+    assert!(response.get("error").is_none());
     let error = tool_text_json(&response);
     assert_eq!(error["code"], REVISION_CONFLICT);
     assert_eq!(error["detail"]["currentLiveRevision"], "session:8");
@@ -345,13 +356,16 @@ async fn protocol_misuse_invalid_arguments_concurrency_and_bridge_stop_do_not_pa
     let mut mcp = McpProcess::start(&fixture);
     mcp.initialize();
     let unknown = mcp.call_tool(2, "mora_unknown", json!({}));
-    assert!(is_structured_mcp_error(&unknown));
+    assert_eq!(unknown["error"]["code"], -32602);
+    assert_eq!(unknown["error"]["message"], "tool not found");
+    assert!(unknown.get("result").is_none());
     let invalid = mcp.call_tool(3, "mora_read_document", json!({}));
-    assert_eq!(invalid["result"]["isError"], true);
-    assert!(invalid["result"]["content"][0]["text"]
+    assert_eq!(invalid["error"]["code"], -32602);
+    assert!(invalid["error"]["message"]
         .as_str()
         .unwrap()
         .contains("missing field `document_id`"));
+    assert!(invalid.get("result").is_none());
 
     for id in [4, 5] {
         mcp.send(json!({
@@ -424,10 +438,6 @@ fn tool_text_json(response: &Value) -> Value {
     serde_json::from_str(text).unwrap()
 }
 
-fn is_structured_mcp_error(response: &Value) -> bool {
-    response.get("error").is_some() || response["result"]["isError"] == true
-}
-
 fn document_summary(live_revision: &str) -> AgentDocumentSummary {
     AgentDocumentSummary {
         id: "doc-1".into(),
@@ -439,4 +449,34 @@ fn document_summary(live_revision: &str) -> AgentDocumentSummary {
         live_revision: live_revision.into(),
         disk_revision: None,
     }
+}
+
+fn assert_input_schema(tool: &Value, expected_fields: &[&str]) {
+    let schema = &tool["inputSchema"];
+    assert_eq!(schema["type"], "object", "schema for {}", tool["name"]);
+
+    let properties = schema["properties"].as_object().unwrap();
+    let property_names: BTreeSet<_> = properties.keys().map(String::as_str).collect();
+    let expected_names: BTreeSet<_> = expected_fields.iter().copied().collect();
+    assert_eq!(
+        property_names, expected_names,
+        "schema for {}",
+        tool["name"]
+    );
+    for field in expected_fields {
+        assert_eq!(
+            properties[*field]["type"], "string",
+            "schema for {} field {field}",
+            tool["name"]
+        );
+    }
+
+    let required: BTreeSet<_> = schema
+        .get("required")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|field| field.as_str().unwrap())
+        .collect();
+    assert_eq!(required, expected_names, "schema for {}", tool["name"]);
 }
