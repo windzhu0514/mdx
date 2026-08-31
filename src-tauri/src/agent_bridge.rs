@@ -154,6 +154,31 @@ impl WriteOperations {
     }
 }
 
+async fn run_write_with_bounded_response<T, F>(
+    operation: F,
+    client_sender: oneshot::Sender<Result<T, AgentError>>,
+    response_timeout: std::time::Duration,
+) -> Result<T, AgentError>
+where
+    T: Clone,
+    F: std::future::Future<Output = Result<T, AgentError>>,
+{
+    tokio::pin!(operation);
+    tokio::select! {
+        result = &mut operation => {
+            let _ = client_sender.send(result.clone());
+            result
+        }
+        _ = tokio::time::sleep(response_timeout) => {
+            let _ = client_sender.send(Err(AgentError::new(
+                TIMEOUT,
+                "The Mora window did not complete the Agent request in time.",
+            )));
+            operation.await
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct AgentBridgeState {
     inner: Arc<AgentBridgeInner>,
@@ -514,22 +539,16 @@ impl AgentBridgeState {
             let operations = self.inner.write_operations.clone();
             let (sender, receiver) = oneshot::channel();
             tokio::spawn(async move {
-                let result = operations
-                    .run(generation, || {
-                        state.dispatch_frontend_unbounded(&app, request, generation, true)
-                    })
-                    .await;
-                let _ = sender.send(result);
+                let operation = operations.run(generation, || {
+                    state.dispatch_frontend_unbounded(&app, request, generation, true)
+                });
+                let _ = run_write_with_bounded_response(operation, sender, REQUEST_TIMEOUT).await;
             });
-            match tokio::time::timeout(REQUEST_TIMEOUT, receiver).await {
-                Ok(Ok(result)) => result,
-                Ok(Err(_)) => Err(AgentError::new(
+            match receiver.await {
+                Ok(result) => result,
+                Err(_) => Err(AgentError::new(
                     AGENT_ACCESS_DISABLED,
                     "Local Agent access stopped before the request completed.",
-                )),
-                Err(_) => Err(AgentError::new(
-                    TIMEOUT,
-                    "The Mora window did not complete the Agent request in time.",
                 )),
             }
         } else {
@@ -1029,6 +1048,60 @@ mod tests {
         );
         release_first.notify_one();
 
+        first.await.unwrap().unwrap();
+        second.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn write_task_times_out_the_client_but_keeps_the_gate_until_settled() {
+        let state = AgentBridgeState::default();
+        let generation = state.inner.write_operations.current_generation();
+        let first_started = Arc::new(Notify::new());
+        let release_first = Arc::new(Notify::new());
+        let second_started = Arc::new(Notify::new());
+        let (client_sender, client_receiver) = oneshot::channel();
+        let first = {
+            let operations = state.inner.write_operations.clone();
+            let first_started = first_started.clone();
+            let release_first = release_first.clone();
+            tokio::spawn(async move {
+                let operation = operations.run(generation, || async move {
+                    first_started.notify_one();
+                    release_first.notified().await;
+                    Ok::<_, AgentError>(())
+                });
+                run_write_with_bounded_response(operation, client_sender, Duration::from_millis(25))
+                    .await
+            })
+        };
+        first_started.notified().await;
+        let second = {
+            let operations = state.inner.write_operations.clone();
+            let second_started = second_started.clone();
+            tokio::spawn(async move {
+                operations
+                    .run(generation, || async move {
+                        second_started.notify_one();
+                        Ok::<_, AgentError>(())
+                    })
+                    .await
+            })
+        };
+
+        let timeout = tokio::time::timeout(Duration::from_millis(100), client_receiver)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(timeout.code, TIMEOUT);
+        assert!(!first.is_finished());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(25), second_started.notified())
+                .await
+                .is_err()
+        );
+
+        release_first.notify_one();
         first.await.unwrap().unwrap();
         second.await.unwrap().unwrap();
     }

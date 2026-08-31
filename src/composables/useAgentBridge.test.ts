@@ -357,7 +357,7 @@ describe("useAgentBridge", () => {
 
         bridge.dispose();
 
-        await vi.waitFor(() => expect(stopCalls).toBe(2));
+        await vi.waitFor(() => expect(stopCalls).toBe(3));
     });
 
     it("stops an enabled bridge and unregisters listeners on disable and dispose", async () => {
@@ -426,6 +426,186 @@ describe("useAgentBridge", () => {
         });
     });
 
+    it("keeps the request listener until dispose stop drains a racing write", async () => {
+        const stopGate: { resolve?: (status: AgentBridgeStatus) => void } = {};
+        tauri.invoke.mockImplementation(async (command: string, args?: unknown) => {
+            if (command === "get_agent_bridge_status") return disabledStatus;
+            if (
+                command === "set_agent_access_enabled" &&
+                (args as { enabled: boolean }).enabled
+            ) {
+                return enabledStatus;
+            }
+            if (command === "set_agent_access_enabled") {
+                return new Promise<AgentBridgeStatus>((resolve) => {
+                    stopGate.resolve = resolve;
+                });
+            }
+            return undefined;
+        });
+        const session = useDocumentSession(false);
+        const runtime = session.newDocument();
+        const saveDocument =
+            vi.fn<(id: string, revision: string) => Promise<OpenDocument>>();
+        const bridge = useAgentBridge({
+            desktop: true,
+            enabled: ref(true),
+            session,
+            saveDocument,
+            onMutation: vi.fn(),
+        });
+        await waitForBridge();
+        await vi.waitFor(() => expect(bridge.status.value.enabled).toBe(true));
+
+        bridge.dispose();
+        await vi.waitFor(() => expect(stopGate.resolve).toBeTypeOf("function"));
+        const dispatchToken = await request(
+            {
+                requestId: "dispose-race-save",
+                method: "saveDocument",
+                params: {
+                    documentId: runtime.id,
+                    baseLiveRevision: runtime.liveRevision,
+                },
+            },
+            1,
+            "dispose-race-token",
+        );
+
+        expect(saveDocument).not.toHaveBeenCalled();
+        expect(completeResponses()).toContainEqual({
+            requestId: "dispose-race-save",
+            dispatchToken,
+            operationGeneration: 1,
+            error: {
+                code: "AGENT_ACCESS_DISABLED",
+                message: "本地 Agent 接入已关闭。",
+            },
+        });
+        expect(tauri.unlisteners.get("mora://agent-request")).not.toHaveBeenCalled();
+
+        stopGate.resolve?.(disabledStatus);
+        await vi.waitFor(() => {
+            expect(tauri.unlisteners.get("mora://agent-request")).toHaveBeenCalledTimes(
+                1,
+            );
+            expect(tauri.unlisteners.get("mora://agent-status")).toHaveBeenCalledTimes(1);
+            expect(
+                tauri.unlisteners.get("mora://agent-dispatch-invalidated"),
+            ).toHaveBeenCalledTimes(1);
+        });
+    });
+
+    it("retries an unknown dispose stop and cleans listeners exactly once", async () => {
+        let statusReads = 0;
+        let stopCalls = 0;
+        tauri.invoke.mockImplementation(async (command: string, args?: unknown) => {
+            if (command === "get_agent_bridge_status") {
+                statusReads += 1;
+                if (statusReads === 1) return disabledStatus;
+                throw { message: "dispose status unknown" };
+            }
+            if (
+                command === "set_agent_access_enabled" &&
+                (args as { enabled: boolean }).enabled
+            ) {
+                return enabledStatus;
+            }
+            if (command === "set_agent_access_enabled") {
+                stopCalls += 1;
+                throw { message: "dispose stop failed" };
+            }
+            return undefined;
+        });
+        const bridge = useAgentBridge({
+            desktop: true,
+            enabled: ref(true),
+            session: useDocumentSession(false),
+            saveDocument:
+                vi.fn<(id: string, revision: string) => Promise<OpenDocument>>(),
+            onMutation: vi.fn(),
+        });
+        await waitForBridge();
+        await vi.waitFor(() => expect(bridge.status.value.enabled).toBe(true));
+
+        bridge.dispose();
+        bridge.dispose();
+
+        await vi.waitFor(() => expect(stopCalls).toBe(2));
+        expect(statusReads).toBe(2);
+        expect(tauri.unlisteners.get("mora://agent-request")).toHaveBeenCalledTimes(1);
+        expect(tauri.unlisteners.get("mora://agent-status")).toHaveBeenCalledTimes(1);
+        expect(
+            tauri.unlisteners.get("mora://agent-dispatch-invalidated"),
+        ).toHaveBeenCalledTimes(1);
+    });
+
+    it("bounds unresolved dispose cleanup before releasing listeners", async () => {
+        const timeoutControllers: AbortController[] = [];
+        const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockImplementation(() => {
+            const controller = new AbortController();
+            timeoutControllers.push(controller);
+            return controller.signal;
+        });
+        let statusReads = 0;
+        let stopCalls = 0;
+        tauri.invoke.mockImplementation(async (command: string, args?: unknown) => {
+            if (command === "get_agent_bridge_status") {
+                statusReads += 1;
+                if (statusReads === 1) return disabledStatus;
+                return new Promise<AgentBridgeStatus>(() => undefined);
+            }
+            if (
+                command === "set_agent_access_enabled" &&
+                (args as { enabled: boolean }).enabled
+            ) {
+                return enabledStatus;
+            }
+            if (command === "set_agent_access_enabled") {
+                stopCalls += 1;
+                return new Promise<AgentBridgeStatus>(() => undefined);
+            }
+            return undefined;
+        });
+        const bridge = useAgentBridge({
+            desktop: true,
+            enabled: ref(true),
+            session: useDocumentSession(false),
+            saveDocument:
+                vi.fn<(id: string, revision: string) => Promise<OpenDocument>>(),
+            onMutation: vi.fn(),
+        });
+        try {
+            await waitForBridge();
+            await vi.waitFor(() => expect(bridge.status.value.enabled).toBe(true));
+
+            bridge.dispose();
+            await vi.waitFor(() => expect(stopCalls).toBe(1));
+            expect(tauri.unlisteners.get("mora://agent-request")).not.toHaveBeenCalled();
+            timeoutControllers[timeoutControllers.length - 1]?.abort();
+
+            await vi.waitFor(() => expect(statusReads).toBe(2));
+            timeoutControllers[timeoutControllers.length - 1]?.abort();
+            await vi.waitFor(() => expect(stopCalls).toBe(2));
+            timeoutControllers[timeoutControllers.length - 1]?.abort();
+
+            await vi.waitFor(() => {
+                expect(
+                    tauri.unlisteners.get("mora://agent-request"),
+                ).toHaveBeenCalledTimes(1);
+                expect(
+                    tauri.unlisteners.get("mora://agent-status"),
+                ).toHaveBeenCalledTimes(1);
+                expect(
+                    tauri.unlisteners.get("mora://agent-dispatch-invalidated"),
+                ).toHaveBeenCalledTimes(1);
+            });
+        } finally {
+            timeoutSpy.mockRestore();
+            bridge.dispose();
+        }
+    });
+
     it("unregisters listeners when initial bridge status loading fails", async () => {
         tauri.invoke.mockImplementation(async (command: string) => {
             if (command === "get_agent_bridge_status") {
@@ -453,6 +633,9 @@ describe("useAgentBridge", () => {
                 1,
             );
             expect(tauri.unlisteners.get("mora://agent-status")).toHaveBeenCalledTimes(1);
+            expect(
+                tauri.unlisteners.get("mora://agent-dispatch-invalidated"),
+            ).toHaveBeenCalledTimes(1);
         });
     });
 });

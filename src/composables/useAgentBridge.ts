@@ -57,6 +57,8 @@ const ERROR_CODES = new Set<AgentErrorCode>([
     "PROTOCOL_MISMATCH",
 ]);
 
+const BRIDGE_OPERATION_TIMEOUT_MS = 10_000;
+
 function summary(document: OpenDocument): AgentDocumentSummary {
     return {
         id: document.id,
@@ -143,6 +145,7 @@ export function useAgentBridge(options: AgentBridgeOptions) {
     let requestUnlisten: UnlistenFn | null = null;
     let statusUnlisten: UnlistenFn | null = null;
     let invalidationUnlisten: UnlistenFn | null = null;
+    let listenersCleaned = false;
     let disposed = false;
     let startedBridge = false;
     let startRequested = false;
@@ -152,6 +155,35 @@ export function useAgentBridge(options: AgentBridgeOptions) {
 
     function document(documentId: string) {
         return options.session.document(documentId);
+    }
+
+    function cleanupListeners() {
+        if (listenersCleaned) return;
+        listenersCleaned = true;
+        requestUnlisten?.();
+        statusUnlisten?.();
+        invalidationUnlisten?.();
+        requestUnlisten = null;
+        statusUnlisten = null;
+        invalidationUnlisten = null;
+    }
+
+    function bounded<T>(operation: Promise<T>, message: string): Promise<T> {
+        const signal = AbortSignal.timeout(BRIDGE_OPERATION_TIMEOUT_MS);
+        return new Promise<T>((resolve, reject) => {
+            const onAbort = () => reject(new Error(message));
+            signal.addEventListener("abort", onAbort, { once: true });
+            operation.then(
+                (value) => {
+                    signal.removeEventListener("abort", onAbort);
+                    resolve(value);
+                },
+                (error: unknown) => {
+                    signal.removeEventListener("abort", onAbort);
+                    reject(error);
+                },
+            );
+        });
     }
 
     async function handleRequest(request: AgentFrontendRequest): Promise<void> {
@@ -265,6 +297,10 @@ export function useAgentBridge(options: AgentBridgeOptions) {
         startedBridge = lifecycle === "running";
     }
 
+    function isConfirmedStopped() {
+        return lifecycle === "confirmed-stopped";
+    }
+
     async function conservativeStop(lastError?: string): Promise<boolean> {
         try {
             const stopped = await invoke<AgentBridgeStatus>("set_agent_access_enabled", {
@@ -294,6 +330,50 @@ export function useAgentBridge(options: AgentBridgeOptions) {
             await conservativeStop(message);
         } else {
             status.value = { ...status.value, lastError: message };
+        }
+    }
+
+    async function stopForDispose() {
+        try {
+            await bounded(operationTail, "等待 Agent bridge 操作完成超时。");
+        } catch {
+            lifecycle = "unknown";
+        }
+
+        try {
+            const stopped = await bounded(
+                invoke<AgentBridgeStatus>("set_agent_access_enabled", {
+                    enabled: false,
+                }),
+                "停止 Agent bridge 超时。",
+            );
+            acceptStatus(stopped);
+        } catch {
+            lifecycle = "unknown";
+            try {
+                const actual = await bounded(
+                    invoke<AgentBridgeStatus>("get_agent_bridge_status"),
+                    "查询 Agent bridge 状态超时。",
+                );
+                acceptStatus(actual);
+            } catch {
+                lifecycle = "unknown";
+            }
+            if (!isConfirmedStopped()) {
+                try {
+                    const stopped = await bounded(
+                        invoke<AgentBridgeStatus>("set_agent_access_enabled", {
+                            enabled: false,
+                        }),
+                        "补停 Agent bridge 超时。",
+                    );
+                    acceptStatus(stopped);
+                } catch {
+                    lifecycle = "unknown";
+                }
+            }
+        } finally {
+            cleanupListeners();
         }
     }
 
@@ -437,21 +517,12 @@ export function useAgentBridge(options: AgentBridgeOptions) {
         stopDocumentWatch();
         clearPublishDelay();
         pendingEvents.clear();
-        requestUnlisten?.();
-        statusUnlisten?.();
-        invalidationUnlisten?.();
-        requestUnlisten = null;
-        statusUnlisten = null;
-        invalidationUnlisten = null;
         startedBridge = false;
         startRequested = false;
         if (shouldStopBridge) {
-            void operationTail
-                .then(
-                    () => invoke("set_agent_access_enabled", { enabled: false }),
-                    () => invoke("set_agent_access_enabled", { enabled: false }),
-                )
-                .catch(() => undefined);
+            void stopForDispose();
+        } else {
+            cleanupListeners();
         }
     }
 
