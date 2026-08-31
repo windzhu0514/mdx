@@ -76,7 +76,6 @@ pub fn open_registry_file(path: &Path, missing_code: &str) -> Result<File, Agent
 }
 
 fn validate_secure_directory(path: &Path, missing_code: &str) -> Result<(), AgentError> {
-    reject_symlink_or_non_directory_components(path, missing_code)?;
     let metadata = std::fs::symlink_metadata(path).map_err(|error| {
         let code = if error.kind() == std::io::ErrorKind::NotFound {
             missing_code
@@ -130,15 +129,81 @@ pub(super) fn effective_uid() -> u32 {
     unsafe { libc::geteuid() }
 }
 
-pub fn current_user_registry_base() -> PathBuf {
-    std::env::var_os("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .map(|path| path.join("mora"))
-        .unwrap_or_else(|| fallback_registry_base(&std::env::temp_dir(), effective_uid()))
+#[derive(Clone, Copy)]
+enum SystemBaseKind {
+    Runtime,
+    Temp,
+}
+
+pub fn current_user_registry_base() -> Result<PathBuf, AgentError> {
+    let (raw_base, kind, runtime) = match std::env::var_os("XDG_RUNTIME_DIR") {
+        Some(path) => (PathBuf::from(path), SystemBaseKind::Runtime, true),
+        None => (std::env::temp_dir(), SystemBaseKind::Temp, false),
+    };
+    let euid = effective_uid();
+    let resolved = resolve_trusted_system_base(&raw_base, euid, kind)?;
+    if runtime {
+        Ok(super::mora_registry_directory(&resolved, euid, true))
+    } else {
+        Ok(fallback_registry_base(&resolved, euid))
+    }
 }
 
 fn fallback_registry_base(temp_dir: &Path, euid: u32) -> PathBuf {
-    temp_dir.join(format!("mora-agent-{euid}"))
+    super::mora_registry_directory(temp_dir, euid, false)
+}
+
+fn resolve_trusted_system_base(
+    raw_base: &Path,
+    euid: u32,
+    kind: SystemBaseKind,
+) -> Result<PathBuf, AgentError> {
+    let resolved = std::fs::canonicalize(raw_base).map_err(|error| {
+        io_error(
+            BRIDGE_UNAVAILABLE,
+            "Could not resolve the Agent system runtime directory.",
+            error,
+        )
+    })?;
+    let metadata = std::fs::symlink_metadata(&resolved).map_err(|error| {
+        io_error(
+            BRIDGE_UNAVAILABLE,
+            "Could not inspect the Agent system runtime directory.",
+            error,
+        )
+    })?;
+    if !system_base_metadata_is_trusted(
+        metadata.is_dir(),
+        metadata.uid(),
+        metadata.permissions().mode(),
+        euid,
+        kind,
+    ) {
+        return Err(ipc_error(
+            PERMISSION_DENIED,
+            "The Agent system runtime directory is not trusted.",
+        ));
+    }
+    Ok(resolved)
+}
+
+fn system_base_metadata_is_trusted(
+    is_directory: bool,
+    uid: u32,
+    mode: u32,
+    euid: u32,
+    kind: SystemBaseKind,
+) -> bool {
+    if !is_directory {
+        return false;
+    }
+    match kind {
+        SystemBaseKind::Runtime => uid == euid && mode & 0o777 == 0o700,
+        SystemBaseKind::Temp => {
+            (uid == euid && mode & 0o022 == 0)
+                || (uid == 0 && mode & 0o1000 != 0 && mode & 0o002 != 0)
+        }
+    }
 }
 
 pub async fn bind(descriptor: &AgentEndpointDescriptor) -> Result<UnixListener, AgentError> {
@@ -191,64 +256,46 @@ pub fn address_for(registry: &EndpointRegistry, session_id: &str) -> Result<Stri
 }
 
 pub fn prepare_registry_directory(path: &Path) -> Result<(), AgentError> {
-    let mut components: Vec<_> = path
-        .ancestors()
-        .filter(|path| !path.as_os_str().is_empty())
-        .collect();
-    components.reverse();
-    for component in components {
-        match std::fs::symlink_metadata(component) {
-            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
-                return Err(ipc_error(
-                    PERMISSION_DENIED,
-                    "The Agent registry path contains a symbolic link or non-directory.",
-                ));
-            }
-            Ok(_) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                let mut builder = std::fs::DirBuilder::new();
-                builder.mode(0o700);
-                builder.create(component).map_err(|error| {
-                    io_error(
-                        BRIDGE_UNAVAILABLE,
-                        "Could not create the Agent registry directory.",
-                        error,
-                    )
-                })?;
-            }
-            Err(error) => {
-                return Err(io_error(
-                    BRIDGE_UNAVAILABLE,
-                    "Could not inspect the Agent registry directory.",
-                    error,
-                ));
-            }
-        }
-    }
-    validate_secure_directory(path, BRIDGE_UNAVAILABLE)
-}
-
-fn reject_symlink_or_non_directory_components(
-    path: &Path,
-    missing_code: &str,
-) -> Result<(), AgentError> {
-    for component in path.ancestors().filter(|path| !path.as_os_str().is_empty()) {
-        let metadata = std::fs::symlink_metadata(component).map_err(|error| {
-            let code = if error.kind() == std::io::ErrorKind::NotFound {
-                missing_code
-            } else {
-                BRIDGE_UNAVAILABLE
-            };
-            io_error(code, "Could not inspect the Agent registry path.", error)
-        })?;
-        if metadata.file_type().is_symlink() || !metadata.is_dir() {
-            return Err(ipc_error(
-                PERMISSION_DENIED,
-                "The Agent registry path contains a symbolic link or non-directory.",
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => return validate_secure_directory(path, BRIDGE_UNAVAILABLE),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(io_error(
+                BRIDGE_UNAVAILABLE,
+                "Could not inspect the Agent registry directory.",
+                error,
             ));
         }
     }
-    Ok(())
+    let parent = path.parent().ok_or_else(|| {
+        ipc_error(
+            BRIDGE_UNAVAILABLE,
+            "The Agent registry directory has no trusted system base.",
+        )
+    })?;
+    let parent_metadata = std::fs::symlink_metadata(parent).map_err(|error| {
+        io_error(
+            BRIDGE_UNAVAILABLE,
+            "Could not inspect the Agent registry system base.",
+            error,
+        )
+    })?;
+    if parent_metadata.file_type().is_symlink() || !parent_metadata.is_dir() {
+        return Err(ipc_error(
+            PERMISSION_DENIED,
+            "The Agent registry system base is not a local directory.",
+        ));
+    }
+    let mut builder = std::fs::DirBuilder::new();
+    builder.mode(0o700);
+    builder.create(path).map_err(|error| {
+        io_error(
+            BRIDGE_UNAVAILABLE,
+            "Could not create the Agent registry directory.",
+            error,
+        )
+    })?;
+    validate_secure_directory(path, BRIDGE_UNAVAILABLE)
 }
 
 pub fn apply_owner_only_permissions(path: &Path) -> Result<(), AgentError> {
@@ -311,7 +358,8 @@ pub async fn endpoint_is_live(descriptor: &AgentEndpointDescriptor) -> bool {
 mod tests {
     use super::{
         directory_metadata_is_owner_only, fallback_registry_base, file_metadata_is_owner_only,
-        prepare_registry_directory, validate_secure_directory,
+        prepare_registry_directory, resolve_trusted_system_base, system_base_metadata_is_trusted,
+        validate_secure_directory, SystemBaseKind,
     };
     use crate::agent_protocol::{BRIDGE_UNAVAILABLE, PERMISSION_DENIED};
     use std::os::unix::fs::{symlink, PermissionsExt};
@@ -355,5 +403,62 @@ mod tests {
 
         let error = prepare_registry_directory(&linked.join("agent")).unwrap_err();
         assert_eq!(error.code, PERMISSION_DENIED);
+    }
+
+    #[test]
+    fn macos_style_system_symlink_is_resolved_before_the_mora_subdirectory() {
+        let temp = tempfile::tempdir().unwrap();
+        let private_var = temp.path().join("private").join("var");
+        let runtime = private_var.join("folders").join("user").join("T");
+        std::fs::create_dir_all(&runtime).unwrap();
+        std::fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o700)).unwrap();
+        symlink(&private_var, temp.path().join("var")).unwrap();
+        let raw_runtime = temp
+            .path()
+            .join("var")
+            .join("folders")
+            .join("user")
+            .join("T");
+
+        let resolved = resolve_trusted_system_base(
+            &raw_runtime,
+            super::effective_uid(),
+            SystemBaseKind::Runtime,
+        )
+        .unwrap();
+
+        assert_eq!(resolved, std::fs::canonicalize(runtime).unwrap());
+    }
+
+    #[test]
+    fn system_base_metadata_requires_runtime_ownership_or_a_sticky_system_temp() {
+        assert!(system_base_metadata_is_trusted(
+            true,
+            501,
+            0o40700,
+            501,
+            SystemBaseKind::Runtime,
+        ));
+        assert!(!system_base_metadata_is_trusted(
+            true,
+            0,
+            0o40755,
+            501,
+            SystemBaseKind::Runtime,
+        ));
+        assert!(system_base_metadata_is_trusted(
+            true,
+            0,
+            0o41777,
+            501,
+            SystemBaseKind::Temp,
+        ));
+        assert!(!system_base_metadata_is_trusted(
+            true,
+            0,
+            0o40777,
+            501,
+            SystemBaseKind::Temp,
+        ));
     }
 }

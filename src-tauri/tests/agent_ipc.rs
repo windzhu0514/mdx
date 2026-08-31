@@ -1,6 +1,5 @@
 use futures_util::StreamExt;
 use mdxnote_lib::agent_client::AgentClient;
-#[cfg(windows)]
 use mdxnote_lib::agent_ipc::AgentTransport;
 use mdxnote_lib::agent_ipc::{AgentServer, EndpointRegistry};
 use mdxnote_lib::agent_protocol::{
@@ -56,6 +55,42 @@ async fn client_round_trips_over_current_platform_transport() {
     let result = client.request(AgentRequestKind::Status).await.unwrap();
 
     assert!(matches!(result, AgentResult::Status(_)));
+}
+
+#[tokio::test]
+async fn connect_to_rejects_mutated_descriptor_fields() {
+    let fixture = IpcFixture::new().await;
+    let server = fixture.start(ok_handler()).await;
+    let descriptor = server.descriptor();
+
+    let mut address = descriptor.clone();
+    address.address = if cfg!(windows) {
+        r"\\remote-host\pipe\mora-agent-00000000-0000-4000-8000-000000000001".into()
+    } else {
+        "/tmp/untrusted.sock".into()
+    };
+    let mut transport = descriptor.clone();
+    transport.transport = if cfg!(windows) {
+        AgentTransport::UnixSocket
+    } else {
+        AgentTransport::NamedPipe
+    };
+    let mut session = descriptor.clone();
+    session.session_id = "../escape".into();
+    let mut pid = descriptor.clone();
+    pid.pid = 0;
+    let detached = serde_json::from_value(serde_json::to_value(descriptor).unwrap()).unwrap();
+
+    for (field, mutated) in [
+        ("address", address),
+        ("transport", transport),
+        ("session", session),
+        ("pid", pid),
+        ("registry", detached),
+    ] {
+        let error = AgentClient::connect_to(&mutated).await.expect_err(field);
+        assert_eq!(error.code, PERMISSION_DENIED, "mutated field: {field}");
+    }
 }
 
 #[tokio::test]
@@ -216,6 +251,46 @@ fn windows_registry_symlink_is_rejected_when_fixture_is_available() {
     }
 
     let error = registry.read().unwrap_err();
+    assert_eq!(error.code, PERMISSION_DENIED);
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn dangling_registry_symlink_fails_closed_when_fixture_is_available() {
+    use std::os::windows::fs::symlink_file;
+
+    let fixture = IpcFixture::new().await;
+    let missing_target = fixture._temp.path().join("missing-target.json");
+    match symlink_file(&missing_target, fixture.registry.path()) {
+        Ok(()) => {}
+        Err(error)
+            if error.kind() == std::io::ErrorKind::PermissionDenied
+                || error.raw_os_error() == Some(1314) =>
+        {
+            eprintln!("Windows dangling-symlink fixture unavailable: {error}");
+            return;
+        }
+        Err(error) => panic!("could not create Windows dangling-symlink fixture: {error}"),
+    }
+
+    let error = AgentServer::start(fixture.registry.clone(), ok_handler())
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, PERMISSION_DENIED);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn dangling_registry_symlink_fails_closed() {
+    use std::os::unix::fs::symlink;
+
+    let fixture = IpcFixture::new().await;
+    let missing_target = fixture._temp.path().join("missing-target.json");
+    symlink(&missing_target, fixture.registry.path()).unwrap();
+
+    let error = AgentServer::start(fixture.registry.clone(), ok_handler())
+        .await
+        .unwrap_err();
     assert_eq!(error.code, PERMISSION_DENIED);
 }
 

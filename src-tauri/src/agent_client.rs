@@ -40,12 +40,8 @@ impl AgentClient {
     }
 
     pub async fn connect_to(descriptor: &AgentEndpointDescriptor) -> Result<Self, AgentError> {
-        if descriptor.protocol_version != PROTOCOL_VERSION {
-            return Err(ipc_error(
-                PROTOCOL_MISMATCH,
-                "The Mora Agent endpoint uses an unsupported protocol version.",
-            ));
-        }
+        EndpointRegistry::at(descriptor.registry_path().to_path_buf())
+            .validate_descriptor(descriptor)?;
         Ok(Self {
             descriptor: descriptor.clone(),
         })
@@ -198,7 +194,7 @@ mod tests {
 
     #[tokio::test]
     async fn request_uses_one_deadline_across_write_and_response() {
-        let (client_stream, mut server_stream) = tokio::io::duplex(64);
+        let (client_stream, mut server_stream) = tokio::io::duplex(1024);
         let server = tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(35)).await;
             let mut prefix = [0_u8; 4];

@@ -78,7 +78,7 @@ impl EndpointRegistry {
             .join("agent");
 
         #[cfg(unix)]
-        let base = platform::current_user_registry_base();
+        let base = platform::current_user_registry_base()?;
 
         Ok(Self::at(base.join("agent-endpoint-v1.json")))
     }
@@ -115,16 +115,31 @@ impl EndpointRegistry {
                     "The Agent endpoint registry is invalid.",
                 )
             })?;
-        self.validate_descriptor(&descriptor)?;
         descriptor.registry_path = self.path.clone();
+        self.validate_descriptor(&descriptor)?;
         Ok(descriptor)
     }
 
-    fn validate_descriptor(&self, descriptor: &AgentEndpointDescriptor) -> Result<(), AgentError> {
+    pub(crate) fn validate_descriptor(
+        &self,
+        descriptor: &AgentEndpointDescriptor,
+    ) -> Result<(), AgentError> {
         if descriptor.protocol_version != PROTOCOL_VERSION {
             return Err(ipc_error(
                 PROTOCOL_MISMATCH,
                 "The Agent endpoint uses an unsupported protocol version.",
+            ));
+        }
+        if !descriptor.registry_path.is_absolute()
+            || descriptor
+                .registry_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                != Some("agent-endpoint-v1.json")
+        {
+            return Err(ipc_error(
+                PERMISSION_DENIED,
+                "The Agent endpoint descriptor has no trusted registry provenance.",
             ));
         }
         let session_id = Uuid::parse_str(&descriptor.session_id).map_err(|_| {
@@ -209,10 +224,11 @@ impl EndpointRegistry {
     }
 
     pub fn remove_if_owned(&self, session_id: &str) -> Result<(), AgentError> {
-        let descriptor = match self.read() {
-            Ok(descriptor) => descriptor,
-            Err(_error) if !self.path.exists() => return Ok(()),
-            Err(error) => return Err(error),
+        let descriptor = match classify_registry_discovery(
+            self.read_with_missing_code(crate::agent_protocol::MORA_NOT_RUNNING),
+        )? {
+            Some(descriptor) => descriptor,
+            None => return Ok(()),
         };
         if descriptor.session_id != session_id {
             return Ok(());
@@ -236,6 +252,23 @@ impl EndpointRegistry {
                 error,
             )),
         }
+    }
+}
+
+#[cfg(any(unix, test))]
+fn mora_registry_directory(resolved_base: &Path, effective_uid: u32, runtime: bool) -> PathBuf {
+    if runtime {
+        resolved_base.join("mora")
+    } else {
+        resolved_base.join(format!("mora-agent-{effective_uid}"))
+    }
+}
+
+fn classify_registry_discovery<T>(result: Result<T, AgentError>) -> Result<Option<T>, AgentError> {
+    match result {
+        Ok(value) => Ok(Some(value)),
+        Err(error) if error.code == crate::agent_protocol::MORA_NOT_RUNNING => Ok(None),
+        Err(error) => Err(error),
     }
 }
 
@@ -305,17 +338,16 @@ impl AgentServer {
         O: IntoAgentHandlerResult + 'static,
     {
         let lifecycle_lock = LifecycleLock::acquire(&registry)?;
-        if registry.path.exists() {
-            match registry.read() {
-                Ok(existing) if endpoint_is_live(&existing).await => {
-                    return Err(ipc_error(
-                        BRIDGE_ALREADY_RUNNING,
-                        "A Mora Agent bridge is already running.",
-                    ));
-                }
-                Ok(existing) => platform::remove_stale_endpoint(&existing)?,
-                Err(error) => return Err(error),
+        if let Some(existing) = classify_registry_discovery(
+            registry.read_with_missing_code(crate::agent_protocol::MORA_NOT_RUNNING),
+        )? {
+            if endpoint_is_live(&existing).await {
+                return Err(ipc_error(
+                    BRIDGE_ALREADY_RUNNING,
+                    "A Mora Agent bridge is already running.",
+                ));
             }
+            platform::remove_stale_endpoint(&existing)?;
             registry.remove_stale()?;
         }
 
@@ -692,12 +724,12 @@ pub(crate) fn io_error(code: &str, message: &str, _error: std::io::Error) -> Age
 #[cfg(test)]
 mod tests {
     use super::{
-        read_server_message, serve_connection_with_timeout, write_request, EndpointRegistry,
-        Handler, LifecycleLock,
+        classify_registry_discovery, mora_registry_directory, read_server_message,
+        serve_connection_with_timeout, write_request, EndpointRegistry, Handler, LifecycleLock,
     };
     use crate::agent_protocol::{
         AgentChangeSource, AgentDocumentEvent, AgentError, AgentRequest, AgentRequestKind,
-        AgentResult, BRIDGE_ALREADY_RUNNING, PROTOCOL_VERSION,
+        AgentResult, BRIDGE_ALREADY_RUNNING, MORA_NOT_RUNNING, PERMISSION_DENIED, PROTOCOL_VERSION,
     };
     use std::sync::Arc;
     use tokio::io::AsyncWriteExt;
@@ -715,6 +747,36 @@ mod tests {
 
         drop(first);
         LifecycleLock::acquire(&registry).unwrap();
+    }
+
+    #[test]
+    fn only_a_true_not_found_registry_is_classified_as_absent() {
+        assert_eq!(
+            classify_registry_discovery::<u8>(Err(AgentError::new(MORA_NOT_RUNNING, "missing",)))
+                .unwrap(),
+            None
+        );
+
+        let error = classify_registry_discovery::<u8>(Err(AgentError::new(
+            PERMISSION_DENIED,
+            "dangling symlink",
+        )))
+        .unwrap_err();
+        assert_eq!(error.code, PERMISSION_DENIED);
+    }
+
+    #[test]
+    fn mora_directory_is_appended_to_the_resolved_system_base() {
+        let resolved = std::path::Path::new("/private/var/folders/user/T");
+
+        assert_eq!(
+            mora_registry_directory(resolved, 501, true),
+            std::path::Path::new("/private/var/folders/user/T/mora")
+        );
+        assert_eq!(
+            mora_registry_directory(resolved, 501, false),
+            std::path::Path::new("/private/var/folders/user/T/mora-agent-501")
+        );
     }
 
     #[tokio::test]
