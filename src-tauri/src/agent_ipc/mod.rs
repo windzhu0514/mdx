@@ -4,14 +4,16 @@ use crate::agent_protocol::{
     PERMISSION_DENIED, PROTOCOL_MISMATCH, PROTOCOL_VERSION, REQUEST_TIMEOUT, TIMEOUT,
 };
 use serde::{Deserialize, Serialize};
+use std::fs::{File, TryLockError};
 use std::future::Future;
-use std::io::{ErrorKind, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{broadcast, watch, Semaphore};
-use tokio::task::JoinHandle;
+use tokio::task::{JoinHandle, JoinSet};
+use tokio::time::Instant;
 use uuid::Uuid;
 
 #[cfg(unix)]
@@ -76,12 +78,7 @@ impl EndpointRegistry {
             .join("agent");
 
         #[cfg(unix)]
-        let base = if let Some(runtime_dir) = std::env::var_os("XDG_RUNTIME_DIR") {
-            PathBuf::from(runtime_dir).join("mora")
-        } else {
-            let user = std::env::var("USER").unwrap_or_else(|_| "current-user".into());
-            std::env::temp_dir().join(format!("mora-agent-{user}"))
-        };
+        let base = platform::current_user_registry_base();
 
         Ok(Self::at(base.join("agent-endpoint-v1.json")))
     }
@@ -91,8 +88,20 @@ impl EndpointRegistry {
     }
 
     pub fn read(&self) -> Result<AgentEndpointDescriptor, AgentError> {
-        reject_registry_symlink(&self.path)?;
-        let bytes = std::fs::read(&self.path).map_err(|error| {
+        self.read_with_missing_code(BRIDGE_UNAVAILABLE)
+    }
+
+    pub(crate) fn read_for_client(&self) -> Result<AgentEndpointDescriptor, AgentError> {
+        self.read_with_missing_code(crate::agent_protocol::MORA_NOT_RUNNING)
+    }
+
+    fn read_with_missing_code(
+        &self,
+        missing_code: &str,
+    ) -> Result<AgentEndpointDescriptor, AgentError> {
+        let mut file = platform::open_registry_file(&self.path, missing_code)?;
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes).map_err(|error| {
             io_error(
                 BRIDGE_UNAVAILABLE,
                 "Could not read the Agent endpoint.",
@@ -106,11 +115,46 @@ impl EndpointRegistry {
                     "The Agent endpoint registry is invalid.",
                 )
             })?;
+        self.validate_descriptor(&descriptor)?;
         descriptor.registry_path = self.path.clone();
         Ok(descriptor)
     }
 
+    fn validate_descriptor(&self, descriptor: &AgentEndpointDescriptor) -> Result<(), AgentError> {
+        if descriptor.protocol_version != PROTOCOL_VERSION {
+            return Err(ipc_error(
+                PROTOCOL_MISMATCH,
+                "The Agent endpoint uses an unsupported protocol version.",
+            ));
+        }
+        let session_id = Uuid::parse_str(&descriptor.session_id).map_err(|_| {
+            ipc_error(
+                PERMISSION_DENIED,
+                "The Agent endpoint session identifier is invalid.",
+            )
+        })?;
+        if session_id.get_version_num() != 4
+            || session_id.hyphenated().to_string() != descriptor.session_id
+            || descriptor.pid == 0
+            || descriptor.transport != platform::TRANSPORT
+        {
+            return Err(ipc_error(
+                PERMISSION_DENIED,
+                "The Agent endpoint descriptor is not bound to this user session.",
+            ));
+        }
+        let expected_address = platform::address_for(self, &descriptor.session_id)?;
+        if descriptor.address != expected_address {
+            return Err(ipc_error(
+                PERMISSION_DENIED,
+                "The Agent endpoint address is not local to this registry.",
+            ));
+        }
+        Ok(())
+    }
+
     pub fn publish(&self, descriptor: &AgentEndpointDescriptor) -> Result<(), AgentError> {
+        self.validate_descriptor(descriptor)?;
         let parent = self.path.parent().ok_or_else(|| {
             ipc_error(
                 BRIDGE_UNAVAILABLE,
@@ -218,6 +262,30 @@ pub struct AgentServer {
     events: broadcast::Sender<AgentDocumentEvent>,
     accept_task: Option<JoinHandle<()>>,
     stopped: bool,
+    _lifecycle_lock: LifecycleLock,
+}
+
+#[derive(Debug)]
+struct LifecycleLock {
+    _file: File,
+}
+
+impl LifecycleLock {
+    fn acquire(registry: &EndpointRegistry) -> Result<Self, AgentError> {
+        let file = platform::open_lifecycle_lock(registry)?;
+        match file.try_lock() {
+            Ok(()) => Ok(Self { _file: file }),
+            Err(TryLockError::WouldBlock) => Err(ipc_error(
+                BRIDGE_ALREADY_RUNNING,
+                "A Mora Agent bridge lifecycle is already owned.",
+            )),
+            Err(TryLockError::Error(error)) => Err(io_error(
+                BRIDGE_UNAVAILABLE,
+                "Could not lock the Mora Agent bridge lifecycle.",
+                error,
+            )),
+        }
+    }
 }
 
 impl std::fmt::Debug for AgentServer {
@@ -236,6 +304,7 @@ impl AgentServer {
         F: Future<Output = O> + Send + 'static,
         O: IntoAgentHandlerResult + 'static,
     {
+        let lifecycle_lock = LifecycleLock::acquire(&registry)?;
         if registry.path.exists() {
             match registry.read() {
                 Ok(existing) if endpoint_is_live(&existing).await => {
@@ -245,7 +314,7 @@ impl AgentServer {
                     ));
                 }
                 Ok(existing) => platform::remove_stale_endpoint(&existing)?,
-                Err(_) => {}
+                Err(error) => return Err(error),
             }
             registry.remove_stale()?;
         }
@@ -288,6 +357,7 @@ impl AgentServer {
             events,
             accept_task: Some(accept_task),
             stopped: false,
+            _lifecycle_lock: lifecycle_lock,
         })
     }
 
@@ -309,7 +379,6 @@ impl AgentServer {
     async fn shutdown(&mut self) {
         let _ = self.cancel.send(true);
         if let Some(task) = self.accept_task.take() {
-            task.abort();
             let _ = task.await;
         }
     }
@@ -350,44 +419,71 @@ async fn accept_connections(
     mut cancel: watch::Receiver<bool>,
 ) {
     let connections = Arc::new(Semaphore::new(MAX_CONNECTIONS));
+    let mut connection_tasks = JoinSet::new();
     loop {
         if *cancel.borrow() {
-            return;
+            break;
         }
+        while connection_tasks.try_join_next().is_some() {}
         let permit = tokio::select! {
-            _ = cancel.changed() => return,
+            _ = cancel.changed() => break,
             permit = connections.clone().acquire_owned() => match permit {
                 Ok(permit) => permit,
-                Err(_) => return,
+                Err(_) => break,
             },
         };
         let stream = tokio::select! {
-            _ = cancel.changed() => return,
+            _ = cancel.changed() => break,
             stream = platform::accept(&mut listener) => match stream {
                 Ok(stream) => stream,
-                Err(_) => return,
+                Err(_) => break,
             },
         };
         let handler = handler.clone();
         let events = events.clone();
         let connection_cancel = cancel.clone();
-        tokio::spawn(async move {
+        connection_tasks.spawn(async move {
             let _permit = permit;
             serve_connection(stream, handler, events, connection_cancel).await;
         });
     }
+
+    let shutdown_deadline = Instant::now() + REQUEST_TIMEOUT;
+    while !connection_tasks.is_empty() {
+        match tokio::time::timeout_at(shutdown_deadline, connection_tasks.join_next()).await {
+            Ok(Some(_)) => {}
+            Ok(None) => break,
+            Err(_) => {
+                connection_tasks.abort_all();
+                while connection_tasks.join_next().await.is_some() {}
+                break;
+            }
+        }
+    }
 }
 
 async fn serve_connection(
-    mut stream: platform::PlatformStream,
+    stream: platform::PlatformStream,
+    handler: Handler,
+    events: broadcast::Sender<AgentDocumentEvent>,
+    cancel: watch::Receiver<bool>,
+) {
+    serve_connection_with_timeout(stream, handler, events, cancel, REQUEST_TIMEOUT).await;
+}
+
+async fn serve_connection_with_timeout<S>(
+    mut stream: S,
     handler: Handler,
     events: broadcast::Sender<AgentDocumentEvent>,
     mut cancel: watch::Receiver<bool>,
-) {
-    let request = match tokio::time::timeout(REQUEST_TIMEOUT, read_request(&mut stream)).await {
+    request_timeout: std::time::Duration,
+) where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let deadline = Instant::now() + request_timeout;
+    let request = match connection_phase(&mut cancel, deadline, read_request(&mut stream)).await {
         Ok(Ok(request)) => request,
-        Ok(Err(_)) => return,
-        Err(_) => return,
+        _ => return,
     };
     let request_id = request.request_id.clone();
     if request.protocol_version != PROTOCOL_VERSION {
@@ -398,7 +494,12 @@ async fn serve_connection(
                 "The Agent protocol version is not supported.",
             ),
         );
-        let _ = write_message(&mut stream, &AgentServerMessage::Response { response }).await;
+        let _ = connection_phase(
+            &mut cancel,
+            deadline,
+            write_message(&mut stream, &AgentServerMessage::Response { response }),
+        )
+        .await;
         return;
     }
 
@@ -407,18 +508,19 @@ async fn serve_connection(
         _ => None,
     };
     let mut event_receiver = watch_filter.as_ref().map(|_| events.subscribe());
-    let response = match tokio::time::timeout(REQUEST_TIMEOUT, handler(request)).await {
+    let response = match connection_phase(&mut cancel, deadline, handler(request)).await {
         Ok(Ok(result)) => AgentResponse::success(request_id, result),
         Ok(Err(error)) => AgentResponse::failure(request_id, error),
-        Err(_) => AgentResponse::failure(
-            request_id,
-            ipc_error(TIMEOUT, "The Agent request timed out."),
-        ),
+        Err(_) => return,
     };
     let handler_failed = response.error.is_some();
-    if write_message(&mut stream, &AgentServerMessage::Response { response })
-        .await
-        .is_err()
+    if connection_phase(
+        &mut cancel,
+        deadline,
+        write_message(&mut stream, &AgentServerMessage::Response { response }),
+    )
+    .await
+    .is_err()
         || handler_failed
     {
         return;
@@ -442,17 +544,39 @@ async fn serve_connection(
         {
             continue;
         }
-        if write_message(&mut stream, &AgentServerMessage::Event { event })
-            .await
-            .is_err()
+        if connection_phase(
+            &mut cancel,
+            Instant::now() + request_timeout,
+            write_message(&mut stream, &AgentServerMessage::Event { event }),
+        )
+        .await
+        .is_err()
         {
             return;
         }
     }
 }
 
-pub(crate) async fn connect(
+async fn connection_phase<T, F>(
+    cancel: &mut watch::Receiver<bool>,
+    deadline: Instant,
+    future: F,
+) -> Result<T, ()>
+where
+    F: Future<Output = T>,
+{
+    if *cancel.borrow() {
+        return Err(());
+    }
+    tokio::select! {
+        _ = cancel.changed() => Err(()),
+        result = tokio::time::timeout_at(deadline, future) => result.map_err(|_| ()),
+    }
+}
+
+pub(crate) async fn connect_until(
     descriptor: &AgentEndpointDescriptor,
+    deadline: Instant,
 ) -> Result<platform::PlatformStream, AgentError> {
     if descriptor.protocol_version != PROTOCOL_VERSION
         || descriptor.transport != platform::TRANSPORT
@@ -462,7 +586,7 @@ pub(crate) async fn connect(
             "The Agent endpoint uses an unsupported protocol or transport.",
         ));
     }
-    tokio::time::timeout(REQUEST_TIMEOUT, platform::connect(descriptor))
+    tokio::time::timeout_at(deadline, platform::connect(descriptor))
         .await
         .map_err(|_| ipc_error(TIMEOUT, "Connecting to the Mora Agent bridge timed out."))?
 }
@@ -565,18 +689,120 @@ pub(crate) fn io_error(code: &str, message: &str, _error: std::io::Error) -> Age
     AgentError::new(code, message)
 }
 
-fn reject_registry_symlink(path: &Path) -> Result<(), AgentError> {
-    match std::fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() => Err(ipc_error(
-            PERMISSION_DENIED,
-            "The Agent endpoint registry must not be a symbolic link.",
-        )),
-        Ok(_) => Ok(()),
-        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(io_error(
-            BRIDGE_UNAVAILABLE,
-            "Could not inspect the Agent endpoint registry.",
-            error,
-        )),
+#[cfg(test)]
+mod tests {
+    use super::{
+        read_server_message, serve_connection_with_timeout, write_request, EndpointRegistry,
+        Handler, LifecycleLock,
+    };
+    use crate::agent_protocol::{
+        AgentChangeSource, AgentDocumentEvent, AgentError, AgentRequest, AgentRequestKind,
+        AgentResult, BRIDGE_ALREADY_RUNNING, PROTOCOL_VERSION,
+    };
+    use std::sync::Arc;
+    use tokio::io::AsyncWriteExt;
+    use tokio::sync::{broadcast, watch};
+    use tokio::time::Duration;
+
+    #[test]
+    fn lifecycle_lock_is_exclusive_until_the_owner_drops_it() {
+        let temp = tempfile::tempdir().unwrap();
+        let registry = EndpointRegistry::at(temp.path().join("agent-endpoint-v1.json"));
+
+        let first = LifecycleLock::acquire(&registry).unwrap();
+        let error = LifecycleLock::acquire(&registry).unwrap_err();
+        assert_eq!(error.code, BRIDGE_ALREADY_RUNNING);
+
+        drop(first);
+        LifecycleLock::acquire(&registry).unwrap();
+    }
+
+    #[tokio::test]
+    async fn server_deadline_releases_a_half_read_connection() {
+        let (mut client, server) = tokio::io::duplex(64);
+        client.write_all(&[0, 0]).await.unwrap();
+        let handler: Handler = Arc::new(|_| Box::pin(async { unreachable!() }));
+        let (events, _) = broadcast::channel(1);
+        let (_cancel_tx, cancel) = watch::channel(false);
+
+        tokio::time::timeout(
+            Duration::from_millis(200),
+            serve_connection_with_timeout(
+                server,
+                handler,
+                events,
+                cancel,
+                Duration::from_millis(30),
+            ),
+        )
+        .await
+        .expect("the connection task must release its permit after the request deadline");
+    }
+
+    #[tokio::test]
+    async fn server_deadline_releases_a_client_that_does_not_read_the_response() {
+        let (mut client, server) = tokio::io::duplex(1024);
+        let request = AgentRequest {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: "deadline-request".into(),
+            request: AgentRequestKind::Status,
+        };
+        write_request(&mut client, &request).await.unwrap();
+        let handler: Handler = Arc::new(|_| {
+            Box::pin(async { Err(AgentError::new("TEST_RESPONSE", "x".repeat(1024 * 1024))) })
+        });
+        let (events, _) = broadcast::channel(1);
+        let (_cancel_tx, cancel) = watch::channel(false);
+
+        tokio::time::timeout(
+            Duration::from_millis(200),
+            serve_connection_with_timeout(
+                server,
+                handler,
+                events,
+                cancel,
+                Duration::from_millis(30),
+            ),
+        )
+        .await
+        .expect("the connection task must release its permit after the response deadline");
+    }
+
+    #[tokio::test]
+    async fn server_deadline_releases_a_watch_client_that_stops_reading_events() {
+        let (mut client, server) = tokio::io::duplex(256);
+        let request = AgentRequest {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: "watch-deadline".into(),
+            request: AgentRequestKind::Watch { document_id: None },
+        };
+        write_request(&mut client, &request).await.unwrap();
+        let handler: Handler =
+            Arc::new(|_| Box::pin(async { Ok(AgentResult::Documents(Vec::new())) }));
+        let (events, _) = broadcast::channel(16);
+        let event_sender = events.clone();
+        let (_cancel_tx, cancel) = watch::channel(false);
+        let task = tokio::spawn(serve_connection_with_timeout(
+            server,
+            handler,
+            events,
+            cancel,
+            Duration::from_millis(30),
+        ));
+
+        read_server_message(&mut client).await.unwrap();
+        for revision in 0..100 {
+            let _ = event_sender.send(AgentDocumentEvent {
+                document_id: "document".into(),
+                live_revision: format!("revision-{revision}"),
+                dirty: true,
+                source: AgentChangeSource::Agent,
+            });
+        }
+
+        tokio::time::timeout(Duration::from_millis(200), task)
+            .await
+            .expect("a slow watch reader must not retain its connection permit")
+            .unwrap();
     }
 }

@@ -6,13 +6,14 @@ use mdxnote_lib::agent_ipc::{AgentServer, EndpointRegistry};
 use mdxnote_lib::agent_protocol::{
     AgentBridgeStatus, AgentChangeSource, AgentDocumentEvent, AgentDocumentSnapshot,
     AgentDocumentSummary, AgentRequest, AgentRequestKind, AgentResult, BRIDGE_ALREADY_RUNNING,
-    MORA_NOT_RUNNING, PROTOCOL_VERSION,
+    BRIDGE_UNAVAILABLE, MORA_NOT_RUNNING, PERMISSION_DENIED, PROTOCOL_VERSION,
 };
 use std::future::Future;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 use tempfile::TempDir;
+use tokio::sync::Notify;
 use tokio::sync::Semaphore;
 
 struct IpcFixture {
@@ -75,14 +76,16 @@ async fn stop_does_not_remove_an_endpoint_owned_by_another_session() {
     let fixture = IpcFixture::new().await;
     let server = fixture.start(ok_handler()).await;
     let mut replacement = server.descriptor().clone();
-    replacement.session_id = "replacement-session".into();
+    replacement.session_id = uuid::Uuid::new_v4().to_string();
+    replacement.address = expected_address(&fixture.registry, &replacement.session_id);
+    let replacement_session = replacement.session_id.clone();
     fixture.registry.publish(&replacement).unwrap();
 
     server.stop().await.unwrap();
 
     assert_eq!(
         fixture.registry.read().unwrap().session_id,
-        "replacement-session"
+        replacement_session
     );
 }
 
@@ -99,6 +102,62 @@ async fn second_live_server_is_rejected() {
 }
 
 #[tokio::test]
+async fn lifecycle_lock_survives_registry_removal_until_server_stop() {
+    let fixture = IpcFixture::new().await;
+    let server = fixture.start(ok_handler()).await;
+    std::fs::remove_file(fixture.registry.path()).unwrap();
+
+    let error = AgentServer::start(fixture.registry.clone(), ok_handler())
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, BRIDGE_ALREADY_RUNNING);
+
+    server.stop().await.unwrap();
+    let replacement = fixture.start(ok_handler()).await;
+    replacement.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn stop_cancels_blocked_handlers_before_returning() {
+    let fixture = IpcFixture::new().await;
+    let started = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let side_effects = Arc::new(AtomicUsize::new(0));
+    let server = fixture
+        .start({
+            let started = started.clone();
+            let release = release.clone();
+            let side_effects = side_effects.clone();
+            move |_| {
+                let started = started.clone();
+                let release = release.clone();
+                let side_effects = side_effects.clone();
+                async move {
+                    started.notify_one();
+                    release.notified().await;
+                    side_effects.fetch_add(1, Ordering::SeqCst);
+                    AgentResult::Status(listening_status())
+                }
+            }
+        })
+        .await;
+    let client = AgentClient::connect_to(server.descriptor()).await.unwrap();
+    let request = tokio::spawn(async move { client.request(AgentRequestKind::Status).await });
+    started.notified().await;
+
+    tokio::time::timeout(std::time::Duration::from_secs(1), server.stop())
+        .await
+        .expect("stop must cancel active handlers")
+        .unwrap();
+    release.notify_waiters();
+    tokio::task::yield_now().await;
+
+    assert_eq!(side_effects.load(Ordering::SeqCst), 0);
+    assert!(request.await.unwrap().is_err());
+    assert!(!fixture.registry.path().exists());
+}
+
+#[tokio::test]
 async fn missing_registry_maps_to_mora_not_running() {
     let fixture = IpcFixture::new().await;
 
@@ -110,31 +169,145 @@ async fn missing_registry_maps_to_mora_not_running() {
 }
 
 #[tokio::test]
+async fn weak_registry_permissions_are_rejected_without_rewriting_the_error() {
+    let fixture = IpcFixture::new().await;
+    std::fs::write(fixture.registry.path(), valid_descriptor_json()).unwrap();
+
+    let read_error = fixture.registry.read().unwrap_err();
+    assert_eq!(read_error.code, PERMISSION_DENIED);
+
+    let connect_error = AgentClient::connect_with_registry(fixture.registry.clone())
+        .await
+        .unwrap_err();
+    assert_eq!(connect_error.code, PERMISSION_DENIED);
+}
+
+#[test]
+fn registry_rejects_non_file_entries() {
+    let temp = tempfile::tempdir().unwrap();
+    let registry = EndpointRegistry::at(temp.path().join("agent-endpoint-v1.json"));
+    std::fs::create_dir(registry.path()).unwrap();
+
+    let error = registry.read().unwrap_err();
+
+    assert_eq!(error.code, PERMISSION_DENIED);
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_registry_symlink_is_rejected_when_fixture_is_available() {
+    use std::os::windows::fs::symlink_file;
+
+    let temp = tempfile::tempdir().unwrap();
+    let registry = EndpointRegistry::at(temp.path().join("agent-endpoint-v1.json"));
+    let target = temp.path().join("target.json");
+    std::fs::write(&target, valid_descriptor_json()).unwrap();
+    secure_registry_file(&target);
+    match symlink_file(&target, registry.path()) {
+        Ok(()) => {}
+        Err(error)
+            if error.kind() == std::io::ErrorKind::PermissionDenied
+                || error.raw_os_error() == Some(1314) =>
+        {
+            eprintln!("Windows symlink fixture unavailable: {error}");
+            return;
+        }
+        Err(error) => panic!("could not create Windows registry symlink fixture: {error}"),
+    }
+
+    let error = registry.read().unwrap_err();
+    assert_eq!(error.code, PERMISSION_DENIED);
+}
+
+#[test]
+fn corrupt_owner_only_registry_preserves_bridge_unavailable() {
+    let temp = tempfile::tempdir().unwrap();
+    let registry = EndpointRegistry::at(temp.path().join("agent-endpoint-v1.json"));
+    std::fs::write(registry.path(), b"not-json").unwrap();
+    secure_registry_file(registry.path());
+
+    let error = registry.read().unwrap_err();
+
+    assert_eq!(error.code, BRIDGE_UNAVAILABLE);
+}
+
+#[test]
+fn registry_rejects_unbound_session_transport_pid_and_address() {
+    let temp = tempfile::tempdir().unwrap();
+    let registry = EndpointRegistry::at(temp.path().join("agent-endpoint-v1.json"));
+    let valid_session = "00000000-0000-4000-8000-000000000001";
+    let valid_address = expected_address(&registry, valid_session);
+    let valid_transport = if cfg!(windows) {
+        "namedPipe"
+    } else {
+        "unixSocket"
+    };
+    let invalid_transport = if cfg!(windows) {
+        "unixSocket"
+    } else {
+        "namedPipe"
+    };
+    let cases = [
+        serde_json::json!({
+            "protocolVersion": PROTOCOL_VERSION,
+            "sessionId": "../escape",
+            "pid": std::process::id(),
+            "transport": valid_transport,
+            "address": valid_address,
+        }),
+        serde_json::json!({
+            "protocolVersion": PROTOCOL_VERSION,
+            "sessionId": valid_session,
+            "pid": 0,
+            "transport": valid_transport,
+            "address": valid_address,
+        }),
+        serde_json::json!({
+            "protocolVersion": PROTOCOL_VERSION,
+            "sessionId": valid_session,
+            "pid": std::process::id(),
+            "transport": invalid_transport,
+            "address": valid_address,
+        }),
+        serde_json::json!({
+            "protocolVersion": PROTOCOL_VERSION,
+            "sessionId": valid_session,
+            "pid": std::process::id(),
+            "transport": valid_transport,
+            "address": if cfg!(windows) {
+                r"\\remote-host\pipe\mora-agent-00000000-0000-4000-8000-000000000001"
+            } else {
+                "/tmp/untrusted.sock"
+            },
+        }),
+    ];
+
+    for descriptor in cases {
+        std::fs::write(registry.path(), descriptor.to_string()).unwrap();
+        secure_registry_file(registry.path());
+
+        let error = registry.read().unwrap_err();
+        assert_eq!(error.code, PERMISSION_DENIED);
+    }
+}
+
+#[tokio::test]
 async fn stale_registry_maps_to_mora_not_running_without_waiting_for_request_timeout() {
     let fixture = IpcFixture::new().await;
+    let session_id = "00000000-0000-4000-8000-000000000001";
     std::fs::write(
         fixture.registry.path(),
         serde_json::json!({
             "protocolVersion": PROTOCOL_VERSION,
-            "sessionId": "stale-session",
-            "pid": 0,
+            "sessionId": session_id,
+            "pid": u32::MAX,
             "transport": if cfg!(windows) { "namedPipe" } else { "unixSocket" },
-            "address": if cfg!(windows) {
-                r"\\.\pipe\mora-agent-stale-session".to_string()
-            } else {
-                fixture
-                    .registry
-                    .path()
-                    .parent()
-                    .unwrap()
-                    .join("mora-agent-stale-session.sock")
-                    .to_string_lossy()
-                    .into_owned()
-            },
+            "address": expected_address(&fixture.registry, session_id),
         })
         .to_string(),
     )
     .unwrap();
+    secure_registry_file(fixture.registry.path());
 
     let error = tokio::time::timeout(
         std::time::Duration::from_secs(1),
@@ -150,26 +323,24 @@ async fn stale_registry_maps_to_mora_not_running_without_waiting_for_request_tim
 #[tokio::test]
 async fn stale_registry_is_replaced_before_binding() {
     let fixture = IpcFixture::new().await;
+    let session_id = "00000000-0000-4000-8000-000000000001";
     std::fs::write(
         fixture.registry.path(),
         serde_json::json!({
             "protocolVersion": PROTOCOL_VERSION,
-            "sessionId": "stale-session",
+            "sessionId": session_id,
             "pid": std::process::id(),
             "transport": if cfg!(windows) { "namedPipe" } else { "unixSocket" },
-            "address": if cfg!(windows) {
-                r"\\.\pipe\mora-agent-stale-session"
-            } else {
-                "/tmp/mora-agent-stale-session.sock"
-            },
+            "address": expected_address(&fixture.registry, session_id),
         })
         .to_string(),
     )
     .unwrap();
+    secure_registry_file(fixture.registry.path());
 
     let server = fixture.start(ok_handler()).await;
 
-    assert_ne!(server.descriptor().session_id, "stale-session");
+    assert_ne!(server.descriptor().session_id, session_id);
     assert_eq!(
         fixture.registry.read().unwrap().session_id,
         server.descriptor().session_id
@@ -226,6 +397,58 @@ async fn server_runs_no_more_than_eight_handlers_concurrently() {
     assert_eq!(maximum.load(Ordering::SeqCst), 8);
 }
 
+#[cfg(windows)]
+#[tokio::test]
+async fn ninth_named_pipe_instance_is_not_created_without_a_permit() {
+    use tokio::net::windows::named_pipe::ClientOptions;
+
+    let fixture = IpcFixture::new().await;
+    let active = Arc::new(AtomicUsize::new(0));
+    let release = Arc::new(Semaphore::new(0));
+    let server = fixture
+        .start({
+            let active = active.clone();
+            let release = release.clone();
+            move |_| {
+                let active = active.clone();
+                let release = release.clone();
+                async move {
+                    active.fetch_add(1, Ordering::SeqCst);
+                    release.acquire().await.unwrap().forget();
+                    active.fetch_sub(1, Ordering::SeqCst);
+                    AgentResult::Status(listening_status())
+                }
+            }
+        })
+        .await;
+    let client = AgentClient::connect_to(server.descriptor()).await.unwrap();
+    let requests: Vec<_> = (0..8)
+        .map(|_| {
+            let client = client.clone();
+            tokio::spawn(async move { client.request(AgentRequestKind::Status).await })
+        })
+        .collect();
+
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while active.load(Ordering::SeqCst) < 8 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+
+    let ninth = ClientOptions::new().open(&server.descriptor().address);
+    assert!(
+        ninth.is_err(),
+        "a ninth named-pipe instance was connectable while all permits were occupied"
+    );
+
+    release.add_permits(8);
+    for request in requests {
+        assert!(request.await.unwrap().is_ok());
+    }
+}
+
 #[tokio::test]
 async fn watch_returns_only_document_events_after_acknowledgement() {
     let fixture = IpcFixture::new().await;
@@ -265,23 +488,27 @@ async fn windows_registry_allows_only_system_and_current_user() {
     let fixture = IpcFixture::new().await;
     let _server = fixture.start(ok_handler()).await;
 
-    let sddl = windows_file_dacl_sddl(fixture.registry.path());
     let current_sid = windows_current_user_sid();
-
-    assert!(
-        sddl.starts_with("D:P"),
-        "registry DACL is not protected: {sddl}"
-    );
-    assert_eq!(
-        sddl.matches("(A;").count(),
-        2,
-        "registry DACL contains unexpected access entries: {sddl}"
-    );
-    assert!(sddl.contains(";;;SY)"), "SYSTEM is missing from: {sddl}");
-    assert!(
-        sddl.contains(&format!(";;;{current_sid})")),
-        "current user is missing from: {sddl}"
-    );
+    for path in [
+        fixture.registry.path().to_path_buf(),
+        fixture.registry.path().with_extension("lock"),
+    ] {
+        let sddl = windows_file_dacl_sddl(&path);
+        assert!(
+            sddl.starts_with("D:P"),
+            "owner-only file DACL is not protected: {sddl}"
+        );
+        assert_eq!(
+            sddl.matches("(A;").count(),
+            2,
+            "owner-only file DACL contains unexpected access entries: {sddl}"
+        );
+        assert!(sddl.contains(";;;SY)"), "SYSTEM is missing from: {sddl}");
+        assert!(
+            sddl.contains(&format!(";;;{current_sid})")),
+            "current user is missing from: {sddl}"
+        );
+    }
 }
 
 #[cfg(unix)]
@@ -358,6 +585,47 @@ fn snapshot_with_content(content: String) -> AgentDocumentSnapshot {
         },
         content,
         meta: None,
+    }
+}
+
+fn valid_descriptor_json() -> String {
+    let session_id = "00000000-0000-4000-8000-000000000001";
+    serde_json::json!({
+        "protocolVersion": PROTOCOL_VERSION,
+        "sessionId": session_id,
+        "pid": std::process::id(),
+        "transport": if cfg!(windows) { "namedPipe" } else { "unixSocket" },
+        "address": if cfg!(windows) {
+            format!(r"\\.\pipe\mora-agent-{session_id}")
+        } else {
+            format!("/tmp/mora-agent-{session_id}.sock")
+        },
+    })
+    .to_string()
+}
+
+fn expected_address(registry: &EndpointRegistry, session_id: &str) -> String {
+    if cfg!(windows) {
+        format!(r"\\.\pipe\mora-agent-{session_id}")
+    } else {
+        registry
+            .path()
+            .parent()
+            .unwrap()
+            .join(format!("mora-agent-{session_id}.sock"))
+            .to_string_lossy()
+            .into_owned()
+    }
+}
+
+fn secure_registry_file(path: &std::path::Path) {
+    #[cfg(windows)]
+    mdxnote_lib::agent_ipc::windows::apply_owner_only_permissions(path).unwrap();
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
     }
 }
 

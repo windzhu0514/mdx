@@ -1,5 +1,5 @@
 use crate::agent_ipc::{
-    connect, endpoint_is_live, ipc_error, read_server_message, write_request,
+    connect_until, endpoint_is_live, ipc_error, read_server_message, write_request,
     AgentEndpointDescriptor, EndpointRegistry,
 };
 use crate::agent_protocol::{
@@ -7,7 +7,10 @@ use crate::agent_protocol::{
     AgentServerMessage, MORA_NOT_RUNNING, PROTOCOL_MISMATCH, PROTOCOL_VERSION, REQUEST_TIMEOUT,
 };
 use futures_util::Stream;
+use std::future::Future;
 use std::pin::Pin;
+use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::time::Instant;
 use uuid::Uuid;
 
 pub type AgentEventStream =
@@ -25,9 +28,7 @@ impl AgentClient {
     }
 
     pub async fn connect_with_registry(registry: EndpointRegistry) -> Result<Self, AgentError> {
-        let descriptor = registry
-            .read()
-            .map_err(|_| ipc_error(MORA_NOT_RUNNING, "The Mora Agent bridge is not running."))?;
+        let descriptor = registry.read_for_client()?;
         let client = Self::connect_to(&descriptor).await?;
         if !endpoint_is_live(&client.descriptor).await {
             return Err(ipc_error(
@@ -51,57 +52,32 @@ impl AgentClient {
     }
 
     pub async fn request(&self, request: AgentRequestKind) -> Result<AgentResult, AgentError> {
-        let mut stream = connect(&self.descriptor).await?;
-        let request_id = Uuid::new_v4().to_string();
-        let request = AgentRequest {
-            protocol_version: PROTOCOL_VERSION,
-            request_id: request_id.clone(),
-            request,
-        };
-        tokio::time::timeout(REQUEST_TIMEOUT, write_request(&mut stream, &request))
-            .await
-            .map_err(|_| {
-                ipc_error(
-                    crate::agent_protocol::TIMEOUT,
-                    "The Agent request timed out.",
-                )
-            })??;
-        let message = tokio::time::timeout(REQUEST_TIMEOUT, read_server_message(&mut stream))
-            .await
-            .map_err(|_| {
-                ipc_error(
-                    crate::agent_protocol::TIMEOUT,
-                    "The Agent request timed out.",
-                )
-            })??;
-        response_result(message, &request_id)
+        let deadline = Instant::now() + REQUEST_TIMEOUT;
+        let stream = connect_until(&self.descriptor, deadline).await?;
+        request_over_stream_until(stream, request, deadline).await
     }
 
     pub async fn watch(&self, document_id: Option<String>) -> Result<AgentEventStream, AgentError> {
-        let mut stream = connect(&self.descriptor).await?;
+        let deadline = Instant::now() + REQUEST_TIMEOUT;
+        let mut stream = connect_until(&self.descriptor, deadline).await?;
         let request_id = Uuid::new_v4().to_string();
         let request = AgentRequest {
             protocol_version: PROTOCOL_VERSION,
             request_id: request_id.clone(),
             request: AgentRequestKind::Watch { document_id },
         };
-        tokio::time::timeout(REQUEST_TIMEOUT, write_request(&mut stream, &request))
-            .await
-            .map_err(|_| {
-                ipc_error(
-                    crate::agent_protocol::TIMEOUT,
-                    "The Agent watch request timed out.",
-                )
-            })??;
-        let acknowledgement =
-            tokio::time::timeout(REQUEST_TIMEOUT, read_server_message(&mut stream))
-                .await
-                .map_err(|_| {
-                    ipc_error(
-                        crate::agent_protocol::TIMEOUT,
-                        "The Agent watch request timed out.",
-                    )
-                })??;
+        client_phase(
+            deadline,
+            write_request(&mut stream, &request),
+            "The Agent watch request timed out.",
+        )
+        .await?;
+        let acknowledgement = client_phase(
+            deadline,
+            read_server_message(&mut stream),
+            "The Agent watch request timed out.",
+        )
+        .await?;
         response_result(acknowledgement, &request_id)?;
 
         let stream =
@@ -126,6 +102,48 @@ impl AgentClient {
             });
         Ok(Box::pin(stream))
     }
+}
+
+async fn request_over_stream_until<S>(
+    mut stream: S,
+    request: AgentRequestKind,
+    deadline: Instant,
+) -> Result<AgentResult, AgentError>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let request_id = Uuid::new_v4().to_string();
+    let request = AgentRequest {
+        protocol_version: PROTOCOL_VERSION,
+        request_id: request_id.clone(),
+        request,
+    };
+    client_phase(
+        deadline,
+        write_request(&mut stream, &request),
+        "The Agent request timed out.",
+    )
+    .await?;
+    let message = client_phase(
+        deadline,
+        read_server_message(&mut stream),
+        "The Agent request timed out.",
+    )
+    .await?;
+    response_result(message, &request_id)
+}
+
+async fn client_phase<T, F>(
+    deadline: Instant,
+    future: F,
+    timeout_message: &'static str,
+) -> Result<T, AgentError>
+where
+    F: Future<Output = Result<T, AgentError>>,
+{
+    tokio::time::timeout_at(deadline, future)
+        .await
+        .map_err(|_| ipc_error(crate::agent_protocol::TIMEOUT, timeout_message))?
 }
 
 fn response_result(
@@ -156,8 +174,13 @@ fn response_result(
 
 #[cfg(test)]
 mod tests {
-    use super::response_result;
-    use crate::agent_protocol::{AgentError, AgentResponse, AgentServerMessage, PROTOCOL_MISMATCH};
+    use super::{request_over_stream_until, response_result};
+    use crate::agent_protocol::{
+        encode_frame, AgentError, AgentRequest, AgentRequestKind, AgentResponse,
+        AgentServerMessage, PROTOCOL_MISMATCH, TIMEOUT,
+    };
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::time::{Duration, Instant};
 
     #[test]
     fn response_request_id_must_match_the_request() {
@@ -171,5 +194,41 @@ mod tests {
         let error = response_result(message, "expected-request").unwrap_err();
 
         assert_eq!(error.code, PROTOCOL_MISMATCH);
+    }
+
+    #[tokio::test]
+    async fn request_uses_one_deadline_across_write_and_response() {
+        let (client_stream, mut server_stream) = tokio::io::duplex(64);
+        let server = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(35)).await;
+            let mut prefix = [0_u8; 4];
+            server_stream.read_exact(&mut prefix).await.unwrap();
+            let length = u32::from_be_bytes(prefix) as usize;
+            let mut payload = vec![0_u8; length];
+            server_stream.read_exact(&mut payload).await.unwrap();
+            let request: AgentRequest = serde_json::from_slice(&payload).unwrap();
+
+            tokio::time::sleep(Duration::from_millis(35)).await;
+            let response = AgentServerMessage::Response {
+                response: AgentResponse::failure(
+                    request.request_id,
+                    AgentError::new("DOCUMENT_BUSY", "Document is busy."),
+                ),
+            };
+            let payload = serde_json::to_vec(&response).unwrap();
+            let frame = encode_frame(&payload).unwrap();
+            let _ = server_stream.write_all(&frame).await;
+        });
+
+        let error = request_over_stream_until(
+            client_stream,
+            AgentRequestKind::Status,
+            Instant::now() + Duration::from_millis(50),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.code, TIMEOUT);
+        server.await.unwrap();
     }
 }
