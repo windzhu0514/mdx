@@ -58,31 +58,35 @@ export type AgentDocumentEvent = {
     source: AgentDocumentChangeSource;
 };
 
-export type AgentFrontendRequest =
-    | {
-          requestId: string;
-          method: "listDocuments";
-          params: Record<string, never>;
-      }
-    | {
-          requestId: string;
-          method: "readDocument";
-          params: { documentId: string };
-      }
-    | {
-          requestId: string;
-          method: "replaceDocument";
-          params: {
-              documentId: string;
-              baseLiveRevision: string;
-              content: string;
-          };
-      }
-    | {
-          requestId: string;
-          method: "saveDocument";
-          params: { documentId: string; baseLiveRevision: string };
-      };
+type AgentDispatchIdentity = {
+    requestId: string;
+    dispatchToken: string;
+    operationGeneration: number;
+};
+
+export type AgentFrontendRequest = AgentDispatchIdentity &
+    (
+        | {
+              method: "listDocuments";
+              params: Record<string, never>;
+          }
+        | {
+              method: "readDocument";
+              params: { documentId: string };
+          }
+        | {
+              method: "replaceDocument";
+              params: {
+                  documentId: string;
+                  baseLiveRevision: string;
+                  content: string;
+              };
+          }
+        | {
+              method: "saveDocument";
+              params: { documentId: string; baseLiveRevision: string };
+          }
+    );
 
 export type AgentFrontendError = {
     code: AgentErrorCode;
@@ -90,14 +94,15 @@ export type AgentFrontendError = {
     detail?: Record<string, unknown>;
 };
 
-export type AgentFrontendResponse =
-    | {
-          requestId: string;
-          result: AgentDocumentSummary[] | AgentDocumentSnapshot | AgentMutationResult;
-          error?: never;
-      }
-    | {
-          requestId: string;
-          error: AgentFrontendError;
-          result?: never;
-      };
+export type AgentFrontendResponse = AgentDispatchIdentity &
+    (
+        | {
+              result:
+                  AgentDocumentSummary[] | AgentDocumentSnapshot | AgentMutationResult;
+              error?: never;
+          }
+        | {
+              error: AgentFrontendError;
+              result?: never;
+          }
+    );

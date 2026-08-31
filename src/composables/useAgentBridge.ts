@@ -23,6 +23,12 @@ export type AgentBridgeOptions = {
     onMutation(documentId: string): void;
 };
 
+type BridgeLifecycle = "confirmed-stopped" | "running" | "unknown";
+
+type DispatchInvalidation = {
+    operationGeneration: number;
+};
+
 const DISABLED_STATUS: AgentBridgeStatus = {
     enabled: false,
     listening: false,
@@ -136,9 +142,12 @@ export function useAgentBridge(options: AgentBridgeOptions) {
     let publishDelay: AbortController | null = null;
     let requestUnlisten: UnlistenFn | null = null;
     let statusUnlisten: UnlistenFn | null = null;
+    let invalidationUnlisten: UnlistenFn | null = null;
     let disposed = false;
     let startedBridge = false;
     let startRequested = false;
+    let lifecycle: BridgeLifecycle = "unknown";
+    let minimumOperationGeneration = 0;
     let operationTail = Promise.resolve();
 
     function document(documentId: string) {
@@ -146,16 +155,26 @@ export function useAgentBridge(options: AgentBridgeOptions) {
     }
 
     async function handleRequest(request: AgentFrontendRequest): Promise<void> {
+        const identity = {
+            requestId: request.requestId,
+            dispatchToken: request.dispatchToken,
+            operationGeneration: request.operationGeneration,
+        };
         let response: AgentFrontendResponse;
         try {
-            if (request.method === "listDocuments") {
+            if (disposed || request.operationGeneration < minimumOperationGeneration) {
                 response = {
-                    requestId: request.requestId,
+                    ...identity,
+                    error: frontendError({ code: "AGENT_ACCESS_DISABLED" }),
+                };
+            } else if (request.method === "listDocuments") {
+                response = {
+                    ...identity,
                     result: options.session.documents.value.map(summary),
                 };
             } else if (request.method === "readDocument") {
                 response = {
-                    requestId: request.requestId,
+                    ...identity,
                     result: snapshot(document(request.params.documentId)),
                 };
             } else if (request.method === "replaceDocument") {
@@ -165,7 +184,7 @@ export function useAgentBridge(options: AgentBridgeOptions) {
                     request.params.baseLiveRevision,
                 );
                 options.onMutation(runtime.id);
-                response = { requestId: request.requestId, result: summary(runtime) };
+                response = { ...identity, result: summary(runtime) };
             } else if (request.method === "saveDocument") {
                 options.session.assertLiveRevision(
                     request.params.documentId,
@@ -175,10 +194,10 @@ export function useAgentBridge(options: AgentBridgeOptions) {
                     request.params.documentId,
                     request.params.baseLiveRevision,
                 );
-                response = { requestId: request.requestId, result: summary(runtime) };
+                response = { ...identity, result: summary(runtime) };
             } else {
                 response = {
-                    requestId: (request as { requestId: string }).requestId,
+                    ...identity,
                     error: frontendError({ code: "PROTOCOL_MISMATCH" }),
                 };
             }
@@ -192,7 +211,7 @@ export function useAgentBridge(options: AgentBridgeOptions) {
                     ? request.params.documentId
                     : undefined;
             response = {
-                requestId: request.requestId,
+                ...identity,
                 error: frontendError(error, documentId),
             };
         }
@@ -240,6 +259,44 @@ export function useAgentBridge(options: AgentBridgeOptions) {
         }
     }
 
+    function acceptStatus(next: AgentBridgeStatus) {
+        status.value = next;
+        lifecycle = next.enabled || next.listening ? "running" : "confirmed-stopped";
+        startedBridge = lifecycle === "running";
+    }
+
+    async function conservativeStop(lastError?: string): Promise<boolean> {
+        try {
+            const stopped = await invoke<AgentBridgeStatus>("set_agent_access_enabled", {
+                enabled: false,
+            });
+            acceptStatus(stopped);
+            if (lastError) status.value = { ...status.value, lastError };
+            return true;
+        } catch (error) {
+            lifecycle = "unknown";
+            status.value = {
+                ...status.value,
+                lastError: lastError ?? bridgeErrorMessage(error),
+            };
+            return false;
+        }
+    }
+
+    async function reconcileAfterTransitionFailure(message: string) {
+        try {
+            const actual = await invoke<AgentBridgeStatus>("get_agent_bridge_status");
+            acceptStatus(actual);
+        } catch {
+            lifecycle = "unknown";
+        }
+        if (lifecycle !== "confirmed-stopped") {
+            await conservativeStop(message);
+        } else {
+            status.value = { ...status.value, lastError: message };
+        }
+    }
+
     async function syncEnabled(enabled: boolean) {
         if (disposed) return;
         if (enabled) startRequested = true;
@@ -249,26 +306,25 @@ export function useAgentBridge(options: AgentBridgeOptions) {
             pendingEvents.clear();
         }
         try {
+            if (enabled && lifecycle === "unknown") {
+                const stopped = await conservativeStop();
+                if (!stopped) {
+                    startRequested = false;
+                    return;
+                }
+            }
             const next = await invoke<AgentBridgeStatus>("set_agent_access_enabled", {
                 enabled,
             });
             if (disposed) return;
-            status.value = next;
-            startedBridge = enabled && next.enabled;
+            acceptStatus(next);
             startRequested = false;
             if (next.listening) queueDocumentEvents();
         } catch (error) {
             if (disposed) return;
-            startedBridge = false;
             startRequested = false;
-            status.value = {
-                ...status.value,
-                enabled: false,
-                listening: false,
-                connectedClients: 0,
-                watcherClients: 0,
-                lastError: bridgeErrorMessage(error),
-            };
+            lifecycle = "unknown";
+            await reconcileAfterTransitionFailure(bridgeErrorMessage(error));
         }
     }
 
@@ -276,6 +332,7 @@ export function useAgentBridge(options: AgentBridgeOptions) {
         if (!options.desktop) return false;
         let unlistenRequest: UnlistenFn | null = null;
         let unlistenStatus: UnlistenFn | null = null;
+        let unlistenInvalidation: UnlistenFn | null = null;
         try {
             unlistenRequest = await listen<AgentFrontendRequest>(
                 "mora://agent-request",
@@ -290,7 +347,7 @@ export function useAgentBridge(options: AgentBridgeOptions) {
             unlistenStatus = await listen<AgentBridgeStatus>(
                 "mora://agent-status",
                 (event) => {
-                    status.value = event.payload;
+                    acceptStatus(event.payload);
                     if (event.payload.listening) {
                         queueDocumentEvents();
                     } else {
@@ -299,24 +356,39 @@ export function useAgentBridge(options: AgentBridgeOptions) {
                     }
                 },
             );
+            unlistenInvalidation = await listen<DispatchInvalidation>(
+                "mora://agent-dispatch-invalidated",
+                (event) => {
+                    minimumOperationGeneration = Math.max(
+                        minimumOperationGeneration,
+                        event.payload.operationGeneration,
+                    );
+                },
+            );
             const initialStatus = await invoke<AgentBridgeStatus>(
                 "get_agent_bridge_status",
             );
             if (disposed) {
                 unlistenRequest();
                 unlistenStatus();
+                unlistenInvalidation();
                 return false;
             }
             requestUnlisten = unlistenRequest;
             statusUnlisten = unlistenStatus;
-            status.value = initialStatus;
+            invalidationUnlisten = unlistenInvalidation;
+            acceptStatus(initialStatus);
             return true;
         } catch (error) {
+            const message = bridgeErrorMessage(error);
+            lifecycle = "unknown";
+            await conservativeStop(message);
             unlistenRequest?.();
             unlistenStatus?.();
+            unlistenInvalidation?.();
             status.value = {
-                ...DISABLED_STATUS,
-                lastError: bridgeErrorMessage(error),
+                ...status.value,
+                lastError: message,
             };
             return false;
         }
@@ -357,7 +429,9 @@ export function useAgentBridge(options: AgentBridgeOptions) {
 
     function dispose() {
         if (disposed) return;
-        const shouldStopBridge = startedBridge || startRequested;
+        const shouldStopBridge =
+            options.desktop &&
+            (lifecycle !== "confirmed-stopped" || startedBridge || startRequested);
         disposed = true;
         stopEnabledWatch();
         stopDocumentWatch();
@@ -365,15 +439,19 @@ export function useAgentBridge(options: AgentBridgeOptions) {
         pendingEvents.clear();
         requestUnlisten?.();
         statusUnlisten?.();
+        invalidationUnlisten?.();
         requestUnlisten = null;
         statusUnlisten = null;
+        invalidationUnlisten = null;
         startedBridge = false;
         startRequested = false;
         if (shouldStopBridge) {
-            void operationTail.then(
-                () => invoke("set_agent_access_enabled", { enabled: false }),
-                () => invoke("set_agent_access_enabled", { enabled: false }),
-            );
+            void operationTail
+                .then(
+                    () => invoke("set_agent_access_enabled", { enabled: false }),
+                    () => invoke("set_agent_access_enabled", { enabled: false }),
+                )
+                .catch(() => undefined);
         }
     }
 
