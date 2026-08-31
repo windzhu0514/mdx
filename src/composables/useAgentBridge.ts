@@ -410,11 +410,8 @@ export function useAgentBridge(options: AgentBridgeOptions) {
 
     async function initialize(): Promise<boolean> {
         if (!options.desktop) return false;
-        let unlistenRequest: UnlistenFn | null = null;
-        let unlistenStatus: UnlistenFn | null = null;
-        let unlistenInvalidation: UnlistenFn | null = null;
         try {
-            unlistenRequest = await listen<AgentFrontendRequest>(
+            requestUnlisten = await listen<AgentFrontendRequest>(
                 "mora://agent-request",
                 async (event) => {
                     try {
@@ -424,7 +421,12 @@ export function useAgentBridge(options: AgentBridgeOptions) {
                     }
                 },
             );
-            unlistenStatus = await listen<AgentBridgeStatus>(
+            if (disposed || listenersCleaned) {
+                requestUnlisten();
+                requestUnlisten = null;
+                return false;
+            }
+            statusUnlisten = await listen<AgentBridgeStatus>(
                 "mora://agent-status",
                 (event) => {
                     acceptStatus(event.payload);
@@ -436,7 +438,12 @@ export function useAgentBridge(options: AgentBridgeOptions) {
                     }
                 },
             );
-            unlistenInvalidation = await listen<DispatchInvalidation>(
+            if (disposed || listenersCleaned) {
+                statusUnlisten();
+                statusUnlisten = null;
+                return false;
+            }
+            invalidationUnlisten = await listen<DispatchInvalidation>(
                 "mora://agent-dispatch-invalidated",
                 (event) => {
                     minimumOperationGeneration = Math.max(
@@ -445,27 +452,24 @@ export function useAgentBridge(options: AgentBridgeOptions) {
                     );
                 },
             );
+            if (disposed || listenersCleaned) {
+                invalidationUnlisten();
+                invalidationUnlisten = null;
+                return false;
+            }
             const initialStatus = await invoke<AgentBridgeStatus>(
                 "get_agent_bridge_status",
             );
             if (disposed) {
-                unlistenRequest();
-                unlistenStatus();
-                unlistenInvalidation();
                 return false;
             }
-            requestUnlisten = unlistenRequest;
-            statusUnlisten = unlistenStatus;
-            invalidationUnlisten = unlistenInvalidation;
             acceptStatus(initialStatus);
             return true;
         } catch (error) {
             const message = bridgeErrorMessage(error);
             lifecycle = "unknown";
             await conservativeStop(message);
-            unlistenRequest?.();
-            unlistenStatus?.();
-            unlistenInvalidation?.();
+            cleanupListeners();
             status.value = {
                 ...status.value,
                 lastError: message,

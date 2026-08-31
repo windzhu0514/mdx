@@ -638,4 +638,81 @@ describe("useAgentBridge", () => {
             ).toHaveBeenCalledTimes(1);
         });
     });
+
+    it("cleans initialized listeners when status fails and the first conservative stop hangs", async () => {
+        const timeoutControllers: AbortController[] = [];
+        const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockImplementation(() => {
+            const controller = new AbortController();
+            timeoutControllers.push(controller);
+            return controller.signal;
+        });
+        let stopCalls = 0;
+        tauri.invoke.mockImplementation(async (command: string, args?: unknown) => {
+            if (command === "get_agent_bridge_status") {
+                throw { message: "status unavailable" };
+            }
+            if (
+                command === "set_agent_access_enabled" &&
+                !(args as { enabled: boolean }).enabled
+            ) {
+                stopCalls += 1;
+                if (stopCalls === 1) {
+                    return new Promise<AgentBridgeStatus>(() => undefined);
+                }
+                return disabledStatus;
+            }
+            return undefined;
+        });
+        const saveDocument =
+            vi.fn<(id: string, revision: string) => Promise<OpenDocument>>();
+        const bridge = useAgentBridge({
+            desktop: true,
+            enabled: ref(false),
+            session: useDocumentSession(false),
+            saveDocument,
+            onMutation: vi.fn(),
+        });
+        try {
+            await vi.waitFor(() => {
+                expect(tauri.listeners.size).toBe(3);
+                expect(stopCalls).toBe(1);
+            });
+
+            bridge.dispose();
+            bridge.dispose();
+            await vi.waitFor(() => expect(timeoutControllers.length).toBeGreaterThan(0));
+            timeoutControllers[timeoutControllers.length - 1]?.abort();
+
+            await vi.waitFor(() => expect(stopCalls).toBe(2));
+            await vi.waitFor(() => {
+                expect(
+                    tauri.unlisteners.get("mora://agent-request"),
+                ).toHaveBeenCalledTimes(1);
+                expect(
+                    tauri.unlisteners.get("mora://agent-status"),
+                ).toHaveBeenCalledTimes(1);
+                expect(
+                    tauri.unlisteners.get("mora://agent-dispatch-invalidated"),
+                ).toHaveBeenCalledTimes(1);
+            });
+            expect(tauri.listeners.size).toBe(0);
+
+            const responsesBefore = completeResponses().length;
+            const oldListener = tauri.listeners.get("mora://agent-request");
+            await oldListener?.({
+                payload: {
+                    requestId: "disposed-request",
+                    dispatchToken: "disposed-dispatch",
+                    operationGeneration: 1,
+                    method: "saveDocument",
+                    params: { documentId: "missing", baseLiveRevision: "stale" },
+                },
+            });
+            expect(saveDocument).not.toHaveBeenCalled();
+            expect(completeResponses()).toHaveLength(responsesBefore);
+        } finally {
+            timeoutSpy.mockRestore();
+            bridge.dispose();
+        }
+    });
 });
