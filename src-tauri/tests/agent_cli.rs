@@ -1,4 +1,5 @@
 use clap::Parser;
+use futures_util::Stream;
 use mdxnote_lib::agent_cli::{
     exit_code, run_cli_with_io, run_watch_stream_with_shutdown, Cli, Command,
 };
@@ -13,7 +14,9 @@ use mdxnote_lib::agent_protocol::{
     TIMEOUT,
 };
 use std::io::{Cursor, Write};
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll};
 use tempfile::TempDir;
 use tokio::sync::{oneshot, Notify};
 
@@ -223,6 +226,122 @@ impl Write for CaptureWriter {
         self.flushes
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(())
+    }
+}
+
+#[derive(Clone, Default)]
+struct BlockingWriter {
+    state: Arc<BlockingWriterState>,
+}
+
+#[derive(Default)]
+struct BlockingWriterState {
+    buffer: Mutex<Vec<u8>>,
+    writes: std::sync::atomic::AtomicUsize,
+    flushes: std::sync::atomic::AtomicUsize,
+    first_write_started: Notify,
+    progress: Notify,
+    released: Mutex<bool>,
+    release_signal: std::sync::Condvar,
+}
+
+impl BlockingWriter {
+    async fn wait_for_first_write(&self) {
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                let notified = self.state.first_write_started.notified();
+                if self.state.writes.load(std::sync::atomic::Ordering::SeqCst) > 0 {
+                    return;
+                }
+                notified.await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+
+    async fn wait_for_flushes(&self, expected: usize) {
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                let notified = self.state.progress.notified();
+                if self.state.flushes.load(std::sync::atomic::Ordering::SeqCst) >= expected {
+                    return;
+                }
+                notified.await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+
+    fn release(&self) {
+        *self.state.released.lock().unwrap() = true;
+        self.state.release_signal.notify_all();
+    }
+
+    fn output(&self) -> String {
+        String::from_utf8(self.state.buffer.lock().unwrap().clone()).unwrap()
+    }
+
+    fn flush_count(&self) -> usize {
+        self.state.flushes.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+impl Write for BlockingWriter {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        if self
+            .state
+            .writes
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            == 0
+        {
+            self.state.first_write_started.notify_waiters();
+            let mut released = self.state.released.lock().unwrap();
+            while !*released {
+                released = self.state.release_signal.wait(released).unwrap();
+            }
+        }
+        self.state.buffer.lock().unwrap().extend_from_slice(buffer);
+        self.state.progress.notify_waiters();
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.state
+            .flushes
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.state.progress.notify_waiters();
+        Ok(())
+    }
+}
+
+struct CountingEventStream {
+    emitted: usize,
+    polls: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl CountingEventStream {
+    fn new(polls: Arc<std::sync::atomic::AtomicUsize>) -> Self {
+        Self { emitted: 0, polls }
+    }
+}
+
+impl Stream for CountingEventStream {
+    type Item = Result<AgentDocumentEvent, AgentError>;
+
+    fn poll_next(mut self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        self.polls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if self.emitted == 3 {
+            return Poll::Pending;
+        }
+        self.emitted += 1;
+        Poll::Ready(Some(Ok(AgentDocumentEvent {
+            document_id: format!("doc-{}", self.emitted),
+            live_revision: format!("session:{}", self.emitted),
+            dirty: true,
+            source: AgentChangeSource::Agent,
+        })))
     }
 }
 
@@ -603,6 +722,44 @@ async fn watch_human_prints_ack_then_event_and_flushes_each_record() {
     assert_eq!(task.await.unwrap(), 1);
     assert!(!stdout.into_string().contains("fixture content"));
     assert!(!stderr.into_string().contains("fixture content"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn watch_backpressures_events_until_a_slow_stdout_write_releases() {
+    let stdout = BlockingWriter::default();
+    let observed_stdout = stdout.clone();
+    let stderr = CaptureWriter::default();
+    let observed_stderr = stderr.clone();
+    let polls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let events: AgentEventStream = Box::pin(CountingEventStream::new(polls.clone()));
+    let (shutdown, receiver) = oneshot::channel::<()>();
+
+    let task = tokio::spawn(async move {
+        let mut stdout = stdout;
+        let mut stderr = stderr;
+        run_watch_stream_with_shutdown(events, None, true, &mut stdout, &mut stderr, async move {
+            let _ = receiver.await;
+        })
+        .await
+    });
+
+    observed_stdout.wait_for_first_write().await;
+    assert_eq!(polls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert!(!observed_stdout
+        .output()
+        .contains("fixture content secret-token"));
+
+    observed_stdout.release();
+    observed_stdout.wait_for_flushes(3).await;
+    let output = observed_stdout.output();
+    assert!(output.find("doc-1").unwrap() < output.find("doc-2").unwrap());
+    assert!(output.find("doc-2").unwrap() < output.find("doc-3").unwrap());
+    assert_eq!(observed_stdout.flush_count(), 3);
+    assert!(!output.contains("fixture content secret-token"));
+    assert!(observed_stderr.into_string().is_empty());
+
+    shutdown.send(()).unwrap();
+    assert_eq!(task.await.unwrap(), 0);
 }
 
 fn replace_cli(document_id: &str, base_revision: &str, json: bool) -> Cli {
