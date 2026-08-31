@@ -1,3 +1,5 @@
+pub mod agent_client;
+pub mod agent_ipc;
 pub mod agent_protocol;
 mod ai;
 mod archive_security;
