@@ -4,6 +4,7 @@ import { createApp, h, nextTick } from "vue";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { DEFAULT_PREFERENCES } from "../composables/usePreferences";
+import type { AgentBridgeStatus } from "../types/agent";
 import SettingsPanel from "./SettingsPanel.vue";
 
 let cleanup: (() => void) | undefined;
@@ -15,11 +16,21 @@ afterEach(() => {
 });
 
 function settingsProps() {
+    const agentStatus: AgentBridgeStatus = {
+        enabled: false,
+        listening: false,
+        connectedClients: 0,
+        watcherClients: 0,
+        cliPath: null,
+        protocolVersion: 1,
+        lastError: null,
+    };
     return {
         open: true,
         preferences: DEFAULT_PREFERENCES,
         aiKeyConfigured: false,
         aiKeySaving: false,
+        agentStatus,
     };
 }
 
@@ -41,7 +52,7 @@ describe("SettingsPanel", () => {
             Array.from(
                 host.querySelectorAll<HTMLButtonElement>(".settings-nav button"),
             ).map((button) => button.textContent?.trim()),
-        ).toEqual(["外观", "编辑器", "AI"]);
+        ).toEqual(["外观", "编辑器", "AI", "Agent"]);
 
         const preview = host.querySelector<HTMLElement>(".settings-live-preview");
         expect(preview?.textContent).toContain("Mora 字体预览");
@@ -64,6 +75,35 @@ describe("SettingsPanel", () => {
 
         host.querySelector<HTMLButtonElement>(".settings-back")?.click();
         expect(close).toHaveBeenCalledTimes(1);
+    });
+
+    it("explains default-off Agent access and emits the explicit opt-in", async () => {
+        const update = vi.fn();
+        const host = document.createElement("div");
+        document.body.append(host);
+        const app = createApp({
+            render: () => h(SettingsPanel, { ...settingsProps(), onUpdate: update }),
+        });
+        app.mount(host);
+        cleanup = () => app.unmount();
+
+        const agentCategory = Array.from(
+            host.querySelectorAll<HTMLButtonElement>(".settings-nav button"),
+        ).find((button) => button.textContent?.trim() === "Agent");
+        agentCategory?.click();
+        await nextTick();
+
+        expect(host.textContent).toContain("默认关闭");
+        expect(host.textContent).toContain("未保存内容");
+
+        const toggle = host.querySelector<HTMLInputElement>(
+            '[aria-label="本地 Agent 接入"]',
+        );
+        if (!toggle) throw new Error("未找到本地 Agent 接入开关");
+        toggle.checked = true;
+        toggle.dispatchEvent(new Event("change", { bubbles: true }));
+
+        expect(update).toHaveBeenCalledWith({ agentAccessEnabled: true });
     });
 
     it("offers system mode and all six themes, then emits a concrete selection", async () => {

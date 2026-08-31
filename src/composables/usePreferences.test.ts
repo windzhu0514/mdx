@@ -64,6 +64,16 @@ describe("editor preferences", () => {
         expect(preferences.aiModel).toBe("");
     });
 
+    it("keeps local Agent access default-off and accepts only exact booleans", () => {
+        expect(DEFAULT_PREFERENCES.agentAccessEnabled).toBe(false);
+        expect(
+            normalizePreferences({ agentAccessEnabled: "yes" }).agentAccessEnabled,
+        ).toBe(false);
+        expect(
+            normalizePreferences({ agentAccessEnabled: true }).agentAccessEnabled,
+        ).toBe(true);
+    });
+
     it("trims and persists valid AI settings", () => {
         const storage = memoryStorage();
         savePreferences(storage, {

@@ -58,6 +58,32 @@ async fn client_round_trips_over_current_platform_transport() {
 }
 
 #[tokio::test]
+async fn reports_connection_and_watcher_lifecycle() {
+    let fixture = IpcFixture::new().await;
+    let server = fixture.start(ok_handler()).await;
+    let mut counts = server.subscribe_connection_counts();
+    let client = AgentClient::connect_to(server.descriptor()).await.unwrap();
+
+    let stream = client.watch(None).await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while counts.borrow().connected_clients != 1 || counts.borrow().watcher_clients != 1 {
+            counts.changed().await.unwrap();
+        }
+    })
+    .await
+    .unwrap();
+
+    drop(stream);
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while counts.borrow().connected_clients != 0 || counts.borrow().watcher_clients != 0 {
+            counts.changed().await.unwrap();
+        }
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
 async fn connect_to_rejects_mutated_descriptor_fields() {
     let fixture = IpcFixture::new().await;
     let server = fixture.start(ok_handler()).await;

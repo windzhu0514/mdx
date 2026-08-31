@@ -4,12 +4,23 @@ import { createApp, h, nextTick, type Component } from "vue";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { DEFAULT_PREFERENCES } from "../composables/usePreferences";
+import type { AgentBridgeStatus } from "../types/agent";
 import AttachmentPanel from "./AttachmentPanel.vue";
 import HistoryPanel from "./HistoryPanel.vue";
 import LibraryPanel from "./LibraryPanel.vue";
 import SettingsPanel from "./SettingsPanel.vue";
 
 let cleanup: (() => void) | undefined;
+
+const disabledAgentStatus: AgentBridgeStatus = {
+    enabled: false,
+    listening: false,
+    connectedClients: 0,
+    watcherClients: 0,
+    cliPath: null,
+    protocolVersion: 1,
+    lastError: null,
+};
 
 afterEach(() => {
     cleanup?.();
@@ -83,6 +94,7 @@ describe("面板关闭按钮", () => {
             preferences: DEFAULT_PREFERENCES,
             aiKeyConfigured: false,
             aiKeySaving: false,
+            agentStatus: disabledAgentStatus,
         });
         const workspace = host.querySelector<HTMLElement>(".settings-workspace");
         const backButton = host.querySelector<HTMLButtonElement>(".settings-back");
@@ -102,6 +114,7 @@ describe("AI 设置", () => {
             preferences: DEFAULT_PREFERENCES,
             aiKeyConfigured: false,
             aiKeySaving: false,
+            agentStatus: disabledAgentStatus,
             onUpdate: update,
             onSaveAiKey: saveAiKey,
         });
@@ -148,6 +161,7 @@ describe("AI 设置", () => {
             preferences: DEFAULT_PREFERENCES,
             aiKeyConfigured: true,
             aiKeySaving: false,
+            agentStatus: disabledAgentStatus,
             onDeleteAiKey: deleteAiKey,
         });
         Array.from(host.querySelectorAll<HTMLButtonElement>(".settings-nav button"))

@@ -47,6 +47,7 @@ import {
     type SessionDocument,
 } from "./composables/useDocumentSession";
 import { useAppUpdater } from "./composables/useAppUpdater";
+import { useAgentBridge } from "./composables/useAgentBridge";
 import { isDarkTheme, usePreferences, type ThemeId } from "./composables/usePreferences";
 import type { HistoryListItem, HistorySnapshot } from "./types/history";
 import type { NoteListItem, NoteSearchResult } from "./types/library";
@@ -236,6 +237,28 @@ const commandPaletteBlocked = computed(
         mermaidViewerRequest.value !== null,
 );
 const savingDocumentIds = new Set<string>();
+const agentBridge = useAgentBridge({
+    desktop: tauriRuntime,
+    enabled: computed(() => preferences.value.agentAccessEnabled),
+    session,
+    saveDocument: saveDocumentForAgent,
+    onMutation() {
+        errorMessage.value = "";
+        statusMessage.value = "Agent 已修改文档";
+    },
+});
+const agentStatus = agentBridge.status;
+watch(agentStatus, (currentStatus) => {
+    if (
+        preferences.value.agentAccessEnabled &&
+        !currentStatus.enabled &&
+        currentStatus.lastError
+    ) {
+        updatePreferences({ agentAccessEnabled: false });
+        errorMessage.value = `Agent 接入启动失败：${currentStatus.lastError}`;
+        statusMessage.value = "Agent 接入未开启";
+    }
+});
 let unlistenClose: (() => void) | null = null;
 let unlistenDragDrop: (() => void) | null = null;
 let unlistenFocus: (() => void) | null = null;
@@ -1014,6 +1037,32 @@ async function deleteAiApiKey() {
     }
 }
 
+async function copyAgentConfig() {
+    const cliPath = agentStatus.value.cliPath;
+    if (!cliPath) {
+        errorMessage.value = "当前安装未提供 mora-agent CLI，无法生成 MCP 配置。";
+        statusMessage.value = "MCP 配置复制失败";
+        return;
+    }
+    const config = JSON.stringify(
+        {
+            mcpServers: {
+                mora: { command: cliPath, args: ["mcp"] },
+            },
+        },
+        null,
+        2,
+    );
+    try {
+        await navigator.clipboard.writeText(config);
+        errorMessage.value = "";
+        statusMessage.value = "MCP 配置已复制";
+    } catch (error) {
+        errorMessage.value = `MCP 配置复制失败：${stringifyError(error)}`;
+        statusMessage.value = "MCP 配置复制失败";
+    }
+}
+
 onMounted(async () => {
     window.addEventListener("pointerdown", handleWindowPointerDown, true);
     window.addEventListener("keydown", handleWindowKeyDown);
@@ -1096,6 +1145,7 @@ onBeforeUnmount(() => {
     unlistenClose?.();
     unlistenDragDrop?.();
     unlistenFocus?.();
+    agentBridge.dispose();
     disposePreferences();
     void session.dispose().catch((error: unknown) => {
         console.warn("释放文档会话失败", error);
@@ -1641,6 +1691,22 @@ async function saveDocument(id: string, overwrite = false): Promise<boolean> {
         return resolveDocumentConflict(id);
     }
     return saved;
+}
+
+async function saveDocumentForAgent(id: string, baseLiveRevision: string) {
+    const runtime = session.assertLiveRevision(id, baseLiveRevision);
+    if (!runtime.path || runtime.sourceKind !== "mdx") {
+        throw { code: "SAVE_AS_REQUIRED", documentId: id };
+    }
+    if (savingDocumentIds.has(id)) {
+        throw { code: "DOCUMENT_BUSY", documentId: id };
+    }
+    savingDocumentIds.add(id);
+    try {
+        return await session.save(id);
+    } finally {
+        savingDocumentIds.delete(id);
+    }
 }
 
 async function saveDocumentAs(id: string) {
@@ -2885,11 +2951,13 @@ function stringifyError(error: unknown) {
                 :preferences="preferences"
                 :ai-key-configured="aiKeyConfigured"
                 :ai-key-saving="aiKeySaving"
+                :agent-status="agentStatus"
                 :installed-font-families="installedFontFamilies"
                 @close="closeSettingsPanel"
                 @update="updatePreferences"
                 @save-ai-key="saveAiApiKey"
                 @delete-ai-key="deleteAiApiKey"
+                @copy-agent-config="copyAgentConfig"
             />
         </div>
         <CommandPalette

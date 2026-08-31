@@ -1,3 +1,4 @@
+mod agent_bridge;
 pub mod agent_client;
 pub mod agent_ipc;
 pub mod agent_protocol;
@@ -1112,6 +1113,7 @@ pub fn run() {
     let window_state_flags = window_state::tracked_state_flags();
     tauri::Builder::default()
         .manage(AiRequestState::default())
+        .manage(agent_bridge::AgentBridgeState::default())
         .plugin(
             tauri_plugin_window_state::Builder::default()
                 .with_state_flags(window_state_flags)
@@ -1128,6 +1130,13 @@ pub fn run() {
                 let _ = window_state::fit_and_show_main_window(webview.app_handle());
             }
         })
+        .on_window_event(|window, event| {
+            if window.label() == "main" && matches!(event, tauri::WindowEvent::Destroyed) {
+                window
+                    .state::<agent_bridge::AgentBridgeState>()
+                    .shutdown_now();
+            }
+        })
         .setup(|app| {
             let _ = window_state::restore_main_window_state(app);
             Ok(())
@@ -1138,6 +1147,10 @@ pub fn run() {
             ai::has_ai_api_key,
             ai::stream_ai,
             ai::cancel_ai,
+            agent_bridge::set_agent_access_enabled,
+            agent_bridge::get_agent_bridge_status,
+            agent_bridge::complete_agent_request,
+            agent_bridge::publish_agent_document_events,
             create_mdx,
             open_mdx,
             resolve_path,

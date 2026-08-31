@@ -260,6 +260,7 @@ export type EditorPreferences = {
     showToc: boolean;
     aiBaseUrl: string;
     aiModel: string;
+    agentAccessEnabled: boolean;
 };
 
 export type PreferenceStorage = Pick<Storage, "getItem" | "setItem">;
@@ -282,6 +283,7 @@ export const DEFAULT_PREFERENCES: EditorPreferences = {
     showToc: true,
     aiBaseUrl: "",
     aiModel: "",
+    agentAccessEnabled: false,
 };
 
 function clamp(value: unknown, min: number, max: number, fallback: number) {
@@ -340,6 +342,10 @@ export function normalizePreferences(
                 : DEFAULT_PREFERENCES.showToc,
         aiBaseUrl: text(value.aiBaseUrl),
         aiModel: text(value.aiModel),
+        agentAccessEnabled:
+            typeof value.agentAccessEnabled === "boolean"
+                ? value.agentAccessEnabled
+                : DEFAULT_PREFERENCES.agentAccessEnabled,
     };
 }
 

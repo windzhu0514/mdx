@@ -16,8 +16,9 @@ import {
     LOCAL_FONT_FAMILIES,
     THEME_OPTIONS,
 } from "../composables/usePreferences";
+import type { AgentBridgeStatus } from "../types/agent";
 
-type SettingsCategory = "appearance" | "editor" | "ai";
+type SettingsCategory = "appearance" | "editor" | "ai" | "agent";
 
 const props = withDefaults(
     defineProps<{
@@ -25,6 +26,7 @@ const props = withDefaults(
         preferences: EditorPreferences;
         aiKeyConfigured: boolean;
         aiKeySaving: boolean;
+        agentStatus: AgentBridgeStatus;
         installedFontFamilies?: readonly string[] | null;
     }>(),
     { installedFontFamilies: null },
@@ -34,6 +36,7 @@ const emit = defineEmits<{
     update: [patch: Partial<EditorPreferences>];
     "save-ai-key": [key: string];
     "delete-ai-key": [];
+    "copy-agent-config": [];
 }>();
 
 const categories: Array<{
@@ -60,6 +63,12 @@ const categories: Array<{
         eyebrow: "智能写作",
         description: "配置用于所见即所得编辑器的 OpenAI-compatible 服务。",
     },
+    {
+        id: "agent",
+        label: "Agent",
+        eyebrow: "本地自动化",
+        description: "显式授权同一用户下的本地工具访问当前打开的文档。",
+    },
 ];
 
 const apiKey = ref("");
@@ -75,6 +84,11 @@ const installedFontFamilySet = computed(() => {
     return new Set(
         props.installedFontFamilies.map((family) => family.trim().toLocaleLowerCase()),
     );
+});
+const agentStatusText = computed(() => {
+    if (!props.agentStatus.enabled) return "已关闭（默认关闭）";
+    if (!props.agentStatus.listening) return "正在启动本地 endpoint";
+    return `正在监听 · ${props.agentStatus.connectedClients} 个连接 · ${props.agentStatus.watcherClients} 个订阅`;
 });
 
 watch(
@@ -337,7 +351,7 @@ function fontLabel(font: FontOption | CodeFontOption) {
                 </label>
             </div>
 
-            <div v-else class="settings-card ai-settings">
+            <div v-else-if="activeCategory === 'ai'" class="settings-card ai-settings">
                 <div>
                     <p class="panel-eyebrow">AI</p>
                     <h3>OpenAI-compatible 服务</h3>
@@ -401,6 +415,65 @@ function fontLabel(font: FontOption | CodeFontOption) {
                         @click="emit('delete-ai-key')"
                     >
                         删除 API Key
+                    </button>
+                </div>
+            </div>
+
+            <div v-else class="settings-card agent-settings">
+                <label class="setting-check agent-access-toggle">
+                    <input
+                        type="checkbox"
+                        aria-label="本地 Agent 接入"
+                        :checked="preferences.agentAccessEnabled"
+                        @change="
+                            emit('update', {
+                                agentAccessEnabled: ($event.target as HTMLInputElement)
+                                    .checked,
+                            })
+                        "
+                    />
+                    <span>
+                        <strong>本地 Agent 接入</strong>
+                        <small>默认关闭；仅在你明确开启后运行本地 endpoint。</small>
+                    </span>
+                </label>
+
+                <div class="agent-security-note" role="note">
+                    <strong>访问范围</strong>
+                    <p>
+                        开启后，同一系统用户下的程序可以读取和修改 Mora
+                        当前打开的文档，包括未保存内容。请只连接你信任的本地工具。
+                    </p>
+                </div>
+
+                <dl class="agent-status-list">
+                    <div>
+                        <dt>运行状态</dt>
+                        <dd>{{ agentStatusText }}</dd>
+                    </div>
+                    <div>
+                        <dt>Endpoint</dt>
+                        <dd>当前用户专属的本地 IPC；关闭接入后立即移除。</dd>
+                    </div>
+                    <div>
+                        <dt>CLI</dt>
+                        <dd class="agent-path">
+                            {{ agentStatus.cliPath ?? "当前安装未提供 mora-agent CLI" }}
+                        </dd>
+                    </div>
+                    <div v-if="agentStatus.lastError" class="agent-status-error">
+                        <dt>最近错误</dt>
+                        <dd>{{ agentStatus.lastError }}</dd>
+                    </div>
+                </dl>
+
+                <div class="setting-actions">
+                    <button
+                        type="button"
+                        :disabled="!agentStatus.cliPath"
+                        @click="emit('copy-agent-config')"
+                    >
+                        复制 MCP 配置
                     </button>
                 </div>
             </div>

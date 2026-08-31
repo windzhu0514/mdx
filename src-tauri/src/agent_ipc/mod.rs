@@ -37,6 +37,12 @@ pub enum AgentTransport {
     UnixSocket,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AgentConnectionCounts {
+    pub connected_clients: usize,
+    pub watcher_clients: usize,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentEndpointDescriptor {
@@ -293,6 +299,7 @@ pub struct AgentServer {
     registry: EndpointRegistry,
     cancel: watch::Sender<bool>,
     events: broadcast::Sender<AgentDocumentEvent>,
+    connection_counts: watch::Receiver<AgentConnectionCounts>,
     accept_task: Option<JoinHandle<()>>,
     stopped: bool,
     _lifecycle_lock: LifecycleLock,
@@ -375,10 +382,13 @@ impl AgentServer {
         });
         let (cancel, cancel_receiver) = watch::channel(false);
         let (events, _) = broadcast::channel(128);
+        let (connection_counts_sender, connection_counts) =
+            watch::channel(AgentConnectionCounts::default());
         let accept_task = tokio::spawn(accept_connections(
             listener,
             handler,
             events.clone(),
+            connection_counts_sender,
             cancel_receiver,
         ));
 
@@ -387,6 +397,7 @@ impl AgentServer {
             registry,
             cancel,
             events,
+            connection_counts,
             accept_task: Some(accept_task),
             stopped: false,
             _lifecycle_lock: lifecycle_lock,
@@ -399,6 +410,10 @@ impl AgentServer {
 
     pub fn publish_event(&self, event: AgentDocumentEvent) {
         let _ = self.events.send(event);
+    }
+
+    pub fn subscribe_connection_counts(&self) -> watch::Receiver<AgentConnectionCounts> {
+        self.connection_counts.clone()
     }
 
     pub async fn stop(mut self) -> Result<(), AgentError> {
@@ -448,6 +463,7 @@ async fn accept_connections(
     mut listener: platform::PlatformListener,
     handler: Handler,
     events: broadcast::Sender<AgentDocumentEvent>,
+    connection_counts: watch::Sender<AgentConnectionCounts>,
     mut cancel: watch::Receiver<bool>,
 ) {
     let connections = Arc::new(Semaphore::new(MAX_CONNECTIONS));
@@ -473,10 +489,18 @@ async fn accept_connections(
         };
         let handler = handler.clone();
         let events = events.clone();
+        let connection_counts = connection_counts.clone();
         let connection_cancel = cancel.clone();
         connection_tasks.spawn(async move {
             let _permit = permit;
-            serve_connection(stream, handler, events, connection_cancel).await;
+            serve_connection(
+                stream,
+                handler,
+                events,
+                connection_counts,
+                connection_cancel,
+            )
+            .await;
         });
     }
 
@@ -498,17 +522,75 @@ async fn serve_connection(
     stream: platform::PlatformStream,
     handler: Handler,
     events: broadcast::Sender<AgentDocumentEvent>,
+    connection_counts: watch::Sender<AgentConnectionCounts>,
     cancel: watch::Receiver<bool>,
 ) {
-    serve_connection_with_timeout(stream, handler, events, cancel, REQUEST_TIMEOUT).await;
+    serve_connection_with_lifecycle(
+        stream,
+        handler,
+        events,
+        cancel,
+        REQUEST_TIMEOUT,
+        Some(ConnectionLease::new(connection_counts)),
+    )
+    .await;
 }
 
+#[cfg(test)]
 async fn serve_connection_with_timeout<S>(
+    stream: S,
+    handler: Handler,
+    events: broadcast::Sender<AgentDocumentEvent>,
+    cancel: watch::Receiver<bool>,
+    request_timeout: std::time::Duration,
+) where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    serve_connection_with_lifecycle(stream, handler, events, cancel, request_timeout, None).await;
+}
+
+struct ConnectionLease {
+    counts: watch::Sender<AgentConnectionCounts>,
+    watcher: bool,
+}
+
+impl ConnectionLease {
+    fn new(counts: watch::Sender<AgentConnectionCounts>) -> Self {
+        counts.send_modify(|current| current.connected_clients += 1);
+        Self {
+            counts,
+            watcher: false,
+        }
+    }
+
+    fn mark_watcher(&mut self) {
+        if self.watcher {
+            return;
+        }
+        self.watcher = true;
+        self.counts
+            .send_modify(|current| current.watcher_clients += 1);
+    }
+}
+
+impl Drop for ConnectionLease {
+    fn drop(&mut self) {
+        self.counts.send_modify(|current| {
+            current.connected_clients = current.connected_clients.saturating_sub(1);
+            if self.watcher {
+                current.watcher_clients = current.watcher_clients.saturating_sub(1);
+            }
+        });
+    }
+}
+
+async fn serve_connection_with_lifecycle<S>(
     mut stream: S,
     handler: Handler,
     events: broadcast::Sender<AgentDocumentEvent>,
     mut cancel: watch::Receiver<bool>,
     request_timeout: std::time::Duration,
+    mut connection: Option<ConnectionLease>,
 ) where
     S: AsyncRead + AsyncWrite + Unpin,
 {
@@ -539,6 +621,11 @@ async fn serve_connection_with_timeout<S>(
         crate::agent_protocol::AgentRequestKind::Watch { document_id } => Some(document_id.clone()),
         _ => None,
     };
+    if watch_filter.is_some() {
+        if let Some(connection) = connection.as_mut() {
+            connection.mark_watcher();
+        }
+    }
     let mut event_receiver = watch_filter.as_ref().map(|_| events.subscribe());
     let response = match connection_phase(&mut cancel, deadline, handler(request)).await {
         Ok(Ok(result)) => AgentResponse::success(request_id, result),
@@ -561,9 +648,11 @@ async fn serve_connection_with_timeout<S>(
     let (Some(filter), Some(receiver)) = (watch_filter, event_receiver.as_mut()) else {
         return;
     };
+    let mut disconnect_probe = [0_u8; 1];
     loop {
         let event = tokio::select! {
             _ = cancel.changed() => return,
+            _ = stream.read(&mut disconnect_probe) => return,
             event = receiver.recv() => match event {
                 Ok(event) => event,
                 Err(broadcast::error::RecvError::Lagged(_)) => continue,
