@@ -33,6 +33,7 @@ thiserror = "2"
 clap = { version = "4.5", features = ["derive"] }
 url = "2.5.8"
 regex = "1"
+rmcp = { version = "3.1.4", default-features = false, features = ["server", "macros", "schemars", "transport-io"] }
 pulldown-cmark = "0.13.4"
 docx-rs = "0.4.22"
 fontdb = "0.23.0"

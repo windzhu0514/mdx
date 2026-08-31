@@ -576,7 +576,7 @@ async fn successful_commands_keep_content_exclusive_to_read_output() {
 }
 
 #[tokio::test]
-async fn stable_errors_and_mcp_placeholder_use_the_actual_output_path() {
+async fn stable_errors_use_the_actual_output_path() {
     let cases = [
         (MORA_NOT_RUNNING, 2),
         (AGENT_ACCESS_DISABLED, 3),
@@ -622,7 +622,7 @@ async fn stable_errors_and_mcp_placeholder_use_the_actual_output_path() {
 }
 
 #[tokio::test]
-async fn mcp_placeholder_and_console_entry_stay_gui_free() {
+async fn mcp_requires_process_stdio_and_console_entry_stays_gui_free() {
     let fixture = IpcFixture::new();
     let server = fixture
         .start(|_| std::future::ready(AgentResult::Status(listening_status())))
@@ -639,7 +639,7 @@ async fn mcp_placeholder_and_console_entry_stay_gui_free() {
     .await;
     assert_eq!(code, 1);
     assert!(stdout.into_string().is_empty());
-    assert!(stderr.into_string().contains("UNSUPPORTED_COMMAND"));
+    assert!(stderr.into_string().contains("INVALID_INPUT"));
     let entry = std::fs::read_to_string("src/bin/mora-agent.rs").unwrap();
     assert!(entry.contains("agent_cli::main_entry"));
     assert!(!entry.contains("tauri::Builder"));

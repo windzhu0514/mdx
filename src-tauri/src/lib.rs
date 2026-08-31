@@ -2,6 +2,7 @@ mod agent_bridge;
 pub mod agent_cli;
 pub mod agent_client;
 pub mod agent_ipc;
+pub mod agent_mcp;
 pub mod agent_protocol;
 mod ai;
 mod archive_security;

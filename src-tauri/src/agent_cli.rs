@@ -13,7 +13,6 @@ use std::path::PathBuf;
 
 const INVALID_INPUT: &str = "INVALID_INPUT";
 const INPUT_READ_FAILED: &str = "INPUT_READ_FAILED";
-const UNSUPPORTED_COMMAND: &str = "UNSUPPORTED_COMMAND";
 const REQUEST_ID_PLACEHOLDER: &str = "00000000-0000-0000-0000-000000000000";
 
 #[derive(Debug, Parser)]
@@ -71,13 +70,20 @@ pub async fn main_entry(args: impl IntoIterator<Item = OsString>) -> i32 {
         }
     };
 
+    if matches!(&cli.command, Command::Mcp) {
+        return match crate::agent_mcp::run_mcp().await {
+            Ok(()) => 0,
+            Err(error) => {
+                let mut stdout = std::io::stdout().lock();
+                let mut stderr = std::io::stderr().lock();
+                finish_error(&cli, error, &mut stdout, &mut stderr)
+            }
+        };
+    }
+
     let mut input = std::io::stdin().lock();
     let mut stdout = std::io::stdout().lock();
     let mut stderr = std::io::stderr().lock();
-    if matches!(&cli.command, Command::Mcp) {
-        return finish_error(&cli, unsupported_mcp_error(), &mut stdout, &mut stderr);
-    }
-
     let content = match read_replace_content(&cli, &mut input) {
         Ok(content) => content,
         Err(error) => return finish_error(&cli, error, &mut stdout, &mut stderr),
@@ -112,9 +118,6 @@ where
     O: Write,
     E: Write,
 {
-    if matches!(&cli.command, Command::Mcp) {
-        return finish_error(&cli, unsupported_mcp_error(), &mut stdout, &mut stderr);
-    }
     let content = match read_replace_content(&cli, &mut input) {
         Ok(content) => content,
         Err(error) => return finish_error(&cli, error, &mut stdout, &mut stderr),
@@ -204,7 +207,7 @@ where
             &Cli {
                 command: Command::Mcp,
             },
-            unsupported_mcp_error(),
+            AgentError::new(INVALID_INPUT, "MCP requires the process stdio transport."),
             stdout,
             stderr,
         ),
@@ -486,13 +489,6 @@ fn is_json(command: &Command) -> bool {
 
 fn is_jsonl(command: &Command) -> bool {
     matches!(command, Command::Watch { jsonl: true, .. })
-}
-
-fn unsupported_mcp_error() -> AgentError {
-    AgentError::new(
-        UNSUPPORTED_COMMAND,
-        "The MCP command is not available in this Mora build.",
-    )
 }
 
 #[derive(Serialize)]
