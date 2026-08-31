@@ -94,6 +94,20 @@ async fn connect_to_rejects_mutated_descriptor_fields() {
 }
 
 #[tokio::test]
+async fn connect_to_rejects_a_coordinated_descriptor_replacement() {
+    let fixture = IpcFixture::new().await;
+    let server = fixture.start(ok_handler()).await;
+    let mut replacement = server.descriptor().clone();
+    replacement.session_id = uuid::Uuid::new_v4().to_string();
+    replacement.address = expected_address(&fixture.registry, &replacement.session_id);
+    replacement.pid = if replacement.pid == 1 { 2 } else { 1 };
+
+    let error = AgentClient::connect_to(&replacement).await.unwrap_err();
+
+    assert_eq!(error.code, PERMISSION_DENIED);
+}
+
+#[tokio::test]
 async fn endpoint_is_published_after_binding_and_removed_on_stop() {
     let fixture = IpcFixture::new().await;
     assert!(!fixture.registry.path().exists());

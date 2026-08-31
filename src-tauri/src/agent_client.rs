@@ -29,7 +29,7 @@ impl AgentClient {
 
     pub async fn connect_with_registry(registry: EndpointRegistry) -> Result<Self, AgentError> {
         let descriptor = registry.read_for_client()?;
-        let client = Self::connect_to(&descriptor).await?;
+        let client = Self::from_verified_descriptor(descriptor);
         if !endpoint_is_live(&client.descriptor).await {
             return Err(ipc_error(
                 MORA_NOT_RUNNING,
@@ -40,11 +40,20 @@ impl AgentClient {
     }
 
     pub async fn connect_to(descriptor: &AgentEndpointDescriptor) -> Result<Self, AgentError> {
-        EndpointRegistry::at(descriptor.registry_path().to_path_buf())
-            .validate_descriptor(descriptor)?;
-        Ok(Self {
-            descriptor: descriptor.clone(),
-        })
+        let registry = EndpointRegistry::at(descriptor.registry_path().to_path_buf());
+        registry.validate_descriptor(descriptor)?;
+        let published = registry.read_for_client()?;
+        if !same_endpoint_fields(descriptor, &published) {
+            return Err(ipc_error(
+                crate::agent_protocol::PERMISSION_DENIED,
+                "The Agent endpoint descriptor does not match the published registry.",
+            ));
+        }
+        Ok(Self::from_verified_descriptor(published))
+    }
+
+    fn from_verified_descriptor(descriptor: AgentEndpointDescriptor) -> Self {
+        Self { descriptor }
     }
 
     pub async fn request(&self, request: AgentRequestKind) -> Result<AgentResult, AgentError> {
@@ -98,6 +107,17 @@ impl AgentClient {
             });
         Ok(Box::pin(stream))
     }
+}
+
+fn same_endpoint_fields(
+    candidate: &AgentEndpointDescriptor,
+    published: &AgentEndpointDescriptor,
+) -> bool {
+    candidate.protocol_version == published.protocol_version
+        && candidate.session_id == published.session_id
+        && candidate.pid == published.pid
+        && candidate.transport == published.transport
+        && candidate.address == published.address
 }
 
 async fn request_over_stream_until<S>(
