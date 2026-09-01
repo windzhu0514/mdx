@@ -377,16 +377,39 @@ fn save_to_path_with_watch(
     request: MdxSaveRequest,
     path: PathBuf,
 ) -> Result<MdxNote, String> {
+    save_to_path_with_watch_using(watch_state, request, path, |_| {})
+}
+
+fn save_to_path_with_watch_using<F>(
+    watch_state: &file_watch::DocumentWatchState,
+    request: MdxSaveRequest,
+    path: PathBuf,
+    after_save: F,
+) -> Result<MdxNote, String>
+where
+    F: FnOnce(&Path),
+{
     let target_path = ensure_mdx_extension(path);
     let guard = watch_state.begin_internal_write(&target_path);
-    let note = save_to_path(request, target_path.clone())?;
+    let (note, expected_fingerprint) = save_to_path_with_fingerprint(request, target_path.clone())?;
+    after_save(&target_path);
     if let Ok(snapshot) = file_watch::read_file_snapshot(&target_path) {
-        guard.finish(snapshot.revision, snapshot.fingerprint);
+        if snapshot.fingerprint == expected_fingerprint {
+            guard.finish(snapshot.revision, expected_fingerprint);
+        }
     }
     Ok(note)
 }
 
+#[cfg(test)]
 fn save_to_path(request: MdxSaveRequest, path: PathBuf) -> Result<MdxNote, String> {
+    save_to_path_with_fingerprint(request, path).map(|(note, _)| note)
+}
+
+fn save_to_path_with_fingerprint(
+    request: MdxSaveRequest,
+    path: PathBuf,
+) -> Result<(MdxNote, file_watch::ContentFingerprint), String> {
     let target_path = ensure_mdx_extension(path);
     let source_path = request.path.as_deref().map(PathBuf::from);
     let removed_resources = validated_resource_paths(&request.removed_resources)?;
@@ -416,15 +439,19 @@ fn save_to_path(request: MdxSaveRequest, path: PathBuf) -> Result<MdxNote, Strin
         &request.new_assets,
         &removed_resources,
     )?;
+    let fingerprint = file_watch::ContentFingerprint::from_bytes(&archive_bytes);
     safe_write_file(&target_path, &archive_bytes)?;
 
-    Ok(MdxNote {
-        path: Some(target_path.to_string_lossy().to_string()),
-        title: meta.title.clone(),
-        content: request.content,
-        manifest: MdxManifest::default(),
-        meta,
-    })
+    Ok((
+        MdxNote {
+            path: Some(target_path.to_string_lossy().to_string()),
+            title: meta.title.clone(),
+            content: request.content,
+            manifest: MdxManifest::default(),
+            meta,
+        },
+        fingerprint,
+    ))
 }
 
 fn read_mdx(path: &Path) -> Result<MdxNote, String> {
@@ -1384,6 +1411,46 @@ mod tests {
         assert!(receiver
             .recv_timeout(std::time::Duration::from_secs(2))
             .is_err());
+        watch.shutdown_now();
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn external_replacement_between_save_and_echo_registration_is_not_suppressed() {
+        let dir = temp_test_dir("watched-save-registration-race");
+        fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("note.mdx");
+        let replacement = dir.join("external.mdx");
+        write_note_with_resources(&target, &[]);
+        let mut external_request = save_request_for(&target, Vec::new(), Vec::new());
+        external_request.content = "external bytes".to_string();
+        save_to_path(external_request, replacement.clone()).unwrap();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let watch = file_watch::DocumentWatchState::with_emitter(move |paths| {
+            sender.send(paths).unwrap();
+        });
+        watch
+            .set_paths(vec![target.to_string_lossy().into_owned()])
+            .unwrap();
+        let mut request = save_request_for(&target, Vec::new(), Vec::new());
+        request.content = "saved by Mora".to_string();
+
+        save_to_path_with_watch_using(&watch, request, target.clone(), |saved_path| {
+            let backup = dir.join("note.mdx.race-backup");
+            fs::rename(saved_path, &backup).unwrap();
+            fs::rename(&replacement, saved_path).unwrap();
+            fs::remove_file(backup).unwrap();
+        })
+        .unwrap();
+
+        let changed = receiver
+            .recv_timeout(std::time::Duration::from_secs(6))
+            .unwrap();
+        let expected = path_identity(&target).unwrap();
+        assert!(changed
+            .iter()
+            .any(|path| path_identity(Path::new(path)).as_deref() == Ok(expected.as_str())));
+        assert_eq!(read_mdx(&target).unwrap().content, "external bytes");
         watch.shutdown_now();
         fs::remove_dir_all(dir).unwrap();
     }

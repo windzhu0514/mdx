@@ -206,6 +206,7 @@ struct SupervisorMailbox {
 struct MailboxShared {
     state: Mutex<MailboxState>,
     overflow_rescan: AtomicBool,
+    pending_runtime_failure: AtomicBool,
     wake: SyncSender<()>,
 }
 
@@ -214,7 +215,6 @@ struct MailboxState {
     stable: VecDeque<StableMessage>,
     notify_paths: HashSet<PathBuf>,
     notify_rescan: bool,
-    notify_error: Option<String>,
     max_notify_paths: usize,
 }
 
@@ -226,7 +226,7 @@ struct MailboxReceiver {
 struct NotifyBatch {
     paths: Vec<PathBuf>,
     rescan_all: bool,
-    error: Option<String>,
+    runtime_failure: bool,
 }
 
 enum SupervisorInput {
@@ -271,10 +271,10 @@ impl SupervisorMailbox {
                 stable: VecDeque::new(),
                 notify_paths: HashSet::new(),
                 notify_rescan: false,
-                notify_error: None,
                 max_notify_paths,
             }),
             overflow_rescan: AtomicBool::new(false),
+            pending_runtime_failure: AtomicBool::new(false),
             wake,
         });
         (
@@ -316,9 +316,16 @@ impl SupervisorMailbox {
         {
             return;
         }
+        let Ok(event) = event else {
+            self.shared
+                .pending_runtime_failure
+                .store(true, Ordering::Release);
+            self.wake();
+            return;
+        };
         match self.shared.state.try_lock() {
-            Ok(mut state) => match event {
-                Ok(event) if !state.notify_rescan => {
+            Ok(mut state) => {
+                if !state.notify_rescan {
                     for path in event.paths {
                         if state.notify_paths.len() >= state.max_notify_paths
                             && !state.notify_paths.contains(&path)
@@ -330,13 +337,7 @@ impl SupervisorMailbox {
                         state.notify_paths.insert(path);
                     }
                 }
-                Ok(_) => {}
-                Err(error) => {
-                    state.notify_error = Some(error.to_string());
-                    state.notify_paths.clear();
-                    state.notify_rescan = true;
-                }
-            },
+            }
             Err(_) => {
                 self.shared.overflow_rescan.store(true, Ordering::Release);
             }
@@ -355,6 +356,19 @@ impl MailboxReceiver {
         if let Some(message) = state.controls.pop_front() {
             return Some(SupervisorInput::Control(message));
         }
+        let runtime_failure = self
+            .shared
+            .pending_runtime_failure
+            .swap(false, Ordering::AcqRel);
+        if runtime_failure {
+            state.notify_paths.clear();
+            state.notify_rescan = false;
+            return Some(SupervisorInput::Notify(NotifyBatch {
+                paths: Vec::new(),
+                rescan_all: true,
+                runtime_failure: true,
+            }));
+        }
         if let Some(message) = state.stable.pop_front() {
             return Some(SupervisorInput::Stable(message));
         }
@@ -362,13 +376,13 @@ impl MailboxReceiver {
             state.notify_paths.clear();
             state.notify_rescan = true;
         }
-        if state.notify_paths.is_empty() && !state.notify_rescan && state.notify_error.is_none() {
+        if state.notify_paths.is_empty() && !state.notify_rescan {
             return None;
         }
         Some(SupervisorInput::Notify(NotifyBatch {
             paths: state.notify_paths.drain().collect(),
             rescan_all: std::mem::take(&mut state.notify_rescan),
-            error: state.notify_error.take(),
+            runtime_failure,
         }))
     }
 
@@ -525,6 +539,7 @@ struct WatchedTarget {
     epoch: u64,
 }
 
+#[derive(Clone)]
 struct ParentWatch {
     path: PathBuf,
     references: usize,
@@ -711,8 +726,10 @@ fn run_supervisor(
 ) {
     let mut reporter = StatusReporter::new(emit_status);
     let mut watcher = create_preferred_watcher(&factory, &mailbox, &mut reporter);
-    let mut parents = HashMap::<String, ParentWatch>::new();
+    let mut desired_parents = HashMap::<String, ParentWatch>::new();
+    let mut registered_parents = HashMap::<String, ParentWatch>::new();
     let mut watched = WatchedDocuments::default();
+    report_backend_status(&watcher, &mut reporter);
 
     loop {
         if let Some(message) = receiver.next(next_timeout(&watched.deadlines)) {
@@ -722,14 +739,14 @@ fn run_supervisor(
                         let next_parents = parent_watches(&next_targets);
                         sync_watches(
                             &mut watcher,
-                            &parents,
+                            &mut registered_parents,
                             &next_parents,
                             &mailbox,
                             &factory,
                             &mut reporter,
                         )?;
                         watched.replace_targets(next_targets);
-                        parents = next_parents;
+                        desired_parents = next_parents;
                         Ok(())
                     });
                     reporter.repeat();
@@ -753,13 +770,18 @@ fn run_supervisor(
                     watched.suppressor.cancel(&path)
                 }
                 SupervisorInput::Notify(batch) => {
-                    if batch.error.is_some() {
+                    if batch.runtime_failure {
                         let previous_mode = watcher.as_ref().map(|watcher| watcher.mode());
                         drop(watcher.take());
+                        registered_parents.clear();
                         watcher = match previous_mode {
-                            Some(WatcherMode::Native) => {
-                                create_poll_for_parents(&parents, &factory, &mailbox, &mut reporter)
-                            }
+                            Some(WatcherMode::Native) => create_poll_for_parents(
+                                &desired_parents,
+                                &mut registered_parents,
+                                &factory,
+                                &mailbox,
+                                &mut reporter,
+                            ),
                             Some(WatcherMode::Poll) | None => {
                                 reporter.report(
                                     FileWatchState::Disabled,
@@ -827,18 +849,9 @@ fn create_preferred_watcher(
     reporter: &mut StatusReporter,
 ) -> Option<Box<dyn WatchBackend>> {
     match factory.create(WatcherMode::Native, mailbox.clone()) {
-        Ok(watcher) => {
-            reporter.report(FileWatchState::Active, None);
-            Some(watcher)
-        }
+        Ok(watcher) => Some(watcher),
         Err(_) => match factory.create(WatcherMode::Poll, mailbox.clone()) {
-            Ok(watcher) => {
-                reporter.report(
-                    FileWatchState::Degraded,
-                    Some("原生文件监视不可用，已切换到兼容监视模式。"),
-                );
-                Some(watcher)
-            }
+            Ok(watcher) => Some(watcher),
             Err(_) => {
                 reporter.report(
                     FileWatchState::Disabled,
@@ -852,10 +865,12 @@ fn create_preferred_watcher(
 
 fn create_poll_for_parents(
     parents: &HashMap<String, ParentWatch>,
+    registered: &mut HashMap<String, ParentWatch>,
     factory: &Arc<dyn WatcherFactory>,
     mailbox: &SupervisorMailbox,
     reporter: &mut StatusReporter,
 ) -> Option<Box<dyn WatchBackend>> {
+    registered.clear();
     let mut watcher = match factory.create(WatcherMode::Poll, mailbox.clone()) {
         Ok(watcher) => watcher,
         Err(_) => {
@@ -866,16 +881,17 @@ fn create_poll_for_parents(
             return None;
         }
     };
-    if parents
-        .values()
-        .any(|parent| watcher.watch(&parent.path).is_err())
-    {
-        drop(watcher);
-        reporter.report(
-            FileWatchState::Disabled,
-            Some("文件监视无权访问当前目录；切换或重新打开文档可重试。"),
-        );
-        return None;
+    for (key, parent) in parents {
+        if watcher.watch(&parent.path).is_err() {
+            drop(watcher);
+            registered.clear();
+            reporter.report(
+                FileWatchState::Disabled,
+                Some("文件监视无权访问当前目录；切换或重新打开文档可重试。"),
+            );
+            return None;
+        }
+        registered.insert(key.clone(), parent.clone());
     }
     reporter.report(
         FileWatchState::Degraded,
@@ -894,28 +910,34 @@ fn notify_handler(
 
 fn sync_watches(
     watcher: &mut Option<Box<dyn WatchBackend>>,
-    current: &HashMap<String, ParentWatch>,
-    next: &HashMap<String, ParentWatch>,
+    registered: &mut HashMap<String, ParentWatch>,
+    desired: &HashMap<String, ParentWatch>,
     mailbox: &SupervisorMailbox,
     factory: &Arc<dyn WatcherFactory>,
     reporter: &mut StatusReporter,
 ) -> Result<(), String> {
     if watcher.is_none() {
         *watcher = create_preferred_watcher(factory, mailbox, reporter);
+        registered.clear();
         if watcher.is_none() {
             return Err("文件监视不可用；切换或重新打开文档可重试。".to_string());
         }
     }
     let operation = (|| -> Result<(), String> {
         let active = watcher.as_mut().expect("watcher was initialized");
-        for parent in current.values() {
-            if !next.contains_key(&path_key(&parent.path)) {
-                active.unwatch(&parent.path)?;
-            }
+        let removed = registered
+            .iter()
+            .filter(|(key, _)| !desired.contains_key(*key))
+            .map(|(key, parent)| (key.clone(), parent.path.clone()))
+            .collect::<Vec<_>>();
+        for (key, path) in removed {
+            active.unwatch(&path)?;
+            registered.remove(&key);
         }
-        for (key, parent) in next {
-            if !current.contains_key(key) {
+        for (key, parent) in desired {
+            if !registered.contains_key(key) {
                 active.watch(&parent.path)?;
+                registered.insert(key.clone(), parent.clone());
             }
         }
         Ok(())
@@ -933,6 +955,7 @@ fn sync_watches(
 
     let previous_mode = watcher.as_ref().map(|watcher| watcher.mode());
     drop(watcher.take());
+    registered.clear();
     if previous_mode == Some(WatcherMode::Poll) {
         reporter.report(
             FileWatchState::Disabled,
@@ -940,11 +963,22 @@ fn sync_watches(
         );
         return Err("文件监视无权访问当前目录。".to_string());
     }
-    *watcher = create_poll_for_parents(next, factory, mailbox, reporter);
+    *watcher = create_poll_for_parents(desired, registered, factory, mailbox, reporter);
     watcher
         .as_ref()
         .map(|_| ())
         .ok_or_else(|| "文件监视无权访问当前目录。".to_string())
+}
+
+fn report_backend_status(watcher: &Option<Box<dyn WatchBackend>>, reporter: &mut StatusReporter) {
+    match watcher.as_ref().map(|watcher| watcher.mode()) {
+        Some(WatcherMode::Native) => reporter.report(FileWatchState::Active, None),
+        Some(WatcherMode::Poll) => reporter.report(
+            FileWatchState::Degraded,
+            Some("原生文件监视不可用，已切换到兼容监视模式。"),
+        ),
+        None => {}
+    }
 }
 
 fn normalized_targets(paths: Vec<String>) -> Result<HashMap<String, WatchedTarget>, String> {
@@ -1492,6 +1526,31 @@ mod tests {
     }
 
     #[test]
+    fn runtime_error_survives_notify_callback_lock_contention() {
+        let root = tempdir().unwrap();
+        let path = root.path().join("runtime-lock-contention.mdx");
+        let factory = FakeWatcherFactory::default();
+        let events = Arc::clone(&factory.events);
+        let (watch, statuses) = state_receiver(factory);
+        watch
+            .set_paths(vec![path.to_string_lossy().into_owned()])
+            .unwrap();
+
+        let state_lock = watch.mailbox.shared.state.lock().unwrap();
+        watch
+            .mailbox
+            .record_notify(Err(notify::Error::generic("runtime failure")));
+        drop(state_lock);
+
+        receive_status(&statuses, FileWatchState::Degraded);
+        let events = events.lock().unwrap();
+        assert!(events.iter().any(|event| event == "drop-native"));
+        assert!(events.iter().any(|event| event == "create-poll"));
+        drop(events);
+        watch.shutdown_now();
+    }
+
+    #[test]
     fn failed_native_and_poll_creation_reports_disabled_and_later_set_paths_recovers() {
         let root = tempdir().unwrap();
         let path = root.path().join("recover.mdx");
@@ -1508,6 +1567,38 @@ mod tests {
             .unwrap();
 
         receive_status(&statuses, FileWatchState::Active);
+        watch.shutdown_now();
+    }
+
+    #[test]
+    fn same_paths_are_registered_again_after_backend_rebuild() {
+        let root = tempdir().unwrap();
+        let path = root.path().join("rebuild.mdx");
+        let factory = FakeWatcherFactory::default();
+        let events = Arc::clone(&factory.events);
+        let (watch, statuses) = state_receiver(factory.clone());
+        let paths = vec![path.to_string_lossy().into_owned()];
+
+        watch.set_paths(paths.clone()).unwrap();
+        receive_status(&statuses, FileWatchState::Active);
+
+        factory.fail_poll_create.store(true, Ordering::Release);
+        watch
+            .mailbox
+            .record_notify(Err(notify::Error::generic("runtime failure")));
+        receive_status(&statuses, FileWatchState::Disabled);
+
+        factory.fail_poll_create.store(false, Ordering::Release);
+        watch.set_paths(paths).unwrap();
+        receive_status(&statuses, FileWatchState::Active);
+
+        let native_watch_calls = events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|event| event.as_str() == "watch-native")
+            .count();
+        assert_eq!(native_watch_calls, 2);
         watch.shutdown_now();
     }
 }
