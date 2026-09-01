@@ -9,6 +9,7 @@ mod archive_security;
 mod document_export;
 mod draft_store;
 mod export;
+pub mod file_watch;
 mod history;
 pub mod markdown_import;
 pub mod markdown_resources;
@@ -66,7 +67,7 @@ use std::fs;
 use std::fs::File;
 use std::io::{Cursor, Read, Seek, Write};
 use std::path::{Path, PathBuf};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, State};
 use uuid::Uuid;
 use zip::write::FileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
@@ -318,8 +319,7 @@ fn get_disk_revisions(paths: Vec<String>) -> Vec<DiskRevisionResult> {
 
 #[tauri::command]
 fn validate_mdx(path: String) -> Result<(), String> {
-    let note = read_mdx(Path::new(&path))?;
-    validate_manifest(&note.manifest)
+    validate_mdx_path(Path::new(&path))
 }
 
 #[tauri::command]
@@ -346,20 +346,43 @@ fn export_diagram_png(path: String, base64: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn save_mdx(app: AppHandle, request: MdxSaveRequest) -> Result<MdxNote, String> {
+fn save_mdx(
+    app: AppHandle,
+    watch_state: State<file_watch::DocumentWatchState>,
+    request: MdxSaveRequest,
+) -> Result<MdxNote, String> {
     let path = request
         .path
         .clone()
         .ok_or_else(|| "请先选择保存位置。".to_string())?;
-    let note = save_to_path(request, PathBuf::from(path))?;
+    let note = save_to_path_with_watch(&watch_state, request, PathBuf::from(path))?;
     let _ = index_note(&app, &note);
     Ok(note)
 }
 
 #[tauri::command]
-fn save_mdx_as(app: AppHandle, request: MdxSaveRequest, path: String) -> Result<MdxNote, String> {
-    let note = save_to_path(request, PathBuf::from(path))?;
+fn save_mdx_as(
+    app: AppHandle,
+    watch_state: State<file_watch::DocumentWatchState>,
+    request: MdxSaveRequest,
+    path: String,
+) -> Result<MdxNote, String> {
+    let note = save_to_path_with_watch(&watch_state, request, PathBuf::from(path))?;
     let _ = index_note(&app, &note);
+    Ok(note)
+}
+
+fn save_to_path_with_watch(
+    watch_state: &file_watch::DocumentWatchState,
+    request: MdxSaveRequest,
+    path: PathBuf,
+) -> Result<MdxNote, String> {
+    let target_path = ensure_mdx_extension(path);
+    let guard = watch_state.begin_internal_write(&target_path);
+    let note = save_to_path(request, target_path.clone())?;
+    if let Some(revision) = workspace::disk_revision(&target_path).revision {
+        guard.finish(revision);
+    }
     Ok(note)
 }
 
@@ -431,6 +454,18 @@ fn read_mdx(path: &Path) -> Result<MdxNote, String> {
         manifest,
         meta,
     })
+}
+
+pub(crate) fn validate_mdx_path(path: &Path) -> Result<(), String> {
+    read_mdx(path).map(|_| ())
+}
+
+#[tauri::command]
+fn set_watched_document_paths(
+    state: State<file_watch::DocumentWatchState>,
+    paths: Vec<String>,
+) -> Result<(), String> {
+    state.set_paths(paths)
 }
 
 fn load_index_entry(path: &Path) -> Result<NoteIndexEntry, String> {
@@ -1135,11 +1170,15 @@ pub fn run() {
         .on_window_event(|window, event| {
             if window.label() == "main" && matches!(event, tauri::WindowEvent::Destroyed) {
                 window
+                    .state::<file_watch::DocumentWatchState>()
+                    .shutdown_now();
+                window
                     .state::<agent_bridge::AgentBridgeState>()
                     .shutdown_now();
             }
         })
         .setup(|app| {
+            app.manage(file_watch::DocumentWatchState::new(app.handle().clone()));
             let _ = window_state::restore_main_window_state(app);
             Ok(())
         })
@@ -1184,6 +1223,7 @@ pub fn run() {
             clear_recent_files,
             refresh_workspace_folder,
             get_disk_revisions,
+            set_watched_document_paths,
             system_fonts::list_system_font_families
         ])
         .run(tauri::generate_context!())

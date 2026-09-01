@@ -48,6 +48,7 @@ import {
 } from "./composables/useDocumentSession";
 import { useAppUpdater } from "./composables/useAppUpdater";
 import { useAgentBridge } from "./composables/useAgentBridge";
+import { useExternalFileSync } from "./composables/useExternalFileSync";
 import { isDarkTheme, usePreferences, type ThemeId } from "./composables/usePreferences";
 import type { HistoryListItem, HistorySnapshot } from "./types/history";
 import type { NoteListItem, NoteSearchResult } from "./types/library";
@@ -248,6 +249,16 @@ const agentBridge = useAgentBridge({
     },
 });
 const agentStatus = agentBridge.status;
+const externalFileSync = useExternalFileSync({
+    desktop: tauriRuntime,
+    session,
+    onReloaded(documentIds) {
+        for (const id of documentIds) editorRef.value?.releaseDocument(id);
+    },
+    async onActiveConflict(documentId) {
+        if (!showConflictPrompt.value) await resolveDocumentConflict(documentId);
+    },
+});
 watch(agentStatus, (currentStatus) => {
     if (
         preferences.value.agentAccessEnabled &&
@@ -1099,7 +1110,11 @@ onMounted(async () => {
         const reloadedIds = await session.refreshDiskState();
         for (const id of reloadedIds) editorRef.value?.releaseDocument(id);
         const activeId = activeDocumentId.value;
-        if (activeId && session.document(activeId).conflict) {
+        if (
+            activeId &&
+            session.document(activeId).conflict &&
+            !showConflictPrompt.value
+        ) {
             await resolveDocumentConflict(activeId);
         }
     });
@@ -1145,6 +1160,7 @@ onBeforeUnmount(() => {
     unlistenClose?.();
     unlistenDragDrop?.();
     unlistenFocus?.();
+    externalFileSync.dispose();
     agentBridge.dispose();
     disposePreferences();
     void session.dispose().catch((error: unknown) => {
