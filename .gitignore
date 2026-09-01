@@ -9,6 +9,7 @@ tmp/document-export-qa/
 src-tauri/target/
 src-tauri/target-*/
 src-tauri/gen/
+src-tauri/binaries/mora-agent-*
 src-tauri/*.tmp
 src-tauri/*.bak
 

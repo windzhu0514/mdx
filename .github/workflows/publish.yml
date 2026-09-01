@@ -161,3 +161,6 @@ jobs:
                   updaterJsonPreferNsis: true
                   retryAttempts: 3
                   args: ${{ matrix.args }}
+
+            - name: Verify mora-agent sidecar
+              run: node scripts/prepare-agent-sidecar.mjs --check --target ${{ matrix.target }}

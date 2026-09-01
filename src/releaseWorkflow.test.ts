@@ -10,7 +10,11 @@ interface NodeProcess {
 const nodeProcess = (globalThis as typeof globalThis & { process: NodeProcess }).process;
 
 interface ReleaseTauriConfig {
+    build: {
+        beforeBuildCommand: string;
+    };
     bundle: {
+        externalBin: string[];
         icon: string[];
         macOS: {
             signingIdentity: string;
@@ -87,5 +91,33 @@ describe("GitHub Draft Release workflow", () => {
             "icons/icon.icns",
             "icons/icon.ico",
         ]);
+    });
+
+    it("builds and bundles exactly one target-specific mora-agent sidecar", () => {
+        const config = JSON.parse(
+            readRepositoryFile("src-tauri/tauri.conf.json"),
+        ) as ReleaseTauriConfig;
+        const packageJson = JSON.parse(readRepositoryFile("package.json")) as {
+            scripts: Record<string, string>;
+        };
+        const gitignore = readRepositoryFile(".gitignore");
+        const workflow = readRepositoryFile(".github/workflows/publish.yml");
+        const sidecarCheck =
+            "node scripts/prepare-agent-sidecar.mjs --check --target ${{ matrix.target }}";
+
+        expect(packageJson.scripts["prepare:agent"]).toBe(
+            "node scripts/prepare-agent-sidecar.mjs",
+        );
+        expect(config.build.beforeBuildCommand).toBe(
+            "npm run build && npm run prepare:agent",
+        );
+        expect(config.bundle.externalBin).toEqual(["binaries/mora-agent"]);
+        expect(config.bundle.externalBin).not.toContain("binaries/mora-mcp");
+        expect(gitignore).toContain("src-tauri/binaries/mora-agent-*");
+        expect(gitignore).not.toMatch(/^src-tauri\/binaries\/$/m);
+        expect(workflow).toContain(sidecarCheck);
+        expect(workflow.indexOf(sidecarCheck)).toBeGreaterThan(
+            workflow.indexOf("uses: tauri-apps/tauri-action@v1"),
+        );
     });
 });
