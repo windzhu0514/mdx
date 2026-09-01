@@ -71,6 +71,17 @@ fn stable_error_removes_document_content_from_nested_detail() {
 }
 
 #[test]
+fn timeout_detail_preserves_the_outcome_unknown_reconciliation_flag() {
+    let error = AgentError::new("TIMEOUT", "request timed out")
+        .with_detail(serde_json::json!({ "outcomeUnknown": true }));
+
+    assert_eq!(
+        serde_json::to_value(error).unwrap()["detail"]["outcomeUnknown"],
+        true
+    );
+}
+
+#[test]
 fn server_messages_use_the_stable_response_and_event_shapes() {
     let summary = AgentDocumentSummary {
         id: "doc-1".into(),

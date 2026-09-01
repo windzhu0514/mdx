@@ -41,6 +41,8 @@ let saveHandler:
           },
       ) => Promise<MdxNote>)
     | null = null;
+let diskRevisionHandler: ((paths: string[]) => Promise<DiskRevisionResult[]>) | null =
+    null;
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 
@@ -148,6 +150,7 @@ describe("document session", () => {
         workspaceWriteHandler = null;
         openMdxHandler = null;
         saveHandler = null;
+        diskRevisionHandler = null;
         Object.defineProperty(URL, "revokeObjectURL", {
             configurable: true,
             value: vi.fn(),
@@ -230,6 +233,9 @@ describe("document session", () => {
                 } satisfies WorkspaceRefreshResult;
             }
             if (command === "get_disk_revisions") {
+                if (diskRevisionHandler) {
+                    return diskRevisionHandler(payload.paths as string[]);
+                }
                 return (payload.paths as string[]).map((path): DiskRevisionResult => ({
                     path,
                     available: true,
@@ -1260,6 +1266,39 @@ describe("document session", () => {
         expect(runtime.dirty).toBe(true);
         expect(runtime.conflict).toBe(true);
         expect(Array.from(drafts.values())[0]?.content).toBe("local edit");
+        expect(invoke).not.toHaveBeenCalledWith("save_mdx", expect.anything());
+    });
+
+    it("rejects an Agent save when the live revision changes during disk preflight", async () => {
+        const session = useDocumentSession(true);
+        const runtime = await session.openMdx("C:\\Notes\\agent-save-race.mdx");
+        session.updateContent(runtime.id, "agent observed content");
+        const expectedLiveRevision = runtime.liveRevision;
+        const preflight = deferred<DiskRevisionResult[]>();
+        diskRevisionHandler = () => preflight.promise;
+
+        const saving = session.save(runtime.id, { expectedLiveRevision });
+        await vi.waitFor(() =>
+            expect(
+                invoke.mock.calls.filter(([command]) => command === "get_disk_revisions"),
+            ).toHaveLength(2),
+        );
+        session.updateContent(runtime.id, "user edit during preflight");
+        preflight.resolve([
+            {
+                path: runtime.path!,
+                available: true,
+                revision: runtime.diskRevision,
+                error: null,
+            },
+        ]);
+
+        await expect(saving).rejects.toMatchObject({
+            code: "REVISION_CONFLICT",
+            documentId: runtime.id,
+            currentLiveRevision: runtime.liveRevision,
+        });
+        expect(runtime.content).toBe("user edit during preflight");
         expect(invoke).not.toHaveBeenCalledWith("save_mdx", expect.anything());
     });
 

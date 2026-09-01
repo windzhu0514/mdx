@@ -1,6 +1,7 @@
 use crate::agent_client::AgentClient;
 use crate::agent_protocol::{
-    AgentError, AgentRequestKind, AgentResult, BRIDGE_UNAVAILABLE, PROTOCOL_MISMATCH,
+    AgentError, AgentRequestKind, AgentResult, BRIDGE_UNAVAILABLE, MORA_NOT_RUNNING,
+    PROTOCOL_MISMATCH,
 };
 use rmcp::{
     handler::server::{tool::ToolCallContext, wrapper::Parameters},
@@ -145,6 +146,14 @@ fn success_result(result: AgentResult) -> CallToolResult {
 }
 
 fn operational_error(error: AgentError) -> CallToolResult {
+    let error = if error.code == MORA_NOT_RUNNING {
+        AgentError::new(
+            BRIDGE_UNAVAILABLE,
+            "The Mora Agent bridge is temporarily unavailable.",
+        )
+    } else {
+        error
+    };
     match serde_json::to_string(&error) {
         Ok(json) => CallToolResult::error(vec![ContentBlock::text(json)]),
         Err(_) => encoding_error(),

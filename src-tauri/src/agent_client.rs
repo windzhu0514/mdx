@@ -18,24 +18,24 @@ pub type AgentEventStream =
 
 #[derive(Debug, Clone)]
 pub struct AgentClient {
-    descriptor: AgentEndpointDescriptor,
+    endpoint: AgentClientEndpoint,
+}
+
+#[derive(Debug, Clone)]
+enum AgentClientEndpoint {
+    CurrentRegistry(EndpointRegistry),
+    Fixed(AgentEndpointDescriptor),
 }
 
 impl AgentClient {
     pub async fn connect() -> Result<Self, AgentError> {
         let registry = EndpointRegistry::for_current_user()?;
-        Self::connect_with_registry(registry).await
+        Ok(Self::from_registry(registry))
     }
 
     pub async fn connect_with_registry(registry: EndpointRegistry) -> Result<Self, AgentError> {
-        let descriptor = registry.read_for_client()?;
-        let client = Self::from_verified_descriptor(descriptor);
-        if !endpoint_is_live(&client.descriptor).await {
-            return Err(ipc_error(
-                MORA_NOT_RUNNING,
-                "The Mora Agent bridge is not running.",
-            ));
-        }
+        let client = Self::from_registry(registry);
+        client.current_descriptor().await?;
         Ok(client)
     }
 
@@ -53,18 +53,42 @@ impl AgentClient {
     }
 
     fn from_verified_descriptor(descriptor: AgentEndpointDescriptor) -> Self {
-        Self { descriptor }
+        Self {
+            endpoint: AgentClientEndpoint::Fixed(descriptor),
+        }
+    }
+
+    fn from_registry(registry: EndpointRegistry) -> Self {
+        Self {
+            endpoint: AgentClientEndpoint::CurrentRegistry(registry),
+        }
+    }
+
+    async fn current_descriptor(&self) -> Result<AgentEndpointDescriptor, AgentError> {
+        let descriptor = match &self.endpoint {
+            AgentClientEndpoint::CurrentRegistry(registry) => registry.read_for_client()?,
+            AgentClientEndpoint::Fixed(descriptor) => return Ok(descriptor.clone()),
+        };
+        if !endpoint_is_live(&descriptor).await {
+            return Err(ipc_error(
+                MORA_NOT_RUNNING,
+                "The Mora Agent bridge is not running.",
+            ));
+        }
+        Ok(descriptor)
     }
 
     pub async fn request(&self, request: AgentRequestKind) -> Result<AgentResult, AgentError> {
         let deadline = Instant::now() + REQUEST_TIMEOUT;
-        let stream = connect_until(&self.descriptor, deadline).await?;
+        let descriptor = self.current_descriptor().await?;
+        let stream = connect_until(&descriptor, deadline).await?;
         request_over_stream_until(stream, request, deadline).await
     }
 
     pub async fn watch(&self, document_id: Option<String>) -> Result<AgentEventStream, AgentError> {
         let deadline = Instant::now() + REQUEST_TIMEOUT;
-        let mut stream = connect_until(&self.descriptor, deadline).await?;
+        let descriptor = self.current_descriptor().await?;
+        let mut stream = connect_until(&descriptor, deadline).await?;
         let request_id = Uuid::new_v4().to_string();
         let request = AgentRequest {
             protocol_version: PROTOCOL_VERSION,

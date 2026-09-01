@@ -40,6 +40,7 @@ function readRepositoryFile(path: string): string {
 describe("GitHub Draft Release workflow", () => {
     it("builds signed cross-platform updater assets behind all release gates", () => {
         const workflow = readRepositoryFile(".github/workflows/publish.yml");
+        const verifyJob = workflow.slice(0, workflow.indexOf("\n    publish:"));
 
         expect(workflow).toContain("windows-latest");
         expect(workflow).toContain("macos-latest");
@@ -61,7 +62,9 @@ describe("GitHub Draft Release workflow", () => {
         expect(workflow).toContain("npm test");
         expect(workflow).toContain("npm run lint");
         expect(workflow).toContain("npm run format:check");
-        expect(workflow).toContain("cargo test");
+        expect(verifyJob).toContain(
+            "cargo test --manifest-path src-tauri/Cargo.toml --features agent-bin",
+        );
         expect(workflow).toContain("cargo check");
         expect(workflow).toContain("TAURI_SIGNING_PRIVATE_KEY");
         expect(workflow).toContain("tauri-apps/tauri-action@v1");

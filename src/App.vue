@@ -1736,7 +1736,7 @@ async function saveDocumentForAgent(id: string, baseLiveRevision: string) {
     }
     savingDocumentIds.add(id);
     try {
-        return await session.save(id);
+        return await session.save(id, { expectedLiveRevision: baseLiveRevision });
     } finally {
         savingDocumentIds.delete(id);
     }

@@ -518,7 +518,10 @@ export function useDocumentSession(desktop: boolean) {
         }
     }
 
-    async function save(id: string, options: { overwrite?: boolean } = {}) {
+    async function save(
+        id: string,
+        options: { overwrite?: boolean; expectedLiveRevision?: string } = {},
+    ) {
         requireDesktop();
         const runtime = document(id);
         if (!runtime.path) throw { code: "SAVE_AS_REQUIRED", documentId: id };
@@ -529,6 +532,9 @@ export function useDocumentSession(desktop: boolean) {
                 documents.value = [...documents.value];
                 throw { code: "EXTERNAL_CONFLICT", documentId: id };
             }
+        }
+        if (options.expectedLiveRevision !== undefined) {
+            assertLiveRevision(id, options.expectedLiveRevision);
         }
         const storageKey =
             draftKeys.get(runtime.id) ?? draftKey(runtime.path, runtime.id);

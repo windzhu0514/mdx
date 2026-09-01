@@ -229,6 +229,56 @@ describe("useExternalFileSync", () => {
         await session.dispose();
     });
 
+    it("surfaces event processing failures, performs one full rescan, and keeps the queue usable", async () => {
+        const session = useDocumentSession(true);
+        const runtime = await session.openMdx("C:\\Notes\\recover.mdx");
+        const other = await session.openMdx("C:\\Notes\\other.mdx");
+        contents.set(runtime.path!, "recovered from disk");
+        revisions.set(runtime.path!, 2);
+        const onReloaded = vi.fn();
+        const externalSync = useExternalFileSync({
+            desktop: true,
+            session,
+            onReloaded,
+            onActiveConflict: vi.fn(),
+        });
+        await vi.waitFor(() => expect(tauri.listener).toBeTypeOf("function"));
+        await nextTick();
+        const originalImplementation = tauri.invoke.getMockImplementation();
+        let revisionCalls = 0;
+        const revisionPaths: string[][] = [];
+        tauri.invoke.mockImplementation(async (command: string, args?: unknown) => {
+            if (command === "get_disk_revisions") {
+                revisionCalls += 1;
+                revisionPaths.push([...(args as { paths: string[] }).paths]);
+                if (revisionCalls === 1) throw new Error("revision probe failed");
+            }
+            return originalImplementation?.(command, args);
+        });
+
+        await tauri.listener?.({ payload: { paths: [runtime.path!] } });
+
+        expect(revisionCalls).toBe(2);
+        expect(revisionPaths).toEqual([[runtime.path!], [runtime.path!, other.path!]]);
+        expect(runtime.content).toBe("recovered from disk");
+        expect(onReloaded).toHaveBeenCalledWith([runtime.id]);
+        expect(externalSync.status.value).toEqual({
+            state: "degraded",
+            message: expect.stringContaining("全量复查"),
+        });
+
+        await tauri.listener?.({ payload: { paths: [runtime.path!] } });
+        expect(revisionCalls).toBe(3);
+        expect(externalSync.status.value).toEqual({
+            state: "active",
+            message: null,
+        });
+
+        externalSync.dispose();
+        await externalSync.settled();
+        await session.dispose();
+    });
+
     it("registers status listeners before configuring watched paths", async () => {
         const statusRegistration: {
             finish?: (unlisten: typeof tauri.unlisten) => void;

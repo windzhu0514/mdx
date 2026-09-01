@@ -395,21 +395,62 @@ async fn protocol_misuse_invalid_arguments_concurrency_and_bridge_stop_do_not_pa
     assert!(!stderr.contains("fixture content"));
 }
 
-#[test]
-fn missing_mora_exits_nonzero_with_empty_protocol_stdout() {
+#[tokio::test(flavor = "multi_thread")]
+async fn one_mcp_process_initializes_before_mora_and_recovers_across_bridge_sessions() {
     let fixture = IpcFixture::new();
-    let output = fixture
-        .command()
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .unwrap();
+    let mut mcp = McpProcess::start(&fixture);
+    mcp.initialize();
 
-    assert_eq!(output.status.code(), Some(2));
-    assert!(output.stdout.is_empty());
-    let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(stderr.contains("MORA_NOT_RUNNING"));
+    let unavailable = mcp.call_tool(2, "mora_list_documents", json!({}));
+    assert_eq!(unavailable["result"]["isError"], true);
+    assert_eq!(tool_text_json(&unavailable)["code"], BRIDGE_UNAVAILABLE);
+
+    let server_a = fixture
+        .start(|request| async move {
+            match request.request {
+                AgentRequestKind::ListDocuments => {
+                    Ok(AgentResult::Documents(vec![document_summary(
+                        "session-a:1",
+                    )]))
+                }
+                other => panic!("unexpected Agent request: {other:?}"),
+            }
+        })
+        .await;
+    let first_session = mcp.call_tool(3, "mora_list_documents", json!({}));
+    assert_eq!(
+        tool_text_json(&first_session)[0]["liveRevision"],
+        "session-a:1"
+    );
+
+    server_a.stop().await.unwrap();
+    let stopped = mcp.call_tool(4, "mora_list_documents", json!({}));
+    assert_eq!(stopped["result"]["isError"], true);
+    assert_eq!(tool_text_json(&stopped)["code"], BRIDGE_UNAVAILABLE);
+
+    let server_b = fixture
+        .start(|request| async move {
+            match request.request {
+                AgentRequestKind::ListDocuments => {
+                    Ok(AgentResult::Documents(vec![document_summary(
+                        "session-b:1",
+                    )]))
+                }
+                other => panic!("unexpected Agent request: {other:?}"),
+            }
+        })
+        .await;
+    let second_session = mcp.call_tool(5, "mora_list_documents", json!({}));
+    assert_eq!(
+        tool_text_json(&second_session)[0]["liveRevision"],
+        "session-b:1"
+    );
+
+    let (code, remaining_stdout, stderr) = mcp.close();
+    assert_eq!(code, 0);
+    assert!(remaining_stdout.is_empty());
+    assert!(!stderr.contains("fixture content"));
+    server_b.stop().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]

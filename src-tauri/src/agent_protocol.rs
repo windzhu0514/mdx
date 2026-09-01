@@ -257,7 +257,12 @@ fn sanitize_error_detail(detail: Value) -> Option<Value> {
         return None;
     };
     let mut stable_detail = serde_json::Map::new();
-    for key in ["documentId", "currentLiveRevision", "currentDiskRevision"] {
+    for key in [
+        "documentId",
+        "currentLiveRevision",
+        "currentDiskRevision",
+        "outcomeUnknown",
+    ] {
         if let Some(value) = detail.get(key) {
             stable_detail.insert(key.to_string(), remove_document_content(value.clone()));
         }

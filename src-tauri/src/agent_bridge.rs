@@ -173,7 +173,8 @@ where
             let _ = client_sender.send(Err(AgentError::new(
                 TIMEOUT,
                 "The Mora window did not complete the Agent request in time.",
-            )));
+            )
+            .with_detail(serde_json::json!({ "outcomeUnknown": true }))));
             operation.await
         }
     }
@@ -1169,6 +1170,10 @@ mod tests {
             .unwrap()
             .unwrap_err();
         assert_eq!(timeout.code, TIMEOUT);
+        assert_eq!(
+            timeout.detail,
+            Some(serde_json::json!({ "outcomeUnknown": true }))
+        );
         assert!(!first.is_finished());
         assert!(
             tokio::time::timeout(Duration::from_millis(25), second_started.notified())

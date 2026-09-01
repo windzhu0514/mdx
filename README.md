@@ -101,7 +101,7 @@ MCP 使用 stdio，没有 URL 或端口。第三方 MCP 客户端配置应使用
 
 首版 MCP 只提供 `mora_list_documents`、`mora_read_document`、`mora_replace_document` 和 `mora_save_document` 四个工具。Mora 不会自动修改 `PATH` 或第三方 MCP 配置。
 
-安全与错误约定：IPC 仅允许同一系统用户访问；JSON/JSONL/MCP 数据只写 stdout，诊断写 stderr，日志不得包含文档正文。CLI 成功返回 `0`；通用错误为 `1`，Mora 未运行为 `2`，接入关闭为 `3`，revision 冲突为 `4`，磁盘冲突为 `5`，权限错误为 `6`。
+安全与错误约定：IPC 仅允许同一系统用户访问；JSON/JSONL/MCP 数据只写 stdout，诊断写 stderr，日志不得包含文档正文。CLI 成功返回 `0`；通用错误为 `1`，Mora 未运行为 `2`，接入关闭为 `3`，revision 冲突为 `4`，磁盘冲突为 `5`，权限错误为 `6`。`replace` 或 `save` 返回 `TIMEOUT` 时，操作可能已在 Mora 内继续并稍后完成；错误详情会标记 `outcomeUnknown: true`，调用方必须重新 `read` 并核对 live/disk revision 后再决定是否重试，不能直接重复写入。
 
 当前实现包含 Windows 与 Unix 本地 IPC 代码及跨平台打包配置；本次本机验收只验证 Windows Named Pipe、Windows 可执行文件和 Windows 安装包。macOS/Linux 的打包由对应 CI Runner 验证，本 Windows 环境不声称已验证 Unix runtime。首版不提供远程访问、HTTP、云同步、CRDT/OT、离线 Agent 编辑器或资源变更工具。
 

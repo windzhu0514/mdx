@@ -35,9 +35,11 @@ export function useExternalFileSync(options: ExternalFileSyncOptions) {
     let unlistenChanges: UnlistenFn | null = null;
     let unlistenStatus: UnlistenFn | null = null;
     let listenerFailure = false;
+    let eventFailure = false;
     let syncTail = Promise.resolve();
     let eventTail = Promise.resolve();
-    const status = ref<ExternalFileSyncStatus>({ state: "active", message: null });
+    let backendStatus: ExternalFileSyncStatus = { state: "active", message: null };
+    const status = ref<ExternalFileSyncStatus>({ ...backendStatus });
 
     function reportListenerFailure() {
         listenerFailure = true;
@@ -65,14 +67,8 @@ export function useExternalFileSync(options: ExternalFileSyncOptions) {
             });
     }
 
-    async function handleExternalChange(payload: ExternalFilesChangedPayload) {
-        if (disposed || !Array.isArray(payload.paths)) return;
-        const paths = Array.from(
-            new Set(
-                payload.paths.filter((path): path is string => typeof path === "string"),
-            ),
-        );
-        if (paths.length === 0) return;
+    async function handleExternalChange(paths?: readonly string[]) {
+        if (disposed) return;
         const reloadedIds = await options.session.refreshDiskState(paths);
         if (disposed) return;
         await options.onReloaded(reloadedIds);
@@ -83,6 +79,41 @@ export function useExternalFileSync(options: ExternalFileSyncOptions) {
         if (active?.conflict) await options.onActiveConflict(active.id);
     }
 
+    async function processExternalChange(payload: ExternalFilesChangedPayload) {
+        if (disposed || !Array.isArray(payload.paths)) return;
+        const paths = Array.from(
+            new Set(
+                payload.paths.filter((path): path is string => typeof path === "string"),
+            ),
+        );
+        if (paths.length === 0) return;
+        try {
+            await handleExternalChange(paths);
+            if (eventFailure && !listenerFailure && !disposed) {
+                eventFailure = false;
+                status.value = { ...backendStatus };
+            }
+        } catch {
+            if (disposed) return;
+            eventFailure = true;
+            status.value = {
+                state: "degraded",
+                message: "外部文件变更同步失败；正在执行一次有界全量复查。",
+            };
+            try {
+                await handleExternalChange();
+            } catch {
+                if (!disposed) {
+                    status.value = {
+                        state: "error",
+                        message:
+                            "外部文件变更同步和全量复查均失败；后续事件仍会继续处理。",
+                    };
+                }
+            }
+        }
+    }
+
     const listenerReady: Promise<void> = options.desktop
         ? Promise.all([
               listen<ExternalFilesChangedPayload>(
@@ -90,8 +121,7 @@ export function useExternalFileSync(options: ExternalFileSyncOptions) {
                   (event) => {
                       const operation = eventTail
                           .catch(() => undefined)
-                          .then(() => handleExternalChange(event.payload))
-                          .catch(() => undefined);
+                          .then(() => processExternalChange(event.payload));
                       eventTail = operation;
                       return operation;
                   },
@@ -102,7 +132,10 @@ export function useExternalFileSync(options: ExternalFileSyncOptions) {
                   })
                   .catch(reportListenerFailure),
               listen<ExternalFileSyncStatus>("mora://file-watch-status", (event) => {
-                  if (!listenerFailure && !disposed) status.value = event.payload;
+                  backendStatus = event.payload;
+                  if (!listenerFailure && !eventFailure && !disposed) {
+                      status.value = event.payload;
+                  }
               })
                   .then((registered) => {
                       if (disposed) registered();
