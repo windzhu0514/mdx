@@ -380,8 +380,8 @@ fn save_to_path_with_watch(
     let target_path = ensure_mdx_extension(path);
     let guard = watch_state.begin_internal_write(&target_path);
     let note = save_to_path(request, target_path.clone())?;
-    if let Some(revision) = workspace::disk_revision(&target_path).revision {
-        guard.finish(revision);
+    if let Ok(snapshot) = file_watch::read_file_snapshot(&target_path) {
+        guard.finish(snapshot.revision, snapshot.fingerprint);
     }
     Ok(note)
 }
@@ -1360,6 +1360,67 @@ mod tests {
 
         assert!(error.contains("源 MDX 文件"));
         assert!(!target.exists());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn watched_internal_save_does_not_emit_its_own_change() {
+        let dir = temp_test_dir("watched-internal-save");
+        fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("note.mdx");
+        write_note_with_resources(&target, &[]);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let watch = file_watch::DocumentWatchState::with_emitter(move |paths| {
+            sender.send(paths).unwrap();
+        });
+        watch
+            .set_paths(vec![target.to_string_lossy().into_owned()])
+            .unwrap();
+        let mut request = save_request_for(&target, Vec::new(), Vec::new());
+        request.content = "saved by Mora".to_string();
+
+        save_to_path_with_watch(&watch, request, target.clone()).unwrap();
+
+        assert!(receiver
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .is_err());
+        watch.shutdown_now();
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn failed_watched_save_does_not_suppress_the_next_external_change() {
+        let dir = temp_test_dir("watched-failed-save");
+        fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("target.mdx");
+        let missing_source = dir.join("missing-source.mdx");
+        let replacement = dir.join("replacement.mdx");
+        write_note_with_resources(&target, &[]);
+        write_note_with_resources(&replacement, &[]);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let watch = file_watch::DocumentWatchState::with_emitter(move |paths| {
+            sender.send(paths).unwrap();
+        });
+        watch
+            .set_paths(vec![target.to_string_lossy().into_owned()])
+            .unwrap();
+        let mut request = save_request_for(&target, Vec::new(), Vec::new());
+        request.path = Some(missing_source.to_string_lossy().into_owned());
+
+        assert!(save_to_path_with_watch(&watch, request, target.clone()).is_err());
+        let backup = dir.join("target.mdx.external-backup");
+        fs::rename(&target, &backup).unwrap();
+        fs::rename(&replacement, &target).unwrap();
+        fs::remove_file(backup).unwrap();
+
+        let changed = receiver
+            .recv_timeout(std::time::Duration::from_secs(6))
+            .unwrap();
+        let expected = path_identity(&target).unwrap();
+        assert!(changed
+            .iter()
+            .any(|path| { path_identity(Path::new(path)).as_deref() == Ok(expected.as_str()) }));
+        watch.shutdown_now();
         fs::remove_dir_all(dir).unwrap();
     }
 

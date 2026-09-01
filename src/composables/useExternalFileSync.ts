@@ -1,11 +1,16 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { watch } from "vue";
+import { ref, watch } from "vue";
 
 import { useDocumentSession } from "./useDocumentSession";
 
 type ExternalFilesChangedPayload = {
     paths: string[];
+};
+
+export type ExternalFileSyncStatus = {
+    state: "active" | "degraded" | "disabled" | "error";
+    message: string | null;
 };
 
 export type ExternalFileSyncOptions = {
@@ -27,27 +32,38 @@ function watchedPaths(options: ExternalFileSyncOptions): string[] {
 
 export function useExternalFileSync(options: ExternalFileSyncOptions) {
     let disposed = false;
-    let unlisten: UnlistenFn | null = null;
+    let unlistenChanges: UnlistenFn | null = null;
+    let unlistenStatus: UnlistenFn | null = null;
+    let listenerFailure = false;
     let syncTail = Promise.resolve();
     let eventTail = Promise.resolve();
+    const status = ref<ExternalFileSyncStatus>({ state: "active", message: null });
+
+    function reportListenerFailure() {
+        listenerFailure = true;
+        status.value = {
+            state: "error",
+            message: "外部文件同步监听失败；请重新打开窗口后重试。",
+        };
+    }
 
     function enqueueWatchedPaths(paths: string[]) {
         syncTail = syncTail
             .catch(() => undefined)
-            .then(() => {
+            .then(async () => {
+                await listenerReady;
                 if (disposed && paths.length > 0) return;
                 return invoke<void>("set_watched_document_paths", { paths });
             })
-            .catch(() => undefined);
+            .catch(() => {
+                if (!disposed) {
+                    status.value = {
+                        state: "error",
+                        message: "外部文件监视配置失败；切换或重新打开文档可重试。",
+                    };
+                }
+            });
     }
-
-    const stopPathWatch = options.desktop
-        ? watch(
-              () => watchedPaths(options),
-              (paths) => enqueueWatchedPaths(paths),
-              { immediate: true },
-          )
-        : () => undefined;
 
     async function handleExternalChange(payload: ExternalFilesChangedPayload) {
         if (disposed || !Array.isArray(payload.paths)) return;
@@ -68,30 +84,50 @@ export function useExternalFileSync(options: ExternalFileSyncOptions) {
     }
 
     const listenerReady: Promise<void> = options.desktop
-        ? listen<ExternalFilesChangedPayload>(
-              "mora://external-files-changed",
-              (event) => {
-                  const operation = eventTail
-                      .catch(() => undefined)
-                      .then(() => handleExternalChange(event.payload))
-                      .catch(() => undefined);
-                  eventTail = operation;
-                  return operation;
-              },
-          )
-              .then((registered) => {
-                  if (disposed) registered();
-                  else unlisten = registered;
+        ? Promise.all([
+              listen<ExternalFilesChangedPayload>(
+                  "mora://external-files-changed",
+                  (event) => {
+                      const operation = eventTail
+                          .catch(() => undefined)
+                          .then(() => handleExternalChange(event.payload))
+                          .catch(() => undefined);
+                      eventTail = operation;
+                      return operation;
+                  },
+              )
+                  .then((registered) => {
+                      if (disposed) registered();
+                      else unlistenChanges = registered;
+                  })
+                  .catch(reportListenerFailure),
+              listen<ExternalFileSyncStatus>("mora://file-watch-status", (event) => {
+                  if (!listenerFailure && !disposed) status.value = event.payload;
               })
-              .catch(() => undefined)
+                  .then((registered) => {
+                      if (disposed) registered();
+                      else unlistenStatus = registered;
+                  })
+                  .catch(reportListenerFailure),
+          ]).then(() => undefined)
         : Promise.resolve();
+
+    const stopPathWatch = options.desktop
+        ? watch(
+              () => watchedPaths(options),
+              (paths) => enqueueWatchedPaths(paths),
+              { immediate: true },
+          )
+        : () => undefined;
 
     function dispose() {
         if (disposed) return;
         disposed = true;
         stopPathWatch();
-        unlisten?.();
-        unlisten = null;
+        unlistenChanges?.();
+        unlistenChanges = null;
+        unlistenStatus?.();
+        unlistenStatus = null;
         if (options.desktop) enqueueWatchedPaths([]);
     }
 
@@ -100,5 +136,5 @@ export function useExternalFileSync(options: ExternalFileSyncOptions) {
         await Promise.all([syncTail, eventTail]);
     }
 
-    return { dispose, settled };
+    return { status, dispose, settled };
 }

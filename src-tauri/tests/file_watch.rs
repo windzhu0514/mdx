@@ -1,4 +1,4 @@
-use mdxnote_lib::file_watch::{DocumentWatchState, EchoSuppressor};
+use mdxnote_lib::file_watch::{ContentFingerprint, DocumentWatchState, EchoSuppressor};
 use mdxnote_lib::{disk_revision, path_identity, DiskRevision};
 use std::fs::{self, File};
 use std::io::Write;
@@ -16,6 +16,10 @@ fn revision(modified_at_ms: u128, size: u64) -> DiskRevision {
         modified_at_ms,
         size,
     }
+}
+
+fn fingerprint(bytes: &[u8]) -> ContentFingerprint {
+    ContentFingerprint::from_bytes(bytes)
 }
 
 fn write_mdx(path: &Path, content: &str) {
@@ -60,20 +64,62 @@ fn receive_target(
 fn expected_internal_revision_is_suppressed_once() {
     let mut suppressor = EchoSuppressor::default();
     suppressor.begin(Path::new("note.mdx"));
-    suppressor.finish(Path::new("note.mdx"), revision(42, 900));
+    suppressor.finish(
+        Path::new("note.mdx"),
+        revision(42, 900),
+        fingerprint(b"saved archive"),
+    );
 
-    assert!(suppressor.should_suppress(Path::new("note.mdx"), &revision(42, 900)));
-    assert!(!suppressor.should_suppress(Path::new("note.mdx"), &revision(43, 901)));
+    assert!(suppressor.should_suppress(
+        Path::new("note.mdx"),
+        &revision(42, 900),
+        &fingerprint(b"saved archive"),
+    ));
+    assert!(!suppressor.should_suppress(
+        Path::new("note.mdx"),
+        &revision(43, 901),
+        &fingerprint(b"saved archive"),
+    ));
 }
 
 #[test]
 fn a_real_external_revision_next_to_a_save_is_not_suppressed() {
     let mut suppressor = EchoSuppressor::default();
     suppressor.begin(Path::new("note.mdx"));
-    suppressor.finish(Path::new("note.mdx"), revision(42, 900));
+    suppressor.finish(
+        Path::new("note.mdx"),
+        revision(42, 900),
+        fingerprint(b"saved archive"),
+    );
 
-    assert!(!suppressor.should_suppress(Path::new("note.mdx"), &revision(43, 901)));
-    assert!(!suppressor.should_suppress(Path::new("note.mdx"), &revision(42, 900)));
+    assert!(!suppressor.should_suppress(
+        Path::new("note.mdx"),
+        &revision(43, 901),
+        &fingerprint(b"external archive"),
+    ));
+    assert!(!suppressor.should_suppress(
+        Path::new("note.mdx"),
+        &revision(42, 900),
+        &fingerprint(b"saved archive"),
+    ));
+}
+
+#[test]
+fn same_size_and_mtime_with_different_content_is_not_suppressed() {
+    let mut suppressor = EchoSuppressor::default();
+    let unchanged_metadata = revision(42, 900);
+    suppressor.begin(Path::new("note.mdx"));
+    suppressor.finish(
+        Path::new("note.mdx"),
+        unchanged_metadata.clone(),
+        fingerprint(b"saved-A"),
+    );
+
+    assert!(!suppressor.should_suppress(
+        Path::new("note.mdx"),
+        &unchanged_metadata,
+        &fingerprint(b"external"),
+    ));
 }
 
 #[test]

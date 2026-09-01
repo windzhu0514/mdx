@@ -10,19 +10,21 @@ import { useExternalFileSync } from "./useExternalFileSync";
 
 type PayloadEvent<T> = { payload: T };
 type EventListener = (event: PayloadEvent<{ paths: string[] }>) => Promise<void>;
+type StatusListener = (
+    event: PayloadEvent<{ state: string; message: string | null }>,
+) => void;
 
 const tauri = vi.hoisted(() => ({
     invoke: vi.fn(),
+    listen: vi.fn(),
     listener: null as EventListener | null,
+    statusListener: null as StatusListener | null,
     unlisten: vi.fn(),
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: tauri.invoke }));
 vi.mock("@tauri-apps/api/event", () => ({
-    listen: vi.fn(async (_name: string, listener: EventListener) => {
-        tauri.listener = listener;
-        return tauri.unlisten;
-    }),
+    listen: tauri.listen,
 }));
 
 function metadata(title: string): MdxMetadata {
@@ -76,7 +78,19 @@ describe("useExternalFileSync", () => {
         contents.clear();
         revisions.clear();
         tauri.listener = null;
+        tauri.statusListener = null;
         tauri.unlisten.mockReset();
+        tauri.listen.mockReset();
+        tauri.listen.mockImplementation(
+            async (name: string, listener: EventListener | StatusListener) => {
+                if (name === "mora://external-files-changed") {
+                    tauri.listener = listener as EventListener;
+                } else if (name === "mora://file-watch-status") {
+                    tauri.statusListener = listener as StatusListener;
+                }
+                return tauri.unlisten;
+            },
+        );
         tauri.invoke.mockReset();
         tauri.invoke.mockImplementation(async (command: string, args?: unknown) => {
             const payload = (args ?? {}) as Record<string, unknown>;
@@ -150,7 +164,7 @@ describe("useExternalFileSync", () => {
 
         externalSync.dispose();
         await externalSync.settled();
-        expect(tauri.unlisten).toHaveBeenCalledTimes(1);
+        expect(tauri.unlisten).toHaveBeenCalledTimes(2);
         expect(tauri.invoke).toHaveBeenLastCalledWith("set_watched_document_paths", {
             paths: [],
         });
@@ -171,5 +185,87 @@ describe("useExternalFileSync", () => {
 
         expect(tauri.listener).toBeNull();
         expect(tauri.invoke).not.toHaveBeenCalled();
+    });
+
+    it("exposes structured degraded and disabled watcher status without document content", async () => {
+        const session = useDocumentSession(true);
+        const externalSync = useExternalFileSync({
+            desktop: true,
+            session,
+            onReloaded: vi.fn(),
+            onActiveConflict: vi.fn(),
+        });
+        await vi.waitFor(() => expect(tauri.statusListener).toBeTypeOf("function"));
+
+        tauri.statusListener?.({
+            payload: { state: "degraded", message: "已切换到兼容监视模式。" },
+        });
+
+        expect(externalSync.status.value).toEqual({
+            state: "degraded",
+            message: "已切换到兼容监视模式。",
+        });
+        externalSync.dispose();
+        await externalSync.settled();
+        await session.dispose();
+    });
+
+    it("surfaces listener registration failures as an actionable error status", async () => {
+        tauri.listen.mockRejectedValueOnce(new Error("event permission denied"));
+        const session = useDocumentSession(true);
+        const externalSync = useExternalFileSync({
+            desktop: true,
+            session,
+            onReloaded: vi.fn(),
+            onActiveConflict: vi.fn(),
+        });
+
+        await externalSync.settled();
+
+        expect(externalSync.status.value.state).toBe("error");
+        expect(externalSync.status.value.message).toContain("外部文件同步监听失败");
+        externalSync.dispose();
+        await externalSync.settled();
+        await session.dispose();
+    });
+
+    it("registers status listeners before configuring watched paths", async () => {
+        const statusRegistration: {
+            finish?: (unlisten: typeof tauri.unlisten) => void;
+        } = {};
+        tauri.listen.mockImplementation(
+            async (name: string, listener: EventListener | StatusListener) => {
+                if (name === "mora://external-files-changed") {
+                    tauri.listener = listener as EventListener;
+                    return tauri.unlisten;
+                }
+                tauri.statusListener = listener as StatusListener;
+                return new Promise<typeof tauri.unlisten>((resolve) => {
+                    statusRegistration.finish = resolve;
+                });
+            },
+        );
+        const session = useDocumentSession(true);
+        const externalSync = useExternalFileSync({
+            desktop: true,
+            session,
+            onReloaded: vi.fn(),
+            onActiveConflict: vi.fn(),
+        });
+
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(tauri.invoke).not.toHaveBeenCalledWith("set_watched_document_paths", {
+            paths: [],
+        });
+
+        statusRegistration.finish?.(tauri.unlisten);
+        await externalSync.settled();
+        expect(tauri.invoke).toHaveBeenCalledWith("set_watched_document_paths", {
+            paths: [],
+        });
+        externalSync.dispose();
+        await externalSync.settled();
+        await session.dispose();
     });
 });

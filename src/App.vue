@@ -259,6 +259,12 @@ const externalFileSync = useExternalFileSync({
         if (!showConflictPrompt.value) await resolveDocumentConflict(documentId);
     },
 });
+watch(externalFileSync.status, (current) => {
+    if (current.state === "active") return;
+    statusMessage.value =
+        current.message ??
+        (current.state === "degraded" ? "外部文件同步已降级" : "外部文件同步不可用");
+});
 watch(agentStatus, (currentStatus) => {
     if (
         preferences.value.agentAccessEnabled &&
