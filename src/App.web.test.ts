@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceIndexRefresh, WorkspaceRefreshResult } from "./types/workspace";
 
 const mocks = vi.hoisted(() => ({
+    eventListeners: new Map<string, (event: { payload: unknown }) => void>(),
+    listen: vi.fn(),
     closeHandler: undefined as
         ((event: { preventDefault: () => void }) => Promise<void>) | undefined,
     focusHandler: undefined as
@@ -151,6 +153,29 @@ const mocks = vi.hoisted(() => ({
         close: mocks.windowClose,
     })),
     invoke: vi.fn(async (command: string, args?: unknown) => {
+        if (command === "get_agent_bridge_status") {
+            return {
+                enabled: false,
+                listening: false,
+                connectedClients: 0,
+                watcherClients: 0,
+                cliPath: null,
+                protocolVersion: 1,
+                lastError: null,
+            };
+        }
+        if (command === "set_agent_access_enabled") {
+            const enabled = (args as { enabled: boolean }).enabled;
+            return {
+                enabled,
+                listening: enabled,
+                connectedClients: 0,
+                watcherClients: 0,
+                cliPath: null,
+                protocolVersion: 1,
+                lastError: null,
+            };
+        }
         if (command === "list_system_font_families") {
             return [...mocks.systemFontFamilies];
         }
@@ -422,6 +447,10 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@tauri-apps/api/core", () => ({
     invoke: mocks.invoke,
     isTauri: mocks.isTauri,
+}));
+
+vi.mock("@tauri-apps/api/event", () => ({
+    listen: mocks.listen,
 }));
 
 vi.mock("@tauri-apps/api/window", () => ({
@@ -800,6 +829,15 @@ function installCompactViewport(initial: boolean) {
 }
 
 beforeEach(() => {
+    mocks.eventListeners.clear();
+    mocks.listen
+        .mockReset()
+        .mockImplementation(
+            async (name: string, listener: (event: { payload: unknown }) => void) => {
+                mocks.eventListeners.set(name, listener);
+                return () => mocks.eventListeners.delete(name);
+            },
+        );
     mocks.closeHandler = undefined;
     mocks.focusHandler = undefined;
     mocks.editorUpdate = undefined;
@@ -878,6 +916,42 @@ afterEach(() => {
 });
 
 describe("App Web 预览启动", () => {
+    it("clears only watcher-owned status after recovery to active", async () => {
+        mocks.isTauri.mockReturnValue(true);
+        const host = await mountApp();
+        await vi.waitFor(() =>
+            expect(mocks.eventListeners.get("mora://file-watch-status")).toBeTypeOf(
+                "function",
+            ),
+        );
+        const publishWatcherStatus = mocks.eventListeners.get("mora://file-watch-status");
+        if (!publishWatcherStatus) throw new Error("未注册文件监视状态监听器");
+
+        publishWatcherStatus({
+            payload: { state: "degraded", message: "文件监视已降级。" },
+        });
+        await nextTick();
+        expect(host.textContent).toContain("文件监视已降级。");
+
+        publishWatcherStatus({ payload: { state: "active", message: null } });
+        await nextTick();
+        expect(host.textContent).not.toContain("文件监视已降级。");
+
+        publishWatcherStatus({
+            payload: { state: "degraded", message: "文件监视再次降级。" },
+        });
+        mocks.openDialog.mockResolvedValue(["C:\\notes\\watcher-error.mdx"]);
+        mocks.openMdxFailures.add("C:\\notes\\watcher-error.mdx");
+        findButton(host, "打开文件")?.click();
+        await vi.waitFor(() =>
+            expect(host.textContent).toContain("无法打开 C:\\notes\\watcher-error.mdx"),
+        );
+
+        publishWatcherStatus({ payload: { state: "active", message: null } });
+        await nextTick();
+        expect(host.textContent).toContain("无法打开 C:\\notes\\watcher-error.mdx");
+    });
+
     it("shows update checking under About and disables it in Web preview", async () => {
         const host = await mountApp();
 

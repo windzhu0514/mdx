@@ -42,6 +42,8 @@ test("derives platform-specific sidecar names and explicit Cargo arguments", () 
         "src-tauri/Cargo.toml",
         "--bin",
         "mora-agent",
+        "--features",
+        "agent-bin",
         "--release",
         "--target",
         LINUX_TARGET,
@@ -52,6 +54,8 @@ test("derives platform-specific sidecar names and explicit Cargo arguments", () 
         "src-tauri/Cargo.toml",
         "--bin",
         "mora-agent",
+        "--features",
+        "agent-bin",
         "--target",
         WINDOWS_TARGET,
     ]);
@@ -418,7 +422,7 @@ test("reports persistent cleanup errors after removing every packagable stale ar
     await Promise.all([assertMissing(sidecar), assertMissing(native)]);
 });
 
-test("fails when Cargo reports success without producing the selected binary", async () => {
+test("fails with the missing-file cause when Cargo omits the selected binary", async () => {
     const rootDir = await createRepository("mora-agent-missing-");
 
     await assert.rejects(
@@ -429,7 +433,11 @@ test("fails when Cargo reports success without producing the selected binary", a
             runCommand: async (command) =>
                 command === "rustc" ? success(WINDOWS_TARGET) : success(),
         }),
-        /Compiled mora-agent is missing/,
+        (error) => {
+            assert.match(error.message, /Compiled mora-agent is missing/);
+            assert.equal(error.cause?.code, "ENOENT");
+            return true;
+        },
     );
 });
 

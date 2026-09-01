@@ -1,3 +1,5 @@
+#![cfg(feature = "agent-bin")]
+
 use mdxnote_lib::agent_ipc::{AgentServer, EndpointRegistry};
 use mdxnote_lib::agent_protocol::{
     AgentDocumentSnapshot, AgentDocumentSummary, AgentError, AgentRequest, AgentRequestKind,

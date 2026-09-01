@@ -60,18 +60,27 @@ npm run tauri -- build
 
 任一命令失败都停止发布。Windows 本地正式构建必须提供与 GitHub Secrets 相同的 Tauri 更新签名私钥环境变量，确保安装包带有对应 updater 签名。
 
+`npm run build:exe` 完成后必须同时存在：
+
+```text
+src-tauri/target/release/mora.exe
+src-tauri/target/release/mora-agent.exe
+```
+
+macOS/Linux 原生构建的控制台程序名为 `mora-agent`。`mora-agent --help` 必须成功，且不得生成 `mora-mcp`。正式构建后还必须检查每一个安装包：安装内容同时包含 Mora GUI 与同版本 `mora-agent`，设置页能显示安装后 Agent 的绝对路径，复制出的 MCP 配置使用该路径和参数 `mcp`。
+
 Windows 主机只能真实验证 Windows 构建。macOS 与 Linux 的权威编译和打包结果来自 GitHub-hosted 对应 Runner，不能用 Windows 本地检查代替。
 
 ## 5. 跨平台构建矩阵
 
 `Publish Mora` 工作流先执行一次通用质量门禁，再依次构建：
 
-| 平台    | 架构          | 安装包                      |
-| ------- | ------------- | --------------------------- |
-| Windows | x64           | 简体中文 NSIS、简体中文 MSI |
-| macOS   | Apple Silicon | DMG                         |
-| macOS   | Intel         | DMG                         |
-| Linux   | x64           | AppImage、Deb               |
+| 平台    | 架构          | 安装包                      | 安装内容要求          |
+| ------- | ------------- | --------------------------- | --------------------- |
+| Windows | x64           | 简体中文 NSIS、简体中文 MSI | `Mora` + `mora-agent` |
+| macOS   | Apple Silicon | DMG                         | `Mora` + `mora-agent` |
+| macOS   | Intel         | DMG                         | `Mora` + `mora-agent` |
+| Linux   | x64           | AppImage、Deb               | `Mora` + `mora-agent` |
 
 平台任务串行上传，以避免多个任务同时更新 `latest.json`。本版本不生成 RPM、Snap、Flatpak、ARM Linux 或 Windows ARM64。
 
@@ -110,6 +119,7 @@ git push origin app-v0.1.1
 - Windows：一个简体中文 `.msi` 和一个 NSIS setup `.exe`。
 - macOS：aarch64 与 x86_64 两个 `.dmg`。
 - Linux：一个 `.AppImage` 和一个 `.deb`。
+- 上述每一个安装包都包含唯一的 `mora-agent` sidecar；不存在 `mora-mcp`，且 sidecar 与目标架构一致。
 - updater 更新归档及对应 `.sig` 文件存在。
 - `latest.json` 同时包含 Windows、macOS 和 Linux 平台条目，版本、下载 URL 和签名字段正确。
 - Release 标题、说明和目标提交正确。

@@ -304,7 +304,9 @@ describe("document session", () => {
         diskContents.set(pathKey(runtime.path!), "reloaded from disk");
         diskRevisions.set(pathKey(runtime.path!), 2);
 
-        await expect(session.refreshDiskState([runtime.path!])).resolves.toEqual([runtime.id]);
+        await expect(session.refreshDiskState([runtime.path!])).resolves.toEqual([
+            runtime.id,
+        ]);
 
         expect(runtime.content).toBe("reloaded from disk");
         expect(runtime.liveRevision).not.toBe(base);

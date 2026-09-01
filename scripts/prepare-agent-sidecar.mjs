@@ -51,6 +51,8 @@ export function cargoBuildArgs(target, debug) {
         "src-tauri/Cargo.toml",
         "--bin",
         AGENT_NAME,
+        "--features",
+        "agent-bin",
     ];
     if (!debug) {
         args.push("--release");
@@ -326,7 +328,7 @@ async function assertExecutable(path, label, root, fs) {
         await fs.access(safePath, constants.X_OK);
     } catch (error) {
         if (error?.code === "ENOENT") {
-            throw new Error(`${label} is missing: ${safePath}`);
+            throw new Error(`${label} is missing: ${safePath}`, { cause: error });
         }
         throw new Error(`${label} is not executable: ${safePath}`, { cause: error });
     }

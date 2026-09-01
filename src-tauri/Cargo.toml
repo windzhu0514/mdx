@@ -10,6 +10,9 @@ default-run = "mora"
 name = "mdxnote_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[features]
+agent-bin = []
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -66,4 +69,5 @@ lopdf = "0.42.0"
 
 [[bin]]
 name = "mora-agent"
-path = "src/bin/mora-agent.rs"
+path = "src/mora_agent_main.rs"
+required-features = ["agent-bin"]

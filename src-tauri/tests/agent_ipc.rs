@@ -146,6 +146,25 @@ async fn endpoint_is_published_after_binding_and_removed_on_stop() {
     assert!(!fixture.registry.path().exists());
 }
 
+#[cfg(windows)]
+#[tokio::test]
+async fn stopped_named_pipe_rejects_requests_without_waiting_for_the_global_timeout() {
+    let fixture = IpcFixture::new().await;
+    let server = fixture.start(ok_handler()).await;
+    let client = AgentClient::connect_to(server.descriptor()).await.unwrap();
+
+    server.stop().await.unwrap();
+    let error = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        client.request(AgentRequestKind::Status),
+    )
+    .await
+    .expect("a removed named pipe must fail before the global request timeout")
+    .unwrap_err();
+
+    assert_eq!(error.code, BRIDGE_UNAVAILABLE);
+}
+
 #[tokio::test]
 async fn stop_does_not_remove_an_endpoint_owned_by_another_session() {
     let fixture = IpcFixture::new().await;

@@ -640,7 +640,7 @@ async fn mcp_requires_process_stdio_and_console_entry_stays_gui_free() {
     assert_eq!(code, 1);
     assert!(stdout.into_string().is_empty());
     assert!(stderr.into_string().contains("INVALID_INPUT"));
-    let entry = std::fs::read_to_string("src/bin/mora-agent.rs").unwrap();
+    let entry = std::fs::read_to_string("src/mora_agent_main.rs").unwrap();
     assert!(entry.contains("agent_cli::main_entry"));
     assert!(!entry.contains("tauri::Builder"));
 }

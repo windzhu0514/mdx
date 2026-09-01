@@ -1,4 +1,4 @@
-use crate::agent_ipc::{AgentServer, EndpointRegistry};
+use crate::agent_ipc::{AgentConnectionCounts, AgentServer, EndpointRegistry};
 use crate::agent_protocol::{
     AgentBridgeStatus, AgentDocumentEvent, AgentError, AgentRequest, AgentRequestKind, AgentResult,
     AGENT_ACCESS_DISABLED, BRIDGE_UNAVAILABLE, PROTOCOL_VERSION, REQUEST_TIMEOUT, TIMEOUT,
@@ -311,6 +311,35 @@ impl AgentBridgeState {
         Ok(status)
     }
 
+    fn apply_connection_counts(
+        &self,
+        session_id: &str,
+        counts: AgentConnectionCounts,
+    ) -> Result<bool, AgentError> {
+        if self.inner.closed.load(Ordering::Acquire) {
+            return Ok(false);
+        }
+        let runtime = self
+            .inner
+            .runtime
+            .lock()
+            .map_err(|_| bridge_state_error())?;
+        if !runtime
+            .as_ref()
+            .is_some_and(|runtime| runtime.session_id == session_id)
+        {
+            return Ok(false);
+        }
+        let mut status = self
+            .inner
+            .status
+            .write()
+            .map_err(|_| bridge_state_error())?;
+        status.connected_clients = counts.connected_clients;
+        status.watcher_clients = counts.watcher_clients;
+        Ok(true)
+    }
+
     async fn start<R: Runtime>(&self, app: &AppHandle<R>) -> Result<AgentBridgeStatus, AgentError> {
         let _lifecycle_guard = self.inner.lifecycle_gate.lock().await;
         if self.inner.closed.load(Ordering::Acquire) {
@@ -409,6 +438,7 @@ impl AgentBridgeState {
         self.inner.accepting_requests.store(true, Ordering::Release);
         let counts_state = Arc::downgrade(&self.inner);
         let counts_app = app.clone();
+        let counts_session_id = session_id.clone();
         let counts_task = tokio::spawn(async move {
             while connection_counts.changed().await.is_ok() {
                 let Some(inner) = counts_state.upgrade() else {
@@ -417,14 +447,8 @@ impl AgentBridgeState {
                 let counts_state = AgentBridgeState { inner };
                 let counts = *connection_counts.borrow_and_update();
                 let updated = counts_state
-                    .inner
-                    .status
-                    .write()
-                    .map(|mut status| {
-                        status.connected_clients = counts.connected_clients;
-                        status.watcher_clients = counts.watcher_clients;
-                    })
-                    .is_ok();
+                    .apply_connection_counts(&counts_session_id, counts)
+                    .unwrap_or(false);
                 if updated {
                     let _ = counts_state.emit_status(&counts_app);
                 }
@@ -960,6 +984,57 @@ mod tests {
         let response = receiver.await.unwrap();
         assert_eq!(response.error.unwrap().code, AGENT_ACCESS_DISABLED);
         assert!(!state.status().unwrap().enabled);
+    }
+
+    #[test]
+    fn stale_connection_count_task_cannot_update_a_restarted_runtime() {
+        let state = AgentBridgeState::default();
+        *state.inner.runtime.lock().unwrap() = Some(BridgeRuntime {
+            session_id: "new-session".to_string(),
+            server: None,
+            counts_task: None,
+        });
+
+        let updated = state
+            .apply_connection_counts(
+                "old-session",
+                AgentConnectionCounts {
+                    connected_clients: 4,
+                    watcher_clients: 2,
+                },
+            )
+            .unwrap();
+
+        assert!(!updated);
+        let status = state.status().unwrap();
+        assert_eq!(status.connected_clients, 0);
+        assert_eq!(status.watcher_clients, 0);
+    }
+
+    #[test]
+    fn closed_bridge_rejects_late_connection_count_updates() {
+        let state = AgentBridgeState::default();
+        *state.inner.runtime.lock().unwrap() = Some(BridgeRuntime {
+            session_id: "closing-session".to_string(),
+            server: None,
+            counts_task: None,
+        });
+        state.inner.closed.store(true, Ordering::Release);
+
+        let updated = state
+            .apply_connection_counts(
+                "closing-session",
+                AgentConnectionCounts {
+                    connected_clients: 3,
+                    watcher_clients: 1,
+                },
+            )
+            .unwrap();
+
+        assert!(!updated);
+        let status = state.status().unwrap();
+        assert_eq!(status.connected_clients, 0);
+        assert_eq!(status.watcher_clients, 0);
     }
 
     #[tokio::test]

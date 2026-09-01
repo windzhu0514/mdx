@@ -102,6 +102,7 @@ describe("GitHub Draft Release workflow", () => {
         };
         const gitignore = readRepositoryFile(".gitignore");
         const workflow = readRepositoryFile(".github/workflows/publish.yml");
+        const cargoManifest = readRepositoryFile("src-tauri/Cargo.toml");
         const sidecarCheck =
             "node scripts/prepare-agent-sidecar.mjs --check --target ${{ matrix.target }}";
 
@@ -113,6 +114,12 @@ describe("GitHub Draft Release workflow", () => {
         );
         expect(config.bundle.externalBin).toEqual(["binaries/mora-agent"]);
         expect(config.bundle.externalBin).not.toContain("binaries/mora-mcp");
+        expect(cargoManifest).toMatch(/\[features\][\s\S]*agent-bin\s*=\s*\[\]/);
+        expect(cargoManifest).toMatch(
+            /\[\[bin\]\][\s\S]*name\s*=\s*"mora-agent"[\s\S]*required-features\s*=\s*\["agent-bin"\]/,
+        );
+        expect(cargoManifest).toContain('path = "src/mora_agent_main.rs"');
+        expect(cargoManifest).not.toContain('path = "src/bin/mora-agent.rs"');
         expect(gitignore).toContain("src-tauri/binaries/mora-agent-*");
         expect(gitignore).not.toMatch(/^src-tauri\/binaries\/$/m);
         expect(workflow).toContain(sidecarCheck);

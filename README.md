@@ -66,9 +66,48 @@ note.mdx
 
 Mora 不要求登录，也不会为了保存笔记而上传文档。AI 功能是可选的：只有用户主动调用 AI 时，当前 Markdown 文档、选区和指令才会发送到用户配置的 OpenAI-compatible 服务；API Key 保存在系统凭据存储中。
 
+## 本地 Agent 接入
+
+本地 Agent 接入默认关闭。需要使用时，在 **设置 → Agent** 中显式开启“本地 Agent 接入”，并从同一页面复制安装后 `mora-agent` 的绝对路径。Mora 使用当前用户专属的本地 IPC（Windows Named Pipe；macOS/Linux 为 Unix Domain Socket），不是 HTTP 服务，不监听网络端口，也不需要常驻 daemon。
+
+CLI 与 MCP 共用同一个 Windows `mora-agent.exe` 或 macOS/Linux `mora-agent`；没有单独的 `mora-mcp` 程序。开启接入后可执行：
+
+```text
+mora-agent status --json
+mora-agent list --json
+mora-agent read <document-id> --json
+mora-agent replace <document-id> --base-revision <revision> --content-file - --json
+mora-agent save <document-id> --base-revision <revision> --json
+mora-agent watch [<document-id>] --jsonl
+mora-agent mcp
+```
+
+`list` 返回当前已打开文档及其不透明 `liveRevision`。`read` 读取 Mora 内存中的最新正文，包括尚未保存的编辑；`replace` 只有在 `base-revision` 仍为当前版本时才立即更新编辑器，并将文档标记为未保存，但不会自动写盘；只有显式 `save` 才保存。旧 revision 会被拒绝且不改变正文。`watch` 只输出文档 ID、revision、dirty 和来源等变更元数据，不输出正文。
+
+Mora 也会监视已打开 `.mdx` 的磁盘变化：文档干净时自动重新载入，存在未保存编辑时保留内存内容并进入冲突处理。关闭 Agent 接入会移除发现记录、断开 watcher，并拒绝后续请求。
+
+MCP 使用 stdio，没有 URL 或端口。第三方 MCP 客户端配置应使用 **设置 → Agent** 显示或复制的安装后绝对路径，不要填写仓库开发路径：
+
+```json
+{
+    "mcpServers": {
+        "mora": {
+            "command": "<设置中显示的 mora-agent 绝对路径>",
+            "args": ["mcp"]
+        }
+    }
+}
+```
+
+首版 MCP 只提供 `mora_list_documents`、`mora_read_document`、`mora_replace_document` 和 `mora_save_document` 四个工具。Mora 不会自动修改 `PATH` 或第三方 MCP 配置。
+
+安全与错误约定：IPC 仅允许同一系统用户访问；JSON/JSONL/MCP 数据只写 stdout，诊断写 stderr，日志不得包含文档正文。CLI 成功返回 `0`；通用错误为 `1`，Mora 未运行为 `2`，接入关闭为 `3`，revision 冲突为 `4`，磁盘冲突为 `5`，权限错误为 `6`。
+
+当前实现包含 Windows 与 Unix 本地 IPC 代码及跨平台打包配置；本次本机验收只验证 Windows Named Pipe、Windows 可执行文件和 Windows 安装包。macOS/Linux 的打包由对应 CI Runner 验证，本 Windows 环境不声称已验证 Unix runtime。首版不提供远程访问、HTTP、云同步、CRDT/OT、离线 Agent 编辑器或资源变更工具。
+
 ## 当前限制
 
-- 当前主要面向 Windows，尚未发布正式安装包。
+- Agent 本机运行与安装包验收当前以 Windows 为范围；macOS/Linux 由对应 CI Runner 验证。
 - 不提供云同步、多人协作或加密笔记。
 - 不以替代 Word 的分页、复杂排版、表单和审阅流程为目标。
 - 资源目前使用内存缓冲和 Base64 传输，不适合超大附件。
@@ -84,7 +123,7 @@ Mora 不要求登录，也不会为了保存笔记而上传文档。AI 功能是
 
 正式桌面版启动后会静默检查一次更新，也可以通过“关于 → 检查更新”手动检查。发现新版本后，Mora 显示 GitHub Release 中的版本和说明；只有用户明确点击后才会下载，并在安装重启前逐一处理所有未保存文档。
 
-更新清单、安装包和签名文件由 GitHub Actions 生成到 Draft Release。客户端必须通过内置公钥验证更新签名，签名不匹配时不会安装。当前仓库尚未公开正式 Release，因此源码构建不会凭空获得可下载版本。
+更新清单、安装包和签名文件由 GitHub Actions 生成到 Draft Release，经发布后客户端才能下载。客户端必须通过内置公钥验证更新签名，签名不匹配时不会安装；未发布的本地构建不会自动成为更新来源。
 
 ## 从源码运行
 
@@ -95,7 +134,7 @@ npm install
 npm run tauri -- dev
 ```
 
-构建开发版 Windows 程序（仅生成 `src-tauri/target/release/mora.exe`）：
+构建开发版 Windows 程序（生成同目录的 `mora.exe` 与 `mora-agent.exe`；macOS/Linux 的 Agent 文件名为 `mora-agent`）：
 
 ```bash
 npm run build:exe

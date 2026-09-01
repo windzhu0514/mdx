@@ -362,8 +362,7 @@ pub async fn connect(descriptor: &AgentEndpointDescriptor) -> Result<PlatformStr
         match ClientOptions::new().open(&descriptor.address) {
             Ok(client) => return Ok(PlatformStream::Client(client)),
             Err(error)
-                if matches!(error.raw_os_error(), Some(2 | 231))
-                    && started.elapsed() < REQUEST_TIMEOUT =>
+                if error.raw_os_error() == Some(231) && started.elapsed() < REQUEST_TIMEOUT =>
             {
                 tokio::time::sleep(std::time::Duration::from_millis(20)).await;
             }
