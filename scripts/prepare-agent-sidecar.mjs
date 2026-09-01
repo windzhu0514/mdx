@@ -1,16 +1,38 @@
 import { constants } from "node:fs";
-import { access, chmod, copyFile, mkdir, readFile, rm, stat } from "node:fs/promises";
+import {
+    access,
+    chmod,
+    copyFile,
+    lstat,
+    mkdir,
+    readFile,
+    readdir,
+    unlink,
+} from "node:fs/promises";
 import { spawnSync } from "node:child_process";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const AGENT_NAME = "mora-agent";
+const TARGET_TRIPLE_PATTERN = /^[A-Za-z0-9_]+(?:-[A-Za-z0-9_]+){2,}$/;
+const DEFAULT_FILE_SYSTEM = {
+    access,
+    chmod,
+    copyFile,
+    lstat,
+    mkdir,
+    readFile,
+    readdir,
+    unlink,
+};
 
 export function sidecarFileName(target) {
-    return `${AGENT_NAME}-${target}${executableSuffix(target)}`;
+    const validatedTarget = validateTargetTriple(target);
+    return `${AGENT_NAME}-${validatedTarget}${executableSuffix(validatedTarget)}`;
 }
 
 export function cargoBuildArgs(target, debug) {
+    const validatedTarget = validateTargetTriple(target);
     const args = [
         "build",
         "--manifest-path",
@@ -21,7 +43,7 @@ export function cargoBuildArgs(target, debug) {
     if (!debug) {
         args.push("--release");
     }
-    args.push("--target", target);
+    args.push("--target", validatedTarget);
     return args;
 }
 
@@ -30,68 +52,115 @@ export async function prepareAgentSidecar({
     env = process.env,
     args = process.argv.slice(2),
     runCommand = runProcess,
+    fileSystem = {},
 } = {}) {
     const options = parseArgs(args);
-    const hostTarget = await readHostTarget(rootDir, env, runCommand);
-    const target = options.target ?? env.TAURI_ENV_TARGET_TRIPLE?.trim() ?? hostTarget;
+    const suppliedTarget = options.target ?? env.TAURI_ENV_TARGET_TRIPLE?.trim();
+    const explicitTarget = suppliedTarget
+        ? validateTargetTriple(suppliedTarget)
+        : undefined;
     const debug = env.TAURI_ENV_DEBUG === "true";
     const profile = debug ? "debug" : "release";
     const targetDir = resolveTargetDir(rootDir, env.CARGO_TARGET_DIR);
-    const executableName = `${AGENT_NAME}${executableSuffix(target)}`;
-    const compiledPath = join(targetDir, target, profile, executableName);
-    const sidecarPath = join(rootDir, "src-tauri", "binaries", sidecarFileName(target));
-    const nativePath =
-        target === hostTarget ? join(targetDir, profile, executableName) : undefined;
-
-    if (options.check) {
-        await verifyPreparedArtifacts({
-            compiledPath,
-            sidecarPath,
-            native: target === hostTarget,
-            rootDir,
-            env,
-            runCommand,
-        });
-        return { target, profile, compiledPath, sidecarPath, nativePath };
-    }
-
-    const generatedPaths = [compiledPath, sidecarPath];
-    if (nativePath) {
-        generatedPaths.push(nativePath);
-    }
-    await Promise.all(generatedPaths.map((path) => rm(path, { force: true })));
+    const binariesRoot = resolve(rootDir, "src-tauri", "binaries");
+    const fs = { ...DEFAULT_FILE_SYSTEM, ...fileSystem };
+    let hostTarget;
+    let target = explicitTarget;
 
     try {
+        hostTarget = await readHostTarget(rootDir, env, runCommand);
+        target ??= hostTarget;
+        const paths = buildPaths({
+            targetDir,
+            binariesRoot,
+            target,
+            hostTarget,
+            profile,
+        });
+
+        if (options.check) {
+            await verifyPreparedArtifacts({
+                ...paths,
+                targetDir,
+                binariesRoot,
+                native: target === hostTarget,
+                rootDir,
+                env,
+                runCommand,
+                fs,
+            });
+            return { target, profile, ...paths };
+        }
+
+        const initialCleanupErrors = await cleanupGeneratedArtifacts({
+            target,
+            hostTarget,
+            profile,
+            targetDir,
+            binariesRoot,
+            fs,
+        });
+        if (initialCleanupErrors.length > 0) {
+            throw cleanupError("Initial mora-agent cleanup failed", initialCleanupErrors);
+        }
+
         const build = await runCommand("cargo", cargoBuildArgs(target, debug), {
             cwd: rootDir,
             env: agentBuildEnvironment(env),
             stdio: "inherit",
         });
         assertCommandSucceeded("cargo build", build);
-        await assertExecutable(compiledPath, "Compiled mora-agent");
+        await assertExecutable(paths.compiledPath, "Compiled mora-agent", targetDir, fs);
 
         if (target === hostTarget) {
-            await verifyHelp(compiledPath, rootDir, env, runCommand);
+            await verifyHelp(paths.compiledPath, rootDir, env, runCommand);
         }
 
-        await copyExecutable(compiledPath, sidecarPath);
-        if (nativePath) {
-            await copyExecutable(compiledPath, nativePath);
+        await copyExecutable(
+            paths.compiledPath,
+            targetDir,
+            paths.sidecarPath,
+            binariesRoot,
+            fs,
+        );
+        if (paths.nativePath) {
+            await copyExecutable(
+                paths.compiledPath,
+                targetDir,
+                paths.nativePath,
+                targetDir,
+                fs,
+            );
         }
         await verifyPreparedArtifacts({
-            compiledPath,
-            sidecarPath,
+            ...paths,
+            targetDir,
+            binariesRoot,
             native: false,
             rootDir,
             env,
             runCommand,
+            fs,
         });
+
+        return { target, profile, ...paths };
     } catch (error) {
-        await Promise.all(generatedPaths.map((path) => rm(path, { force: true })));
+        const cleanupErrors = await cleanupGeneratedArtifacts({
+            target,
+            hostTarget,
+            profile,
+            targetDir,
+            binariesRoot,
+            fs,
+        });
+        if (cleanupErrors.length > 0) {
+            throw cleanupError(`${errorMessage(error)}; mora-agent cleanup also failed`, [
+                error,
+                ...cleanupErrors,
+            ]);
+        }
         throw error;
     }
-
-    return { target, profile, compiledPath, sidecarPath, nativePath };
 }
 
 async function readHostTarget(rootDir, env, runCommand) {
@@ -105,22 +174,35 @@ async function readHostTarget(rootDir, env, runCommand) {
     if (!target) {
         throw new Error("rustc --print host-tuple returned an empty target triple");
     }
-    return target;
+    return validateTargetTriple(target);
+}
+
+function buildPaths({ targetDir, binariesRoot, target, hostTarget, profile }) {
+    const executableName = `${AGENT_NAME}${executableSuffix(target)}`;
+    return {
+        compiledPath: join(targetDir, target, profile, executableName),
+        sidecarPath: join(binariesRoot, sidecarFileName(target)),
+        nativePath:
+            target === hostTarget ? join(targetDir, profile, executableName) : undefined,
+    };
 }
 
 async function verifyPreparedArtifacts({
     compiledPath,
     sidecarPath,
+    targetDir,
+    binariesRoot,
     native,
     rootDir,
     env,
     runCommand,
+    fs,
 }) {
-    await assertExecutable(compiledPath, "Compiled mora-agent");
-    await assertExecutable(sidecarPath, "Tauri mora-agent sidecar");
+    await assertExecutable(compiledPath, "Compiled mora-agent", targetDir, fs);
+    await assertExecutable(sidecarPath, "Tauri mora-agent sidecar", binariesRoot, fs);
     const [compiled, sidecar] = await Promise.all([
-        readFile(compiledPath),
-        readFile(sidecarPath),
+        fs.readFile(compiledPath),
+        fs.readFile(sidecarPath),
     ]);
     if (!compiled.equals(sidecar)) {
         throw new Error(
@@ -141,28 +223,268 @@ async function verifyHelp(executable, rootDir, env, runCommand) {
     assertCommandSucceeded(`${executable} --help`, result);
 }
 
-async function copyExecutable(source, destination) {
-    await mkdir(dirname(destination), { recursive: true });
-    await copyFile(source, destination);
-    const sourceStat = await stat(source);
-    await chmod(destination, sourceStat.mode);
-    await assertExecutable(destination, "Copied mora-agent");
+async function copyExecutable(source, sourceRoot, destination, destinationRoot, fs) {
+    await assertExecutable(source, "Compiled mora-agent", sourceRoot, fs);
+    const safeDestination = assertContained(destinationRoot, destination);
+    await assertNoSymlinkComponents(resolve(destinationRoot), fs);
+    await assertNoSymlinkComponents(dirname(safeDestination), fs);
+    await fs.mkdir(dirname(safeDestination), { recursive: true });
+    await assertNoSymlinkComponents(dirname(safeDestination), fs);
+
+    try {
+        await fs.lstat(safeDestination);
+        throw new Error(
+            `Refusing to overwrite mora-agent destination: ${safeDestination}`,
+        );
+    } catch (error) {
+        if (error?.code !== "ENOENT") {
+            throw error;
+        }
+    }
+
+    await fs.copyFile(source, safeDestination);
+    const sourceStat = await fs.lstat(source);
+    await fs.chmod(safeDestination, sourceStat.mode);
+    await assertExecutable(safeDestination, "Copied mora-agent", destinationRoot, fs);
 }
 
-async function assertExecutable(path, label) {
+async function assertExecutable(path, label, root, fs) {
+    const safePath = assertContained(root, path);
+    await assertNoSymlinkComponents(resolve(root), fs);
+    await assertNoSymlinkComponents(dirname(safePath), fs);
     let fileStat;
     try {
-        fileStat = await stat(path);
-        await access(path, constants.X_OK);
+        fileStat = await fs.lstat(safePath);
+        if (fileStat.isSymbolicLink()) {
+            throw new Error(`Unsafe symbolic link: ${safePath}`);
+        }
+        await fs.access(safePath, constants.X_OK);
     } catch (error) {
         if (error?.code === "ENOENT") {
-            throw new Error(`${label} is missing: ${path}`);
+            throw new Error(`${label} is missing: ${safePath}`);
         }
-        throw new Error(`${label} is not executable: ${path}`, { cause: error });
+        throw new Error(`${label} is not executable: ${safePath}`, { cause: error });
     }
     if (!fileStat.isFile()) {
-        throw new Error(`${label} is not a file: ${path}`);
+        throw new Error(`${label} is not a file: ${safePath}`);
     }
+}
+
+async function cleanupGeneratedArtifacts({
+    target,
+    hostTarget,
+    profile,
+    targetDir,
+    binariesRoot,
+    fs,
+}) {
+    const errors = [];
+    const candidates = [];
+
+    if (target) {
+        candidates.push({
+            root: binariesRoot,
+            path: join(binariesRoot, sidecarFileName(target)),
+        });
+        if (target === hostTarget) {
+            candidates.push({
+                root: targetDir,
+                path: join(
+                    targetDir,
+                    profile,
+                    `${AGENT_NAME}${executableSuffix(target)}`,
+                ),
+            });
+        } else if (!hostTarget) {
+            candidates.push(
+                { root: targetDir, path: join(targetDir, profile, AGENT_NAME) },
+                {
+                    root: targetDir,
+                    path: join(targetDir, profile, `${AGENT_NAME}.exe`),
+                },
+            );
+        }
+        candidates.push({
+            root: targetDir,
+            path: join(
+                targetDir,
+                target,
+                profile,
+                `${AGENT_NAME}${executableSuffix(target)}`,
+            ),
+        });
+    } else {
+        candidates.push(
+            { root: targetDir, path: join(targetDir, profile, AGENT_NAME) },
+            {
+                root: targetDir,
+                path: join(targetDir, profile, `${AGENT_NAME}.exe`),
+            },
+        );
+        await collectSidecarCandidates(binariesRoot, fs, candidates, errors);
+        await collectTargetCandidates(targetDir, profile, fs, candidates, errors);
+    }
+
+    for (const candidate of candidates) {
+        try {
+            await safeUnlink(candidate.root, candidate.path, fs);
+        } catch (error) {
+            errors.push(error);
+        }
+    }
+    return errors;
+}
+
+async function collectSidecarCandidates(root, fs, candidates, errors) {
+    let entries;
+    try {
+        entries = await safeReadDirectory(root, fs);
+    } catch (error) {
+        errors.push(error);
+        return;
+    }
+    for (const entry of entries) {
+        if (isGeneratedSidecarName(entry.name)) {
+            candidates.push({ root, path: join(root, entry.name) });
+        }
+    }
+}
+
+async function collectTargetCandidates(root, profile, fs, candidates, errors) {
+    let entries;
+    try {
+        entries = await safeReadDirectory(root, fs);
+    } catch (error) {
+        errors.push(error);
+        return;
+    }
+    for (const entry of entries) {
+        if (!TARGET_TRIPLE_PATTERN.test(entry.name)) {
+            continue;
+        }
+        if (entry.isSymbolicLink()) {
+            errors.push(
+                new Error(`Unsafe symbolic link component: ${join(root, entry.name)}`),
+            );
+            continue;
+        }
+        if (!entry.isDirectory()) {
+            continue;
+        }
+        const target = validateTargetTriple(entry.name);
+        candidates.push({
+            root,
+            path: join(root, target, profile, `${AGENT_NAME}${executableSuffix(target)}`),
+        });
+    }
+}
+
+async function safeReadDirectory(root, fs) {
+    const safeRoot = resolve(root);
+    await assertNoSymlinkComponents(safeRoot, fs);
+    try {
+        return await fs.readdir(safeRoot, { withFileTypes: true });
+    } catch (error) {
+        if (error?.code === "ENOENT") {
+            return [];
+        }
+        throw error;
+    }
+}
+
+async function safeUnlink(root, candidate, fs) {
+    const safePath = assertContained(root, candidate);
+    await assertNoSymlinkComponents(resolve(root), fs);
+    await assertNoSymlinkComponents(dirname(safePath), fs);
+    let fileStat;
+    try {
+        fileStat = await fs.lstat(safePath);
+    } catch (error) {
+        if (error?.code === "ENOENT") {
+            return;
+        }
+        throw error;
+    }
+    if (!fileStat.isFile() && !fileStat.isSymbolicLink()) {
+        throw new Error(`Refusing to remove non-file mora-agent path: ${safePath}`);
+    }
+    await fs.unlink(safePath);
+}
+
+function assertContained(root, candidate) {
+    const resolvedRoot = resolve(root);
+    const resolvedCandidate = resolve(candidate);
+    if (!isContained(resolvedRoot, resolvedCandidate)) {
+        throw new Error(
+            `Unsafe mora-agent path escapes controlled root ${resolvedRoot}: ${resolvedCandidate}`,
+        );
+    }
+    return resolvedCandidate;
+}
+
+function isContained(root, candidate) {
+    const pathFromRoot = relative(resolve(root), resolve(candidate));
+    return (
+        pathFromRoot !== "" &&
+        pathFromRoot !== ".." &&
+        !pathFromRoot.startsWith(`..${sep}`) &&
+        !isAbsolute(pathFromRoot)
+    );
+}
+
+async function assertNoSymlinkComponents(path, fs) {
+    const absolutePath = resolve(path);
+    const parsedPath = parse(absolutePath);
+    const components = relative(parsedPath.root, absolutePath).split(sep).filter(Boolean);
+    let currentPath = parsedPath.root;
+    for (const component of components) {
+        currentPath = join(currentPath, component);
+        let componentStat;
+        try {
+            componentStat = await fs.lstat(currentPath);
+        } catch (error) {
+            if (error?.code === "ENOENT") {
+                return;
+            }
+            throw error;
+        }
+        if (componentStat.isSymbolicLink()) {
+            throw new Error(`Unsafe symbolic link component: ${currentPath}`);
+        }
+    }
+}
+
+function validateTargetTriple(target) {
+    if (typeof target !== "string" || !TARGET_TRIPLE_PATTERN.test(target)) {
+        throw new Error(`Invalid Rust target triple: ${JSON.stringify(target)}`);
+    }
+    return target;
+}
+
+function isGeneratedSidecarName(name) {
+    if (!name.startsWith(`${AGENT_NAME}-`)) {
+        return false;
+    }
+    const hasExecutableSuffix = name.endsWith(".exe");
+    const target = name.slice(
+        `${AGENT_NAME}-`.length,
+        hasExecutableSuffix ? -".exe".length : undefined,
+    );
+    if (!TARGET_TRIPLE_PATTERN.test(target)) {
+        return false;
+    }
+    return (hasExecutableSuffix ? ".exe" : "") === executableSuffix(target);
+}
+
+function cleanupError(message, errors) {
+    return new AggregateError(
+        errors,
+        `${message}: ${errors.map(errorMessage).join("; ")}`,
+    );
+}
+
+function errorMessage(error) {
+    return error instanceof Error ? error.message : String(error);
 }
 
 function assertCommandSucceeded(label, result) {
@@ -199,10 +521,10 @@ function parseArgs(args) {
 
 function resolveTargetDir(rootDir, configuredTargetDir) {
     if (!configuredTargetDir) {
-        return join(rootDir, "src-tauri", "target");
+        return resolve(rootDir, "src-tauri", "target");
     }
     return isAbsolute(configuredTargetDir)
-        ? configuredTargetDir
+        ? resolve(configuredTargetDir)
         : resolve(rootDir, configuredTargetDir);
 }
 
