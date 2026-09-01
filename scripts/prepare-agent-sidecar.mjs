@@ -1,28 +1,40 @@
 import { constants } from "node:fs";
 import {
     access,
-    chmod,
-    copyFile,
     lstat,
     mkdir,
+    open,
     readFile,
     readdir,
+    realpath,
+    rename,
     unlink,
 } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
-import { dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
+import { randomUUID } from "node:crypto";
+import {
+    basename,
+    dirname,
+    isAbsolute,
+    join,
+    parse,
+    relative,
+    resolve,
+    sep,
+} from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const AGENT_NAME = "mora-agent";
 const TARGET_TRIPLE_PATTERN = /^[A-Za-z0-9_]+(?:-[A-Za-z0-9_]+){2,}$/;
 const DEFAULT_FILE_SYSTEM = {
     access,
-    chmod,
-    copyFile,
     lstat,
     mkdir,
+    open,
     readFile,
     readdir,
+    realpath,
+    rename,
     unlink,
 };
 
@@ -145,6 +157,9 @@ export async function prepareAgentSidecar({
 
         return { target, profile, ...paths };
     } catch (error) {
+        if (options.check) {
+            throw error;
+        }
         const cleanupErrors = await cleanupGeneratedArtifacts({
             target,
             hostTarget,
@@ -225,27 +240,77 @@ async function verifyHelp(executable, rootDir, env, runCommand) {
 
 async function copyExecutable(source, sourceRoot, destination, destinationRoot, fs) {
     await assertExecutable(source, "Compiled mora-agent", sourceRoot, fs);
+    const [sourceStat, sourceContent] = await Promise.all([
+        fs.lstat(source),
+        fs.readFile(source),
+    ]);
     const safeDestination = assertContained(destinationRoot, destination);
     await assertNoSymlinkComponents(resolve(destinationRoot), fs);
     await assertNoSymlinkComponents(dirname(safeDestination), fs);
     await fs.mkdir(dirname(safeDestination), { recursive: true });
-    await assertNoSymlinkComponents(dirname(safeDestination), fs);
+    const parentSnapshot = await snapshotSafeParent(
+        destinationRoot,
+        dirname(safeDestination),
+        fs,
+    );
+    await assertReplaceableFile(safeDestination, fs);
+    await assertParentUnchanged(parentSnapshot, fs);
 
+    const temporaryPath = assertContained(
+        destinationRoot,
+        join(
+            dirname(safeDestination),
+            `.${basename(safeDestination)}.${process.pid}.${randomUUID()}.tmp`,
+        ),
+    );
+    let temporaryCreated = false;
     try {
-        await fs.lstat(safeDestination);
-        throw new Error(
-            `Refusing to overwrite mora-agent destination: ${safeDestination}`,
-        );
+        const temporary = await fs.open(temporaryPath, "wx", sourceStat.mode);
+        temporaryCreated = true;
+        try {
+            await temporary.writeFile(sourceContent);
+            await temporary.chmod(sourceStat.mode);
+            await temporary.sync();
+        } finally {
+            await temporary.close();
+        }
+
+        await fs.beforeRename?.({
+            temporaryPath,
+            destination: safeDestination,
+        });
+        await assertParentUnchanged(parentSnapshot, fs);
+        await assertReplaceableFile(safeDestination, fs);
+        await assertParentUnchanged(parentSnapshot, fs);
+        await fs.rename(temporaryPath, safeDestination);
+        temporaryCreated = false;
+        await assertExecutable(safeDestination, "Copied mora-agent", destinationRoot, fs);
+    } catch (error) {
+        if (temporaryCreated) {
+            try {
+                await safeUnlink(destinationRoot, temporaryPath, fs);
+            } catch (cleanupFailure) {
+                throw cleanupError(
+                    `${errorMessage(error)}; temporary mora-agent cleanup failed`,
+                    [error, cleanupFailure],
+                );
+            }
+        }
+        throw error;
+    }
+}
+
+async function assertReplaceableFile(path, fs) {
+    try {
+        const fileStat = await fs.lstat(path);
+        if (!fileStat.isFile() && !fileStat.isSymbolicLink()) {
+            throw new Error(`Refusing to replace non-file mora-agent path: ${path}`);
+        }
     } catch (error) {
         if (error?.code !== "ENOENT") {
             throw error;
         }
     }
-
-    await fs.copyFile(source, safeDestination);
-    const sourceStat = await fs.lstat(source);
-    await fs.chmod(safeDestination, sourceStat.mode);
-    await assertExecutable(safeDestination, "Copied mora-agent", destinationRoot, fs);
 }
 
 async function assertExecutable(path, label, root, fs) {
@@ -394,8 +459,15 @@ async function safeReadDirectory(root, fs) {
 
 async function safeUnlink(root, candidate, fs) {
     const safePath = assertContained(root, candidate);
-    await assertNoSymlinkComponents(resolve(root), fs);
-    await assertNoSymlinkComponents(dirname(safePath), fs);
+    let parentSnapshot;
+    try {
+        parentSnapshot = await snapshotSafeParent(root, dirname(safePath), fs);
+    } catch (error) {
+        if (error?.code === "ENOENT") {
+            return;
+        }
+        throw error;
+    }
     let fileStat;
     try {
         fileStat = await fs.lstat(safePath);
@@ -408,13 +480,63 @@ async function safeUnlink(root, candidate, fs) {
     if (!fileStat.isFile() && !fileStat.isSymbolicLink()) {
         throw new Error(`Refusing to remove non-file mora-agent path: ${safePath}`);
     }
+    await fs.beforeUnlink?.({ path: safePath });
+    await assertParentUnchanged(parentSnapshot, fs);
     await fs.unlink(safePath);
+}
+
+async function snapshotSafeParent(root, parent, fs) {
+    const resolvedRoot = resolve(root);
+    const safeParent = assertContainedOrEqual(resolvedRoot, parent);
+    await assertNoSymlinkComponents(resolvedRoot, fs);
+    await assertNoSymlinkComponents(safeParent, fs);
+    const [rootRealPath, parentRealPath, parentStat] = await Promise.all([
+        fs.realpath(resolvedRoot),
+        fs.realpath(safeParent),
+        fs.lstat(safeParent),
+    ]);
+    if (parentStat.isSymbolicLink() || !parentStat.isDirectory()) {
+        throw new Error(`Unsafe mora-agent parent directory: ${safeParent}`);
+    }
+    assertContainedOrEqual(rootRealPath, parentRealPath);
+    return {
+        root: resolvedRoot,
+        path: safeParent,
+        realPath: parentRealPath,
+        dev: parentStat.dev,
+        ino: parentStat.ino,
+    };
+}
+
+async function assertParentUnchanged(snapshot, fs) {
+    const current = await snapshotSafeParent(snapshot.root, snapshot.path, fs);
+    if (
+        !samePath(current.realPath, snapshot.realPath) ||
+        current.dev !== snapshot.dev ||
+        current.ino !== snapshot.ino
+    ) {
+        throw new Error(`Unsafe mora-agent parent changed: ${snapshot.path}`);
+    }
 }
 
 function assertContained(root, candidate) {
     const resolvedRoot = resolve(root);
     const resolvedCandidate = resolve(candidate);
     if (!isContained(resolvedRoot, resolvedCandidate)) {
+        throw new Error(
+            `Unsafe mora-agent path escapes controlled root ${resolvedRoot}: ${resolvedCandidate}`,
+        );
+    }
+    return resolvedCandidate;
+}
+
+function assertContainedOrEqual(root, candidate) {
+    const resolvedRoot = resolve(root);
+    const resolvedCandidate = resolve(candidate);
+    if (
+        !samePath(resolvedRoot, resolvedCandidate) &&
+        !isContained(resolvedRoot, resolvedCandidate)
+    ) {
         throw new Error(
             `Unsafe mora-agent path escapes controlled root ${resolvedRoot}: ${resolvedCandidate}`,
         );
@@ -430,6 +552,14 @@ function isContained(root, candidate) {
         !pathFromRoot.startsWith(`..${sep}`) &&
         !isAbsolute(pathFromRoot)
     );
+}
+
+function samePath(left, right) {
+    const normalizedLeft = resolve(left);
+    const normalizedRight = resolve(right);
+    return process.platform === "win32"
+        ? normalizedLeft.toLowerCase() === normalizedRight.toLowerCase()
+        : normalizedLeft === normalizedRight;
 }
 
 async function assertNoSymlinkComponents(path, fs) {

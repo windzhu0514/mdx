@@ -1,8 +1,14 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import {
+    access,
+    link,
+    lstat,
     mkdir,
     mkdtemp,
     readFile,
+    readdir,
+    rename,
     stat,
     symlink,
     unlink,
@@ -427,10 +433,74 @@ test("fails when Cargo reports success without producing the selected binary", a
     );
 });
 
-test("check mode rejects artifacts from a different target", async () => {
+test("check mode keeps every Agent artifact unchanged when rustc host detection fails", async () => {
+    const rootDir = await createRepository("mora-agent-check-rustc-");
+    const source = compiledPath(rootDir, WINDOWS_TARGET);
+    const sidecar = sidecarPath(rootDir, WINDOWS_TARGET);
+    const native = join(rootDir, "src-tauri", "target", "release", "mora-agent.exe");
+    await Promise.all([
+        writeExecutable(source, "source-before-rustc-failure"),
+        writeExecutable(sidecar, "sidecar-before-rustc-failure"),
+        writeExecutable(native, "native-before-rustc-failure"),
+    ]);
+    const before = await snapshotFiles([source, sidecar, native]);
+
+    await assert.rejects(
+        prepareAgentSidecar({
+            rootDir,
+            env: {},
+            args: ["--check", "--target", WINDOWS_TARGET],
+            runCommand: async () => failure(8),
+        }),
+        /rustc --print host-tuple failed with exit code 8/,
+    );
+
+    await assertFilesUnchanged(before);
+});
+
+test("check mode keeps files unchanged when a controlled path is a junction", async () => {
+    const rootDir = await createRepository("mora-agent-check-path-", false);
+    const source = compiledPath(rootDir, WINDOWS_TARGET);
+    await writeExecutable(source, "source-before-path-failure");
+    const externalDir = await mkdtemp(join(tmpdir(), "mora-agent-check-external-"));
+    const externalSidecar = join(externalDir, "mora-agent-x86_64-pc-windows-msvc.exe");
+    await writeExecutable(externalSidecar, "external-sidecar-before-check");
+    await createDirectoryLink(externalDir, join(rootDir, "src-tauri", "binaries"));
+    const before = await snapshotFiles([source, externalSidecar]);
+
+    await assert.rejects(
+        prepareAgentSidecar({
+            rootDir,
+            env: {},
+            args: ["--check", "--target", WINDOWS_TARGET],
+            runCommand: async () => success(WINDOWS_TARGET),
+        }),
+        /symbolic link/,
+    );
+
+    await assertFilesUnchanged(before);
+});
+
+test("check mode keeps unrelated and selected artifacts unchanged when one is missing", async () => {
     const rootDir = await createRepository("mora-agent-wrong-target-");
-    await writeExecutable(compiledPath(rootDir, LINUX_TARGET), "linux-agent");
-    await writeExecutable(sidecarPath(rootDir, LINUX_TARGET), "linux-agent");
+    const missingSource = compiledPath(rootDir, WINDOWS_TARGET);
+    const selectedSidecar = sidecarPath(rootDir, WINDOWS_TARGET);
+    const native = join(rootDir, "src-tauri", "target", "release", "mora-agent.exe");
+    const linuxSource = compiledPath(rootDir, LINUX_TARGET);
+    const linuxSidecar = sidecarPath(rootDir, LINUX_TARGET);
+    await Promise.all([
+        writeExecutable(selectedSidecar, "selected-sidecar-before-missing-check"),
+        writeExecutable(native, "native-before-missing-check"),
+        writeExecutable(linuxSource, "linux-agent"),
+        writeExecutable(linuxSidecar, "linux-agent"),
+    ]);
+    const before = await snapshotFiles([
+        missingSource,
+        selectedSidecar,
+        native,
+        linuxSource,
+        linuxSidecar,
+    ]);
 
     await assert.rejects(
         prepareAgentSidecar({
@@ -442,12 +512,21 @@ test("check mode rejects artifacts from a different target", async () => {
         }),
         /Compiled mora-agent is missing/,
     );
+
+    await assertFilesUnchanged(before);
 });
 
-test("check mode rejects a stale sidecar without building or copying", async () => {
+test("check mode keeps stale mismatched artifacts byte-for-byte unchanged", async () => {
     const rootDir = await createRepository("mora-agent-stale-");
-    await writeExecutable(compiledPath(rootDir, WINDOWS_TARGET), "fresh-agent");
-    await writeExecutable(sidecarPath(rootDir, WINDOWS_TARGET), "stale-agent");
+    const source = compiledPath(rootDir, WINDOWS_TARGET);
+    const sidecar = sidecarPath(rootDir, WINDOWS_TARGET);
+    const native = join(rootDir, "src-tauri", "target", "release", "mora-agent.exe");
+    await Promise.all([
+        writeExecutable(source, "fresh-agent"),
+        writeExecutable(sidecar, "stale-agent"),
+        writeExecutable(native, "native-agent"),
+    ]);
+    const before = await snapshotFiles([source, sidecar, native]);
 
     await assert.rejects(
         prepareAgentSidecar({
@@ -459,6 +538,95 @@ test("check mode rejects a stale sidecar without building or copying", async () 
         }),
         /does not match the compiled mora-agent/,
     );
+
+    await assertFilesUnchanged(before);
+});
+
+test("check mode keeps artifacts unchanged when executable permission validation fails", async () => {
+    const rootDir = await createRepository("mora-agent-check-permission-");
+    const source = compiledPath(rootDir, WINDOWS_TARGET);
+    const sidecar = sidecarPath(rootDir, WINDOWS_TARGET);
+    await Promise.all([
+        writeExecutable(source, "same-agent"),
+        writeExecutable(sidecar, "same-agent"),
+    ]);
+    const before = await snapshotFiles([source, sidecar]);
+
+    await assert.rejects(
+        prepareAgentSidecar({
+            rootDir,
+            env: {},
+            args: ["--check", "--target", WINDOWS_TARGET],
+            fileSystem: {
+                access: async (path, mode) => {
+                    if (path === source) {
+                        throw Object.assign(new Error("injected access denied"), {
+                            code: "EACCES",
+                        });
+                    }
+                    return access(path, mode);
+                },
+            },
+            runCommand: async () => success(WINDOWS_TARGET),
+        }),
+        /not executable/,
+    );
+
+    await assertFilesUnchanged(before);
+});
+
+test("check mode keeps native artifacts unchanged when --help fails", async () => {
+    const rootDir = await createRepository("mora-agent-check-help-");
+    const source = compiledPath(rootDir, WINDOWS_TARGET);
+    const sidecar = sidecarPath(rootDir, WINDOWS_TARGET);
+    const native = join(rootDir, "src-tauri", "target", "release", "mora-agent.exe");
+    await Promise.all([
+        writeExecutable(source, "same-agent"),
+        writeExecutable(sidecar, "same-agent"),
+        writeExecutable(native, "native-agent"),
+    ]);
+    const before = await snapshotFiles([source, sidecar, native]);
+
+    await assert.rejects(
+        prepareAgentSidecar({
+            rootDir,
+            env: {},
+            args: ["--check", "--target", WINDOWS_TARGET],
+            runCommand: async (command) =>
+                command === "rustc" ? success(WINDOWS_TARGET) : failure(12),
+        }),
+        /--help failed with exit code 12/,
+    );
+
+    await assertFilesUnchanged(before);
+});
+
+test("check mode keeps artifacts unchanged after an injected top-level read failure", async () => {
+    const rootDir = await createRepository("mora-agent-check-read-");
+    const source = compiledPath(rootDir, WINDOWS_TARGET);
+    const sidecar = sidecarPath(rootDir, WINDOWS_TARGET);
+    await Promise.all([
+        writeExecutable(source, "same-agent"),
+        writeExecutable(sidecar, "same-agent"),
+    ]);
+    const before = await snapshotFiles([source, sidecar]);
+
+    await assert.rejects(
+        prepareAgentSidecar({
+            rootDir,
+            env: {},
+            args: ["--check", "--target", WINDOWS_TARGET],
+            fileSystem: {
+                readFile: async () => {
+                    throw new Error("injected top-level read failure");
+                },
+            },
+            runCommand: async () => success(WINDOWS_TARGET),
+        }),
+        /injected top-level read failure/,
+    );
+
+    await assertFilesUnchanged(before);
 });
 
 test("check mode accepts matching artifacts without mutating them", async () => {
@@ -467,7 +635,7 @@ test("check mode accepts matching artifacts without mutating them", async () => 
     const sidecar = sidecarPath(rootDir, LINUX_TARGET);
     await writeExecutable(source, "linux-agent");
     await writeExecutable(sidecar, "linux-agent");
-    const before = await stat(sidecar);
+    const before = await snapshotFiles([source, sidecar]);
 
     await prepareAgentSidecar({
         rootDir,
@@ -479,7 +647,184 @@ test("check mode accepts matching artifacts without mutating them", async () => 
         },
     });
 
-    assert.equal((await stat(sidecar)).mtimeMs, before.mtimeMs);
+    await assertFilesUnchanged(before);
+});
+
+test("atomic copy replaces a raced target link without overwriting its external sentinel", async () => {
+    const rootDir = await createRepository("mora-agent-copy-target-link-");
+    const sidecar = sidecarPath(rootDir, WINDOWS_TARGET);
+    const externalDir = await mkdtemp(join(tmpdir(), "mora-agent-link-sentinel-"));
+    const sentinel = join(externalDir, "sentinel.exe");
+    await writeExecutable(sentinel, "external-sentinel");
+    let cargoBuilt = false;
+    let raceInjected = false;
+
+    await prepareAgentSidecar({
+        rootDir,
+        env: { TAURI_ENV_TARGET_TRIPLE: WINDOWS_TARGET },
+        fileSystem: {
+            lstat: async (path) => {
+                try {
+                    return await lstat(path);
+                } catch (error) {
+                    if (
+                        error?.code === "ENOENT" &&
+                        cargoBuilt &&
+                        path === sidecar &&
+                        !raceInjected
+                    ) {
+                        await link(sentinel, sidecar);
+                        raceInjected = true;
+                    }
+                    throw error;
+                }
+            },
+        },
+        runCommand: async (command) => {
+            if (command === "rustc") {
+                return success(WINDOWS_TARGET);
+            }
+            if (command === "cargo") {
+                await writeExecutable(
+                    compiledPath(rootDir, WINDOWS_TARGET),
+                    "fresh-agent",
+                );
+                cargoBuilt = true;
+            }
+            return success();
+        },
+    });
+
+    assert.equal(raceInjected, true);
+    assert.equal(await readFile(sentinel, "utf8"), "external-sentinel");
+    assert.equal(await readFile(sidecar, "utf8"), "fresh-agent");
+});
+
+test("copy fails closed when its destination parent becomes a junction", async () => {
+    const rootDir = await createRepository("mora-agent-copy-parent-race-");
+    const binariesRoot = join(rootDir, "src-tauri", "binaries");
+    const backupRoot = join(rootDir, "src-tauri", "binaries-before-race");
+    const sidecar = sidecarPath(rootDir, WINDOWS_TARGET);
+    const externalDir = await mkdtemp(join(tmpdir(), "mora-agent-copy-external-"));
+    const externalSentinel = join(externalDir, "sentinel.txt");
+    const externalSidecar = join(externalDir, sidecarFileName(WINDOWS_TARGET));
+    await writeExecutable(externalSentinel, "external-sentinel");
+    let cargoBuilt = false;
+    let parentReplaced = false;
+
+    await assert.rejects(
+        prepareAgentSidecar({
+            rootDir,
+            env: { TAURI_ENV_TARGET_TRIPLE: WINDOWS_TARGET },
+            fileSystem: {
+                lstat: async (path) => {
+                    try {
+                        return await lstat(path);
+                    } catch (error) {
+                        if (
+                            error?.code === "ENOENT" &&
+                            cargoBuilt &&
+                            path === sidecar &&
+                            !parentReplaced
+                        ) {
+                            await rename(binariesRoot, backupRoot);
+                            await createDirectoryLink(externalDir, binariesRoot);
+                            parentReplaced = true;
+                        }
+                        throw error;
+                    }
+                },
+            },
+            runCommand: async (command) => {
+                if (command === "rustc") {
+                    return success(WINDOWS_TARGET);
+                }
+                if (command === "cargo") {
+                    await writeExecutable(
+                        compiledPath(rootDir, WINDOWS_TARGET),
+                        "fresh-agent",
+                    );
+                    cargoBuilt = true;
+                }
+                return success();
+            },
+        }),
+        /symbolic link|parent changed/,
+    );
+
+    assert.equal(parentReplaced, true);
+    assert.equal(await readFile(externalSentinel, "utf8"), "external-sentinel");
+    await assertMissing(externalSidecar);
+});
+
+test("cleanup revalidates a replaced parent immediately before unlink", async () => {
+    const rootDir = await createRepository("mora-agent-delete-parent-race-");
+    const binariesRoot = join(rootDir, "src-tauri", "binaries");
+    const backupRoot = join(rootDir, "src-tauri", "binaries-before-delete-race");
+    const sidecar = sidecarPath(rootDir, WINDOWS_TARGET);
+    await writeExecutable(sidecar, "controlled-stale-sidecar");
+    const externalDir = await mkdtemp(join(tmpdir(), "mora-agent-delete-external-"));
+    const externalSidecar = join(externalDir, sidecarFileName(WINDOWS_TARGET));
+    await writeExecutable(externalSidecar, "external-sentinel-sidecar");
+    let parentReplaced = false;
+
+    await assert.rejects(
+        prepareAgentSidecar({
+            rootDir,
+            env: { TAURI_ENV_TARGET_TRIPLE: WINDOWS_TARGET },
+            fileSystem: {
+                lstat: async (path) => {
+                    const result = await lstat(path);
+                    if (path === sidecar && !parentReplaced) {
+                        await rename(binariesRoot, backupRoot);
+                        await createDirectoryLink(externalDir, binariesRoot);
+                        parentReplaced = true;
+                    }
+                    return result;
+                },
+            },
+            runCommand: async (command) =>
+                command === "rustc" ? success(WINDOWS_TARGET) : failure(7),
+        }),
+        /symbolic link|cleanup/,
+    );
+
+    assert.equal(parentReplaced, true);
+    assert.equal(await readFile(externalSidecar, "utf8"), "external-sentinel-sidecar");
+});
+
+test("atomic copy removes its exclusive temporary file when rename fails", async () => {
+    const rootDir = await createRepository("mora-agent-copy-temp-cleanup-");
+    const binariesRoot = join(rootDir, "src-tauri", "binaries");
+
+    await assert.rejects(
+        prepareAgentSidecar({
+            rootDir,
+            env: { TAURI_ENV_TARGET_TRIPLE: WINDOWS_TARGET },
+            fileSystem: {
+                rename: async () => {
+                    throw Object.assign(new Error("injected atomic rename failure"), {
+                        code: "EPERM",
+                    });
+                },
+            },
+            runCommand: async (command) => {
+                if (command === "rustc") {
+                    return success(WINDOWS_TARGET);
+                }
+                if (command === "cargo") {
+                    await writeExecutable(
+                        compiledPath(rootDir, WINDOWS_TARGET),
+                        "fresh-agent",
+                    );
+                }
+                return success();
+            },
+        }),
+        /injected atomic rename failure/,
+    );
+
+    assert.deepEqual(await readdir(binariesRoot), []);
 });
 
 async function createRepository(prefix, createBinaries = true) {
@@ -513,6 +858,38 @@ async function writeExecutable(path, content) {
 
 async function assertMissing(path) {
     await assert.rejects(stat(path), /ENOENT/);
+}
+
+async function snapshotFiles(paths) {
+    return Promise.all(
+        paths.map(async (path) => {
+            try {
+                const [fileStat, content] = await Promise.all([
+                    stat(path),
+                    readFile(path),
+                ]);
+                return {
+                    path,
+                    exists: true,
+                    hash: createHash("sha256").update(content).digest("hex"),
+                    mtimeMs: fileStat.mtimeMs,
+                    size: fileStat.size,
+                };
+            } catch (error) {
+                if (error?.code === "ENOENT") {
+                    return { path, exists: false };
+                }
+                throw error;
+            }
+        }),
+    );
+}
+
+async function assertFilesUnchanged(snapshots) {
+    for (const before of snapshots) {
+        const [after] = await snapshotFiles([before.path]);
+        assert.deepEqual(after, before);
+    }
 }
 
 async function createDirectoryLink(target, path) {
