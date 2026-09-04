@@ -50,7 +50,8 @@ describe("GitHub Draft Release workflow", () => {
         expect(workflow).toContain("x86_64-apple-darwin");
         expect(workflow).toContain("x86_64-unknown-linux-gnu");
         expect(workflow).toContain("--bundles nsis,msi");
-        expect(workflow).toContain("--bundles dmg");
+        expect(workflow.match(/--bundles app,dmg/g)).toHaveLength(2);
+        expect(workflow).not.toContain("--bundles dmg");
         expect(workflow).toContain("--bundles appimage,deb");
         expect(workflow).toContain("max-parallel: 1");
         expect(workflow).toContain("libwebkit2gtk-4.1-dev");
