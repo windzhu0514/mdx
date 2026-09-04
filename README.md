@@ -4,7 +4,7 @@
 
 Mora 墨笺是一款本地优先的桌面笔记软件。它把 Markdown 正文、图片和附件封装在一个 `.mdx` 文件中，让一篇笔记既能像 Word 文档一样独立保存和传递，又保留 Markdown 的透明结构与可迁移性。
 
-> **当前版本：** `app-v0.1.1`，提供 Windows x64、macOS Apple Silicon/Intel 和 Linux x64 安装包。
+> **当前版本：** `app-v0.1.2`，提供 Windows x64、macOS Apple Silicon/Intel 和 Linux x64 安装包。
 
 ## 为什么需要 Mora
 
