@@ -828,7 +828,8 @@ mod tests {
     #[test]
     fn lifecycle_lock_is_exclusive_until_the_owner_drops_it() {
         let temp = tempfile::tempdir().unwrap();
-        let registry = EndpointRegistry::at(temp.path().join("agent-endpoint-v1.json"));
+        let registry =
+            EndpointRegistry::at(temp.path().join("mora").join("agent-endpoint-v1.json"));
 
         let first = LifecycleLock::acquire(&registry).unwrap();
         let error = LifecycleLock::acquire(&registry).unwrap_err();
