@@ -24,7 +24,7 @@ struct IpcFixture {
 impl IpcFixture {
     async fn new() -> Self {
         let temp = tempfile::tempdir().unwrap();
-        let registry = EndpointRegistry::at(temp.path().join("agent-endpoint-v1.json"));
+        let registry = isolated_registry(&temp);
         Self {
             _temp: temp,
             registry,
@@ -314,7 +314,7 @@ async fn weak_registry_permissions_are_rejected_without_rewriting_the_error() {
 #[test]
 fn registry_rejects_non_file_entries() {
     let temp = tempfile::tempdir().unwrap();
-    let registry = EndpointRegistry::at(temp.path().join("agent-endpoint-v1.json"));
+    let registry = isolated_registry(&temp);
     std::fs::create_dir(registry.path()).unwrap();
 
     let error = registry.read().unwrap_err();
@@ -391,7 +391,7 @@ async fn dangling_registry_symlink_fails_closed() {
 #[test]
 fn corrupt_owner_only_registry_preserves_bridge_unavailable() {
     let temp = tempfile::tempdir().unwrap();
-    let registry = EndpointRegistry::at(temp.path().join("agent-endpoint-v1.json"));
+    let registry = isolated_registry(&temp);
     std::fs::write(registry.path(), b"not-json").unwrap();
     secure_registry_file(registry.path());
 
@@ -403,7 +403,7 @@ fn corrupt_owner_only_registry_preserves_bridge_unavailable() {
 #[test]
 fn registry_rejects_unbound_session_transport_pid_and_address() {
     let temp = tempfile::tempdir().unwrap();
-    let registry = EndpointRegistry::at(temp.path().join("agent-endpoint-v1.json"));
+    let registry = isolated_registry(&temp);
     let valid_session = "00000000-0000-4000-8000-000000000001";
     let valid_address = expected_address(&registry, valid_session);
     let valid_transport = if cfg!(windows) {
@@ -800,6 +800,19 @@ fn secure_registry_file(path: &std::path::Path) {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
     }
+}
+
+fn isolated_registry(temp: &TempDir) -> EndpointRegistry {
+    let directory = temp.path().join("mora");
+    std::fs::create_dir(&directory).unwrap();
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+
+    EndpointRegistry::at(directory.join("agent-endpoint-v1.json"))
 }
 
 async fn round_trip_large_document(client: &AgentClient, content: &str) {
