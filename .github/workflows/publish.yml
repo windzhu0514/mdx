@@ -129,6 +129,11 @@ jobs:
             - name: Install frontend dependencies
               run: npm ci
 
+            - name: Prepare target-specific mora-agent sidecar
+              env:
+                  TAURI_ENV_DEBUG: "true"
+              run: npm run prepare:agent -- --target ${{ matrix.target }}
+
             - name: Check target-specific Rust source
               run: cargo check --manifest-path src-tauri/Cargo.toml --target ${{ matrix.target }}
 

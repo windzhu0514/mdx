@@ -110,6 +110,21 @@ describe("GitHub Draft Release workflow", () => {
         );
     });
 
+    it("prepares each target mora-agent sidecar before target-specific Rust checks", () => {
+        const workflow = readRepositoryFile(".github/workflows/publish.yml");
+        const publishJob = workflow.slice(workflow.indexOf("\n    publish:"));
+        const prepareSidecar =
+            "run: npm run prepare:agent -- --target ${{ matrix.target }}";
+        const targetCheck =
+            "run: cargo check --manifest-path src-tauri/Cargo.toml --target ${{ matrix.target }}";
+
+        expect(publishJob).toContain('TAURI_ENV_DEBUG: "true"');
+        expect(publishJob).toContain(prepareSidecar);
+        expect(publishJob.indexOf(prepareSidecar)).toBeLessThan(
+            publishJob.indexOf(targetCheck),
+        );
+    });
+
     it("builds and bundles exactly one target-specific mora-agent sidecar", () => {
         const config = JSON.parse(
             readRepositoryFile("src-tauri/tauri.conf.json"),
