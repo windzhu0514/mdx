@@ -149,7 +149,8 @@ struct IpcFixture {
 impl IpcFixture {
     fn new() -> Self {
         let temp = tempfile::tempdir().unwrap();
-        let registry = EndpointRegistry::at(temp.path().join("agent-endpoint-v1.json"));
+        let registry =
+            EndpointRegistry::at(temp.path().join("mora").join("agent-endpoint-v1.json"));
         Self {
             _temp: temp,
             registry,
