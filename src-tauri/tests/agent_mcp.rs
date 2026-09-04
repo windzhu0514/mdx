@@ -3,7 +3,7 @@
 use mdxnote_lib::agent_ipc::{AgentServer, EndpointRegistry};
 use mdxnote_lib::agent_protocol::{
     AgentDocumentSnapshot, AgentDocumentSummary, AgentError, AgentRequest, AgentRequestKind,
-    AgentResult, BRIDGE_UNAVAILABLE, REVISION_CONFLICT,
+    AgentResult, BRIDGE_UNAVAILABLE, REVISION_CONFLICT, TIMEOUT,
 };
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
@@ -327,6 +327,43 @@ async fn revision_conflict_is_a_structured_tool_error_without_document_content()
     assert!(!stderr.contains("fixture content"));
     assert!(!stderr.contains("replacement content"));
     assert!(!stderr.contains("secret-token"));
+    server.stop().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn save_timeout_preserves_the_unknown_outcome_marker_in_mcp() {
+    let fixture = IpcFixture::new();
+    let server = fixture
+        .start(|request| async move {
+            assert!(matches!(
+                request.request,
+                AgentRequestKind::SaveDocument { .. }
+            ));
+            Err(AgentError::new(TIMEOUT, "The Agent request timed out.")
+                .with_detail(json!({ "outcomeUnknown": true })))
+        })
+        .await;
+    let mut mcp = McpProcess::start(&fixture);
+    mcp.initialize();
+
+    let response = mcp.call_tool(
+        2,
+        "mora_save_document",
+        json!({
+            "document_id": "doc-1",
+            "base_live_revision": "session:1"
+        }),
+    );
+
+    assert_eq!(response["result"]["isError"], true);
+    let error = tool_text_json(&response);
+    assert_eq!(error["code"], TIMEOUT);
+    assert_eq!(error["detail"]["outcomeUnknown"], true);
+
+    let (code, remaining_stdout, stderr) = mcp.close();
+    assert_eq!(code, 0);
+    assert!(remaining_stdout.is_empty());
+    assert!(!stderr.contains("session:1"));
     server.stop().await.unwrap();
 }
 

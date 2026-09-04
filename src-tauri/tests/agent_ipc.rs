@@ -5,7 +5,8 @@ use mdxnote_lib::agent_ipc::{AgentServer, EndpointRegistry};
 use mdxnote_lib::agent_protocol::{
     AgentBridgeStatus, AgentChangeSource, AgentDocumentEvent, AgentDocumentSnapshot,
     AgentDocumentSummary, AgentRequest, AgentRequestKind, AgentResult, BRIDGE_ALREADY_RUNNING,
-    BRIDGE_UNAVAILABLE, MORA_NOT_RUNNING, PERMISSION_DENIED, PROTOCOL_VERSION,
+    BRIDGE_UNAVAILABLE, MORA_NOT_RUNNING, PERMISSION_DENIED, PROTOCOL_VERSION, REQUEST_TIMEOUT,
+    TIMEOUT,
 };
 use std::future::Future;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -163,6 +164,40 @@ async fn stopped_named_pipe_rejects_requests_without_waiting_for_the_global_time
     .unwrap_err();
 
     assert_eq!(error.code, BRIDGE_UNAVAILABLE);
+}
+
+#[tokio::test]
+async fn written_replace_timeout_marks_the_outcome_unknown_over_platform_ipc() {
+    let fixture = IpcFixture::new().await;
+    let server = fixture
+        .start(|request| async move {
+            assert!(matches!(
+                request.request,
+                AgentRequestKind::ReplaceDocument { .. }
+            ));
+            std::future::pending::<()>().await;
+            unreachable!()
+        })
+        .await;
+    let client = AgentClient::connect_to(server.descriptor()).await.unwrap();
+
+    let started = Instant::now();
+    let error = client
+        .request(AgentRequestKind::ReplaceDocument {
+            document_id: "doc-1".into(),
+            base_live_revision: "session:1".into(),
+            content: "replacement".into(),
+        })
+        .await
+        .unwrap_err();
+
+    assert!(started.elapsed() >= REQUEST_TIMEOUT);
+    assert_eq!(error.code, TIMEOUT);
+    assert_eq!(
+        error.detail,
+        Some(serde_json::json!({ "outcomeUnknown": true }))
+    );
+    server.stop().await.unwrap();
 }
 
 #[tokio::test]

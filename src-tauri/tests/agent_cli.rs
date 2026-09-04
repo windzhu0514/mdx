@@ -622,6 +622,42 @@ async fn stable_errors_use_the_actual_output_path() {
 }
 
 #[tokio::test]
+async fn replace_json_preserves_the_unknown_outcome_marker() {
+    let fixture = IpcFixture::new();
+    let server = fixture
+        .start(|request| async move {
+            assert!(matches!(
+                request.request,
+                AgentRequestKind::ReplaceDocument { .. }
+            ));
+            Err::<AgentResult, AgentError>(
+                AgentError::new(TIMEOUT, "The Agent request timed out.")
+                    .with_detail(serde_json::json!({ "outcomeUnknown": true })),
+            )
+        })
+        .await;
+    let client = AgentClient::connect_to(server.descriptor()).await.unwrap();
+    let stdout = CaptureWriter::default();
+    let stderr = CaptureWriter::default();
+
+    let code = run_cli_with_io(
+        replace_cli("doc-1", "session:1", true),
+        client,
+        Cursor::new(b"replacement".to_vec()),
+        stdout.clone(),
+        stderr.clone(),
+    )
+    .await;
+
+    assert_eq!(code, 1);
+    let record: serde_json::Value = serde_json::from_str(stdout.into_string().trim()).unwrap();
+    assert_eq!(record["error"]["code"], TIMEOUT);
+    assert_eq!(record["error"]["detail"]["outcomeUnknown"], true);
+    assert!(!stderr.into_string().contains("replacement"));
+    server.stop().await.unwrap();
+}
+
+#[tokio::test]
 async fn mcp_requires_process_stdio_and_console_entry_stays_gui_free() {
     let fixture = IpcFixture::new();
     let server = fixture

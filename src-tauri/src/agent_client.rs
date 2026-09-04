@@ -153,6 +153,10 @@ where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     let request_id = Uuid::new_v4().to_string();
+    let outcome_unknown_on_response_timeout = matches!(
+        &request,
+        AgentRequestKind::ReplaceDocument { .. } | AgentRequestKind::SaveDocument { .. }
+    );
     let request = AgentRequest {
         protocol_version: PROTOCOL_VERSION,
         request_id: request_id.clone(),
@@ -164,12 +168,19 @@ where
         "The Agent request timed out.",
     )
     .await?;
-    let message = client_phase(
-        deadline,
-        read_server_message(&mut stream),
-        "The Agent request timed out.",
-    )
-    .await?;
+    let message = tokio::time::timeout_at(deadline, read_server_message(&mut stream))
+        .await
+        .map_err(|_| {
+            let error = ipc_error(
+                crate::agent_protocol::TIMEOUT,
+                "The Agent request timed out.",
+            );
+            if outcome_unknown_on_response_timeout {
+                error.with_detail(serde_json::json!({ "outcomeUnknown": true }))
+            } else {
+                error
+            }
+        })??;
     response_result(message, &request_id)
 }
 
@@ -269,6 +280,103 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(error.code, TIMEOUT);
+        assert_eq!(error.detail, None);
         server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn written_replace_response_timeout_marks_the_outcome_unknown() {
+        let (client_stream, mut server_stream) = tokio::io::duplex(1024);
+        let server = tokio::spawn(async move {
+            let mut prefix = [0_u8; 4];
+            server_stream.read_exact(&mut prefix).await.unwrap();
+            let length = u32::from_be_bytes(prefix) as usize;
+            let mut payload = vec![0_u8; length];
+            server_stream.read_exact(&mut payload).await.unwrap();
+            let request: AgentRequest = serde_json::from_slice(&payload).unwrap();
+            assert!(matches!(
+                request.request,
+                AgentRequestKind::ReplaceDocument { .. }
+            ));
+            tokio::time::sleep(Duration::from_millis(40)).await;
+        });
+
+        let error = request_over_stream_until(
+            client_stream,
+            AgentRequestKind::ReplaceDocument {
+                document_id: "doc-1".into(),
+                base_live_revision: "session:1".into(),
+                content: "replacement".into(),
+            },
+            Instant::now() + Duration::from_millis(20),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.code, TIMEOUT);
+        assert_eq!(
+            error.detail,
+            Some(serde_json::json!({ "outcomeUnknown": true }))
+        );
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn written_save_response_timeout_marks_the_outcome_unknown() {
+        let (client_stream, mut server_stream) = tokio::io::duplex(1024);
+        let server = tokio::spawn(async move {
+            let mut prefix = [0_u8; 4];
+            server_stream.read_exact(&mut prefix).await.unwrap();
+            let length = u32::from_be_bytes(prefix) as usize;
+            let mut payload = vec![0_u8; length];
+            server_stream.read_exact(&mut payload).await.unwrap();
+            let request: AgentRequest = serde_json::from_slice(&payload).unwrap();
+            assert!(matches!(
+                request.request,
+                AgentRequestKind::SaveDocument { .. }
+            ));
+            tokio::time::sleep(Duration::from_millis(40)).await;
+        });
+
+        let error = request_over_stream_until(
+            client_stream,
+            AgentRequestKind::SaveDocument {
+                document_id: "doc-1".into(),
+                base_live_revision: "session:1".into(),
+            },
+            Instant::now() + Duration::from_millis(20),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.code, TIMEOUT);
+        assert_eq!(
+            error.detail,
+            Some(serde_json::json!({ "outcomeUnknown": true }))
+        );
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn replace_write_timeout_before_the_complete_frame_has_no_unknown_outcome() {
+        let (client_stream, mut server_stream) = tokio::io::duplex(1);
+
+        let error = request_over_stream_until(
+            client_stream,
+            AgentRequestKind::ReplaceDocument {
+                document_id: "doc-1".into(),
+                base_live_revision: "session:1".into(),
+                content: "replacement".into(),
+            },
+            Instant::now() + Duration::from_millis(20),
+        )
+        .await
+        .unwrap_err();
+
+        let mut written = Vec::new();
+        server_stream.read_to_end(&mut written).await.unwrap();
+        assert_eq!(error.code, TIMEOUT);
+        assert_eq!(error.detail, None);
+        assert_eq!(written.len(), 1, "the request frame must be incomplete");
     }
 }
