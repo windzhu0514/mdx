@@ -96,6 +96,20 @@ describe("GitHub Draft Release workflow", () => {
         ]);
     });
 
+    it("prepares the Linux mora-agent sidecar before Rust tests", () => {
+        const workflow = readRepositoryFile(".github/workflows/publish.yml");
+        const verifyJob = workflow.slice(0, workflow.indexOf("\n    publish:"));
+        const prepareSidecar = "run: npm run prepare:agent";
+        const rustTests =
+            "run: cargo test --manifest-path src-tauri/Cargo.toml --features agent-bin";
+
+        expect(verifyJob).toContain('TAURI_ENV_DEBUG: "true"');
+        expect(verifyJob).toContain(prepareSidecar);
+        expect(verifyJob.indexOf(prepareSidecar)).toBeLessThan(
+            verifyJob.indexOf(rustTests),
+        );
+    });
+
     it("builds and bundles exactly one target-specific mora-agent sidecar", () => {
         const config = JSON.parse(
             readRepositoryFile("src-tauri/tauri.conf.json"),

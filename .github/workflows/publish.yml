@@ -63,6 +63,11 @@ jobs:
             - name: Build frontend
               run: npm run build
 
+            - name: Prepare mora-agent test sidecar
+              env:
+                  TAURI_ENV_DEBUG: "true"
+              run: npm run prepare:agent
+
             - name: Run Rust tests
               run: cargo test --manifest-path src-tauri/Cargo.toml --features agent-bin
 
