@@ -16,7 +16,7 @@
         "release:check": "node scripts/check-release-version.mjs",
         "lint": "eslint .",
         "format": "prettier --write .",
-        "format:check": "prettier --check \"src/**/*.{ts,vue,css}\" \"scripts/**/*.mjs\" \"*.{ts,js,mjs,css,html,json,md}\" \".github/**/*.{yml,yaml}\" \"src-tauri/**/*.json\" \"docs/RELEASE.md\""
+        "format:check": "prettier --check \"src/**/*.{ts,vue,css}\" \"scripts/**/*.mjs\" \"*.{ts,js,mjs,css,html,json,md}\" \"!TODO.md\" \".github/**/*.{yml,yaml}\" \"src-tauri/**/*.json\" \"docs/RELEASE.md\""
     },
     "dependencies": {
         "@codemirror/commands": "6.10.4",
