@@ -422,7 +422,7 @@ async fn unix_endpoint_and_registry_are_owner_only() {
 
 Add Windows unit coverage for the generated SDDL string and an integration assertion that a Named Pipe descriptor uses `\\.\pipe\mora-agent-<session-id>`.
 
-Add an ignored `five_mib_round_trip_profile` test that performs one warm-up plus 20 sequential 5 MiB request/response round trips and prints sorted sample durations plus `p95_ms`; it records performance without creating a flaky CI assertion.
+Add an ignored `five_mib_round_trip_profile` test that requires a release build, performs one warm-up plus 20 sequential 5 MiB request/response round trips, and prints sorted sample durations plus `p95_ms`; it records performance without creating a flaky CI assertion.
 
 - [ ] **Step 3: Run IPC tests to verify RED**
 
@@ -1259,10 +1259,10 @@ Do not use a personal note, and do not include fixture content in logs or the fi
 Run:
 
 ```powershell
-cargo test --manifest-path src-tauri/Cargo.toml --test agent_ipc five_mib_round_trip_profile -- --ignored --nocapture
+cargo test --release --manifest-path src-tauri/Cargo.toml --test agent_ipc five_mib_round_trip_profile -- --ignored --nocapture
 ```
 
-Expected: the test prints 20 measured samples and `p95_ms`. If P95 exceeds 100 ms on the local machine, stop and report the measured trigger; do not add patch/CRDT logic outside a revised design.
+Expected: a debug build fails immediately with an instruction to use `cargo test --release`. The release test prints 20 measured samples and `p95_ms`. If release-mode P95 exceeds 100 ms on the local machine, stop and report the measured trigger; do not add patch/CRDT logic outside a revised design.
 
 - [ ] **Step 8: Audit scope and whitespace**
 

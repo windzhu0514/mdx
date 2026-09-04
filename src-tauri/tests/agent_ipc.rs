@@ -699,6 +699,10 @@ async fn unix_endpoint_and_registry_are_owner_only() {
 #[tokio::test]
 #[ignore = "manual transport performance profile"]
 async fn five_mib_round_trip_profile() {
+    assert!(
+        !cfg!(debug_assertions),
+        "the transport performance profile must run with cargo test --release"
+    );
     let fixture = IpcFixture::new().await;
     let server = fixture
         .start(|request| async move {
