@@ -20,6 +20,11 @@ struct IpcFixture {
 impl IpcFixture {
     fn new() -> Self {
         let temp = tempfile::tempdir().unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
         #[cfg(windows)]
         let registry_path = temp
             .path()
