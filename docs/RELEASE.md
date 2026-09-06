@@ -71,9 +71,17 @@ macOS/Linux 原生构建的控制台程序名为 `mora-agent`。`mora-agent --he
 
 Windows 主机只能真实验证 Windows 构建。macOS 与 Linux 的权威编译和打包结果来自 GitHub-hosted 对应 Runner，不能用 Windows 本地检查代替。
 
+仓库的 `Mora CI` 工作流会在 `master` 的 push 和 Pull Request 上运行 Ubuntu 通用门禁，以便在创建发布标签前发现前端、格式、Lint、Linux/Agent 测试和 Rust 检查问题。日常 CI 不读取 updater 签名 Secret、不构建安装包，也不能代替上述本地发布门禁。
+
 ## 5. 跨平台构建矩阵
 
-`Publish Mora` 工作流先执行一次通用质量门禁，再依次构建：
+`Publish Mora` 工作流按以下阶段执行：
+
+```text
+verify → 四个平台并行构建 → Actions Artifact 汇总 → 资产校验 → Draft Release
+```
+
+平台构建矩阵为：
 
 | 平台    | 架构          | 安装包                      | 安装内容要求          |
 | ------- | ------------- | --------------------------- | --------------------- |
@@ -82,7 +90,9 @@ Windows 主机只能真实验证 Windows 构建。macOS 与 Linux 的权威编�
 | macOS   | Intel         | DMG                         | `Mora` + `mora-agent` |
 | Linux   | x64           | AppImage、Deb               | `Mora` + `mora-agent` |
 
-平台任务串行上传，以避免多个任务同时更新 `latest.json`。本版本不生成 RPM、Snap、Flatpak、ARM Linux 或 Windows ARM64。
+四个平台只生成签名 bundle 并上传各自的 Actions Artifact，不直接创建或修改 Release。macOS 的 updater 归档在上传前按版本和架构标准化名称，避免两个架构的 `Mora.app.tar.gz` 同名冲突。
+
+全部平台成功后，单一汇总任务验证 14 个必要资产均存在且版本一致、没有重复文件、所有 updater 签名非空，然后生成唯一的 `latest.json`。校验通过后才创建 Draft Release。本版本不生成 RPM、Snap、Flatpak、ARM Linux 或 Windows ARM64。
 
 ## 6. macOS 签名限制
 
@@ -110,7 +120,9 @@ git tag app-v0.1.1
 git push origin app-v0.1.1
 ```
 
-也可以手动运行 `Publish Mora` workflow，并输入完全一致的 `release_tag`。创建标签、推送标签和运行工作流都属于发布操作，需要明确授权。
+也可以手动运行 `Publish Mora` workflow，并输入已经存在且与仓库版本完全一致的 `release_tag`。工作流始终检出该标签，避免手动触发时误用默认分支的其他提交。创建标签、推送标签和运行工作流都属于发布操作，需要明确授权。
+
+汇总上传中断时可以重新运行相同标签。工作流只会复用同标签且仍为 Draft 的 Release，并覆盖同名资产；如果该标签的 Release 已公开则立即失败，不修改正式版本。
 
 ## 8. 审核并公开
 
@@ -135,7 +147,8 @@ git push origin app-v0.1.1
 - 不复用已经发布的标签或版本号。
 - 不降低版本号覆盖旧版本。
 - 不替换同一版本的签名资产来规避升级规则。
-- 任一目标平台构建失败时保持 Draft，不发布缺少平台产物的版本。
+- 任一目标平台构建失败时不创建新 Draft，不发布缺少平台产物的版本。
+- 汇总上传中断留下不完整 Draft 时，只重跑同标签工作流；不得人工公开不完整 Draft。
 
 ## 10. 平台代码签名与 updater 签名
 
