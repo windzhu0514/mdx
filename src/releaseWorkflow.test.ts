@@ -38,6 +38,27 @@ function readRepositoryFile(path: string): string {
 }
 
 describe("GitHub Draft Release workflow", () => {
+    it("runs release-quality gates on master pushes and pull requests", () => {
+        const workflow = readRepositoryFile(".github/workflows/ci.yml");
+
+        expect(workflow).toContain("name: Mora CI");
+        expect(workflow).toContain("push:");
+        expect(workflow).toContain("pull_request:");
+        expect(workflow.match(/master/g)?.length).toBeGreaterThanOrEqual(2);
+        expect(workflow).toContain("ubuntu-22.04");
+        expect(workflow).toContain("npm run release:check");
+        expect(workflow).toContain("npm test");
+        expect(workflow).toContain("npm run lint");
+        expect(workflow).toContain("npm run format:check");
+        expect(workflow).toContain("npm run build");
+        expect(workflow).toContain("npm run prepare:agent");
+        expect(workflow).toContain(
+            "cargo test --manifest-path src-tauri/Cargo.toml --features agent-bin",
+        );
+        expect(workflow).toContain("cargo check --manifest-path src-tauri/Cargo.toml");
+        expect(workflow).not.toContain("TAURI_SIGNING_PRIVATE_KEY");
+    });
+
     it("builds signed cross-platform updater assets behind all release gates", () => {
         const workflow = readRepositoryFile(".github/workflows/publish.yml");
         const verifyJob = workflow.slice(0, workflow.indexOf("\n    publish:"));

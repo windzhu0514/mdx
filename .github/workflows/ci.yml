@@ -1,0 +1,69 @@
+name: Mora CI
+
+on:
+    push:
+        branches:
+            - master
+    pull_request:
+        branches:
+            - master
+
+permissions:
+    contents: read
+
+jobs:
+    verify:
+        name: Verify source
+        runs-on: ubuntu-22.04
+
+        steps:
+            - name: Check out repository
+              uses: actions/checkout@v4
+
+            - name: Install Linux dependencies
+              run: |
+                  sudo apt-get update
+                  sudo apt-get install -y fonts-noto-cjk libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libssl-dev patchelf xdg-utils
+
+            - name: Set up Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: 22
+                  cache: npm
+
+            - name: Set up Rust
+              uses: dtolnay/rust-toolchain@stable
+
+            - name: Cache Rust build artifacts
+              uses: Swatinem/rust-cache@v2
+              with:
+                  workspaces: "./src-tauri -> target"
+
+            - name: Install frontend dependencies
+              run: npm ci
+
+            - name: Verify repository versions
+              run: npm run release:check
+
+            - name: Run frontend tests
+              run: npm test
+
+            - name: Lint source
+              run: npm run lint
+
+            - name: Check formatting
+              run: npm run format:check
+
+            - name: Build frontend
+              run: npm run build
+
+            - name: Prepare mora-agent test sidecar
+              env:
+                  TAURI_ENV_DEBUG: "true"
+              run: npm run prepare:agent
+
+            - name: Run Rust tests
+              run: cargo test --manifest-path src-tauri/Cargo.toml --features agent-bin
+
+            - name: Check Rust source
+              run: cargo check --manifest-path src-tauri/Cargo.toml
