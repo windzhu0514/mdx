@@ -12,7 +12,7 @@ on:
                 type: string
 
 permissions:
-    contents: write
+    contents: read
 
 env:
     RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
@@ -25,6 +25,8 @@ jobs:
         steps:
             - name: Check out repository
               uses: actions/checkout@v4
+              with:
+                  ref: ${{ env.RELEASE_TAG }}
 
             - name: Install Linux dependencies
               run: |
@@ -74,35 +76,40 @@ jobs:
             - name: Check Rust source
               run: cargo check --manifest-path src-tauri/Cargo.toml
 
-    publish:
+    build:
         name: Build ${{ matrix.label }} release
         needs: verify
         runs-on: ${{ matrix.platform }}
         strategy:
             fail-fast: false
-            max-parallel: 1
             matrix:
                 include:
                     - label: Windows x64
                       platform: windows-latest
                       target: x86_64-pc-windows-msvc
+                      asset_arch: x64
                       args: "--target x86_64-pc-windows-msvc --bundles nsis,msi"
                     - label: macOS Apple Silicon
                       platform: macos-latest
                       target: aarch64-apple-darwin
+                      asset_arch: aarch64
                       args: "--target aarch64-apple-darwin --bundles app,dmg"
                     - label: macOS Intel
                       platform: macos-latest
                       target: x86_64-apple-darwin
+                      asset_arch: x64
                       args: "--target x86_64-apple-darwin --bundles app,dmg"
                     - label: Linux x64
                       platform: ubuntu-22.04
                       target: x86_64-unknown-linux-gnu
+                      asset_arch: amd64
                       args: "--target x86_64-unknown-linux-gnu --bundles appimage,deb"
 
         steps:
             - name: Check out repository
               uses: actions/checkout@v4
+              with:
+                  ref: ${{ env.RELEASE_TAG }}
 
             - name: Install Linux dependencies
               if: runner.os == 'Linux'
@@ -137,40 +144,111 @@ jobs:
             - name: Check target-specific Rust source
               run: cargo check --manifest-path src-tauri/Cargo.toml --target ${{ matrix.target }}
 
-            - name: Build Draft Release and updater metadata
+            - name: Build signed release bundles
               uses: tauri-apps/tauri-action@v1
               env:
-                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
                   TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
                   TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
               with:
-                  tagName: ${{ env.RELEASE_TAG }}
-                  releaseName: "Mora __VERSION__"
-                  releaseBody: |
-                      ## 下载与安装
-
-                      - Windows x64：下载 `x64-setup.exe`（推荐）或 `x64_zh-CN.msi`。
-                      - macOS Apple Silicon（M1 及后续芯片）：下载 `aarch64.dmg`。
-                      - macOS Intel：下载 `x64.dmg`。
-                      - Linux x64：下载 `.AppImage` 或 `.deb`。
-
-                      ### macOS 首次启动
-
-                      本版本使用 ad-hoc 签名，未经过 Apple Developer 公证。将 `Mora.app` 拖入“应用程序”后，如果 macOS 阻止启动：
-
-                      1. 前往“系统设置 → 隐私与安全性 → 仍要打开”。
-                      2. 如果仍提示“应用已损坏”，在终端执行：
-
-                         `xattr -dr com.apple.quarantine "/Applications/Mora.app"`
-
-                      3. 重新打开 Mora。
-                  generateReleaseNotes: true
-                  releaseDraft: true
-                  prerelease: false
-                  uploadUpdaterJson: true
-                  updaterJsonPreferNsis: true
                   retryAttempts: 3
                   args: ${{ matrix.args }}
 
+            - name: Normalize macOS updater archive names
+              if: runner.os == 'macOS'
+              run: |
+                  version="${RELEASE_TAG#app-v}"
+                  bundle_dir="src-tauri/target/${{ matrix.target }}/release/bundle/macos"
+                  archive="${bundle_dir}/Mora.app.tar.gz"
+                  normalized="${bundle_dir}/Mora_${version}_${{ matrix.asset_arch }}.app.tar.gz"
+                  test -s "${archive}"
+                  test -s "${archive}.sig"
+                  mv "${archive}" "${normalized}"
+                  mv "${archive}.sig" "${normalized}.sig"
+
             - name: Verify mora-agent sidecar
               run: node scripts/prepare-agent-sidecar.mjs --check --target ${{ matrix.target }}
+
+            - name: Upload platform release artifact
+              uses: actions/upload-artifact@v4
+              with:
+                  name: mora-release-${{ matrix.target }}
+                  path: |
+                      src-tauri/target/${{ matrix.target }}/release/bundle/**/*.msi
+                      src-tauri/target/${{ matrix.target }}/release/bundle/**/*.msi.sig
+                      src-tauri/target/${{ matrix.target }}/release/bundle/**/*.exe
+                      src-tauri/target/${{ matrix.target }}/release/bundle/**/*.exe.sig
+                      src-tauri/target/${{ matrix.target }}/release/bundle/**/*.dmg
+                      src-tauri/target/${{ matrix.target }}/release/bundle/**/*.app.tar.gz
+                      src-tauri/target/${{ matrix.target }}/release/bundle/**/*.app.tar.gz.sig
+                      src-tauri/target/${{ matrix.target }}/release/bundle/**/*.AppImage
+                      src-tauri/target/${{ matrix.target }}/release/bundle/**/*.AppImage.sig
+                      src-tauri/target/${{ matrix.target }}/release/bundle/**/*.deb
+                      src-tauri/target/${{ matrix.target }}/release/bundle/**/*.deb.sig
+                  if-no-files-found: error
+                  retention-days: 7
+
+    release:
+        name: Assemble Draft Release
+        needs: build
+        runs-on: ubuntu-22.04
+        permissions:
+            contents: write
+        env:
+            GH_TOKEN: ${{ github.token }}
+
+        steps:
+            - name: Check out release tag
+              uses: actions/checkout@v4
+              with:
+                  ref: ${{ env.RELEASE_TAG }}
+                  fetch-depth: 0
+
+            - name: Set up Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: 22
+
+            - name: Download platform release artifacts
+              uses: actions/download-artifact@v4
+              with:
+                  pattern: mora-release-*
+                  path: release-input
+                  merge-multiple: true
+
+            - name: Generate GitHub release notes
+              run: |
+                  gh api --method POST "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+                      -f "tag_name=${RELEASE_TAG}" \
+                      --jq .body > generated-release-notes.md
+
+            - name: Validate and assemble release assets
+              run: |
+                  node scripts/assemble-release.mjs \
+                      --artifacts-dir release-input \
+                      --output-dir release-output \
+                      --repository "${GITHUB_REPOSITORY}" \
+                      --tag "${RELEASE_TAG}" \
+                      --notes-file .github/release-preamble.md \
+                      --generated-notes-file generated-release-notes.md
+
+            - name: Create or update Draft Release
+              run: |
+                  set -euo pipefail
+                  test "$(git rev-list -n 1 "${RELEASE_TAG}")" = "$(git rev-parse HEAD)"
+                  if gh release view "${RELEASE_TAG}" --json isDraft --jq .isDraft > draft-state.txt 2>/dev/null; then
+                      test "$(cat draft-state.txt)" = "true"
+                      gh release edit "${RELEASE_TAG}" \
+                          --draft \
+                          --title "Mora ${RELEASE_TAG#app-v}" \
+                          --notes-file release-output/release-notes.md
+                  else
+                      gh release create "${RELEASE_TAG}" \
+                          --draft \
+                          --verify-tag \
+                          --title "Mora ${RELEASE_TAG#app-v}" \
+                          --notes-file release-output/release-notes.md
+                  fi
+                  gh release upload "${RELEASE_TAG}" \
+                      release-output/assets/* \
+                      release-output/latest.json \
+                      --clobber

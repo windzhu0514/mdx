@@ -51,7 +51,7 @@ CI 在 Ubuntu 上执行当前 `verify` 的质量门禁：依赖安装、版本�
 | macOS Intel         | `macos-latest`   | `x86_64-apple-darwin`      | `app,dmg`      |
 | Linux x64           | `ubuntu-22.04`   | `x86_64-unknown-linux-gnu` | `appimage,deb` |
 
-矩阵中的 `tauri-action` 不设置 `tagName`、`releaseName` 或 `releaseId`，因此只构建、不创建 Release。构建完成后使用 `actions/upload-artifact` 上传 bundle 文件和 updater 签名，Artifact 名称包含目标平台，避免文件混淆。
+矩阵中的 `tauri-action` 不设置 `tagName`、`releaseName` 或 `releaseId`，因此只构建、不创建 Release。`tauri-action` 原本只在上传 Release 时把本地 `Mora.app.tar.gz` 改成带版本和架构的资产名，因此 macOS 构建任务必须先把归档及其签名标准化为 `Mora_<version>_<arch>.app.tar.gz[.sig]`。随后使用 `actions/upload-artifact` 上传 bundle 文件和 updater 签名，Artifact 名称包含目标平台，避免两个 macOS 架构发生同名冲突。
 
 ### 3. 发布资产汇总器
 
@@ -125,6 +125,7 @@ CI 在 Ubuntu 上执行当前 `verify` 的质量门禁：依赖安装、版本�
 | `ci.yml`           | 在标签发布前发现通用测试问题                    | Unix/Agent 回归仍只能在发布时发现   |
 | 并行平台构建       | 将关键路径从平台耗时之和降为最大单个平台耗时    | 发布仍持续超过 60 分钟              |
 | Actions Artifact   | 隔离并行构建与 Release 写入                     | 多任务并发写 Release 或无法汇总     |
+| macOS 归档标准化   | 保留原 Release 上传时的版本和架构命名           | 两个 macOS updater 归档同名冲突     |
 | 资产汇总脚本       | 在创建 Draft 前验证资产并生成唯一 `latest.json` | 可能发布缺平台或错误 updater 元数据 |
 | 单一 `release` Job | 保证只有完整资产集写入 GitHub Release           | 并发写入和不完整 Draft 风险保留     |
 

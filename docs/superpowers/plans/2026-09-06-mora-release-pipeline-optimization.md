@@ -278,7 +278,7 @@ Move the existing `releaseBody` installation and macOS Gatekeeper guidance verba
 
 - [ ] **Step 4: Convert the platform matrix to build-only artifact producers**
 
-Rename the matrix job to `build`, remove `max-parallel`, and omit all release-specific `tauri-action` inputs. Retain signing Secrets and build args. Add `actions/upload-artifact@v4` with:
+Rename the matrix job to `build`, remove `max-parallel`, and omit all release-specific `tauri-action` inputs. Retain signing Secrets and build args. After macOS builds, rename local `Mora.app.tar.gz[.sig]` to `Mora_<version>_<matrix.asset_arch>.app.tar.gz[.sig]`; this preserves the naming that `tauri-action` normally applies during Release uploads and prevents the two architectures from colliding. Then add `actions/upload-artifact@v4` with:
 
 ```yaml
 name: mora-release-${{ matrix.target }}

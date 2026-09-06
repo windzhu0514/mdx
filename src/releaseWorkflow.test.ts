@@ -61,7 +61,11 @@ describe("GitHub Draft Release workflow", () => {
 
     it("builds signed cross-platform updater assets behind all release gates", () => {
         const workflow = readRepositoryFile(".github/workflows/publish.yml");
-        const verifyJob = workflow.slice(0, workflow.indexOf("\n    publish:"));
+        const buildStart = workflow.indexOf("\n    build:");
+        const releaseStart = workflow.indexOf("\n    release:");
+        const verifyJob = workflow.slice(0, buildStart);
+        const buildJob = workflow.slice(buildStart, releaseStart);
+        const releaseJob = workflow.slice(releaseStart);
 
         expect(workflow).toContain("windows-latest");
         expect(workflow).toContain("macos-latest");
@@ -74,11 +78,11 @@ describe("GitHub Draft Release workflow", () => {
         expect(workflow.match(/--bundles app,dmg/g)).toHaveLength(2);
         expect(workflow).not.toContain("--bundles dmg");
         expect(workflow).toContain("--bundles appimage,deb");
-        expect(workflow).toContain("max-parallel: 1");
+        expect(workflow).not.toContain("max-parallel: 1");
         expect(workflow).toContain("libwebkit2gtk-4.1-dev");
         expect(workflow).toContain("fonts-noto-cjk");
-        expect(workflow).toContain("retryAttempts: 3");
         expect(workflow).toContain("app-v*");
+        expect(workflow.match(/ref: \$\{\{ env\.RELEASE_TAG \}\}/g)).toHaveLength(3);
         expect(workflow).toContain("npm ci");
         expect(workflow).toContain("npm run release:check");
         expect(workflow).toContain("npm test");
@@ -88,16 +92,39 @@ describe("GitHub Draft Release workflow", () => {
             "cargo test --manifest-path src-tauri/Cargo.toml --features agent-bin",
         );
         expect(workflow).toContain("cargo check");
-        expect(workflow).toContain("TAURI_SIGNING_PRIVATE_KEY");
-        expect(workflow).toContain("tauri-apps/tauri-action@v1");
-        expect(workflow).toContain("releaseDraft: true");
-        expect(workflow).toContain("uploadUpdaterJson: true");
-        expect(workflow).toContain("updaterJsonPreferNsis: true");
-        expect(workflow).toContain("releaseBody: |");
-        expect(workflow).toContain("xattr -dr com.apple.quarantine");
-        expect(workflow).toContain("系统设置 → 隐私与安全性 → 仍要打开");
+        expect(buildJob).toContain("TAURI_SIGNING_PRIVATE_KEY");
+        expect(buildJob).toContain("tauri-apps/tauri-action@v1");
+        expect(buildJob).toContain("uses: actions/upload-artifact@v4");
+        expect(buildJob).toContain("name: mora-release-${{ matrix.target }}");
+        expect(buildJob).toContain("Normalize macOS updater archive names");
+        expect(buildJob).toContain("Mora.app.tar.gz");
+        expect(buildJob).toContain("matrix.asset_arch");
+        expect(buildJob).toContain("if-no-files-found: error");
+        expect(buildJob).not.toContain("tagName:");
+        expect(buildJob).not.toContain("releaseDraft:");
+        expect(buildJob).not.toContain("uploadUpdaterJson: true");
+        expect(releaseJob).toContain("needs: build");
+        expect(releaseJob).toContain("uses: actions/download-artifact@v4");
+        expect(releaseJob).toContain("fetch-depth: 0");
+        expect(releaseJob).toContain("pattern: mora-release-*");
+        expect(releaseJob).toContain("node scripts/assemble-release.mjs");
+        expect(releaseJob).toContain("gh release create");
+        expect(releaseJob).toContain("--draft");
+        expect(releaseJob).toContain("--verify-tag");
+        expect(releaseJob).toContain("gh release upload");
+        expect(releaseJob).toContain("--clobber");
+        expect(releaseJob).toContain("git rev-parse HEAD");
+        expect(releaseJob).not.toContain("gh release publish");
         expect(workflow).not.toContain("--bundles rpm");
         expect(workflow).not.toContain("releaseDraft: false");
+    });
+
+    it("keeps stable installation guidance in the shared release preamble", () => {
+        const preamble = readRepositoryFile(".github/release-preamble.md");
+
+        expect(preamble).toContain("## 下载与安装");
+        expect(preamble).toContain("xattr -dr com.apple.quarantine");
+        expect(preamble).toContain("系统设置 → 隐私与安全性 → 仍要打开");
     });
 
     it("configures localized Windows installers and ad-hoc signed macOS bundles", () => {
@@ -120,7 +147,7 @@ describe("GitHub Draft Release workflow", () => {
 
     it("prepares the Linux mora-agent sidecar before Rust tests", () => {
         const workflow = readRepositoryFile(".github/workflows/publish.yml");
-        const verifyJob = workflow.slice(0, workflow.indexOf("\n    publish:"));
+        const verifyJob = workflow.slice(0, workflow.indexOf("\n    build:"));
         const prepareSidecar = "run: npm run prepare:agent";
         const rustTests =
             "run: cargo test --manifest-path src-tauri/Cargo.toml --features agent-bin";
@@ -134,16 +161,19 @@ describe("GitHub Draft Release workflow", () => {
 
     it("prepares each target mora-agent sidecar before target-specific Rust checks", () => {
         const workflow = readRepositoryFile(".github/workflows/publish.yml");
-        const publishJob = workflow.slice(workflow.indexOf("\n    publish:"));
+        const buildJob = workflow.slice(
+            workflow.indexOf("\n    build:"),
+            workflow.indexOf("\n    release:"),
+        );
         const prepareSidecar =
             "run: npm run prepare:agent -- --target ${{ matrix.target }}";
         const targetCheck =
             "run: cargo check --manifest-path src-tauri/Cargo.toml --target ${{ matrix.target }}";
 
-        expect(publishJob).toContain('TAURI_ENV_DEBUG: "true"');
-        expect(publishJob).toContain(prepareSidecar);
-        expect(publishJob.indexOf(prepareSidecar)).toBeLessThan(
-            publishJob.indexOf(targetCheck),
+        expect(buildJob).toContain('TAURI_ENV_DEBUG: "true"');
+        expect(buildJob).toContain(prepareSidecar);
+        expect(buildJob.indexOf(prepareSidecar)).toBeLessThan(
+            buildJob.indexOf(targetCheck),
         );
     });
 
