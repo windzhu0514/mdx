@@ -12,7 +12,7 @@
         "tauri": "tauri",
         "test": "vitest run",
         "test:watch": "vitest",
-        "test:release": "node --test scripts/check-release-version.test.mjs",
+        "test:release": "node --test scripts/check-release-version.test.mjs scripts/assemble-release.test.mjs",
         "release:check": "node scripts/check-release-version.mjs",
         "lint": "eslint .",
         "format": "prettier --write .",
