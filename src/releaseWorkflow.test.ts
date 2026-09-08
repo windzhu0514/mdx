@@ -194,7 +194,7 @@ describe("GitHub Draft Release workflow", () => {
             "node scripts/prepare-agent-sidecar.mjs",
         );
         expect(config.build.beforeBuildCommand).toBe(
-            "npm run build && npm run prepare:agent",
+            "npm run build && npm run prepare:agent && npm run prepare:notices",
         );
         expect(config.bundle.externalBin).toEqual(["binaries/mora-agent"]);
         expect(config.bundle.externalBin).not.toContain("binaries/mora-mcp");

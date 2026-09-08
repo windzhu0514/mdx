@@ -136,6 +136,10 @@ vi.mock("@tauri-apps/api/core", () => ({
     invoke: mocks.invoke,
 }));
 
+vi.mock("@tauri-apps/api/event", () => ({
+    listen: vi.fn(async () => () => undefined),
+}));
+
 vi.mock("@tauri-apps/api/app", () => ({
     setTheme: vi.fn(async () => undefined),
 }));
@@ -368,6 +372,20 @@ beforeEach(() => {
         mocks.updaterState.error.value = "";
     }
     mocks.invoke.mockImplementation(async (command: string, args?: unknown) => {
+        if (
+            command === "get_agent_bridge_status" ||
+            command === "set_agent_access_enabled"
+        ) {
+            return {
+                enabled: false,
+                listening: false,
+                connectedClients: 0,
+                watcherClients: 0,
+                cliPath: null,
+                protocolVersion: 1,
+                lastError: null,
+            };
+        }
         if (command === "has_ai_api_key") return false;
         if (command === "get_recent_files" || command === "push_recent_file") return [];
         if (command === "read_workspace_session") {
@@ -512,9 +530,10 @@ describe("App 安全安装更新", () => {
         findButton(host, "取消").click();
 
         await vi.waitFor(() =>
-            expect(host.querySelector(".status-bar")?.textContent).toContain(
-                "更新安装已取消",
-            ),
+            expect(host.querySelector(".leave-dialog[open]")).toBeNull(),
+        );
+        expect(host.querySelector(".status-bar")?.textContent).not.toContain(
+            "更新安装已取消",
         );
         expect(mocks.updaterInstall).not.toHaveBeenCalled();
     });
@@ -1482,6 +1501,7 @@ describe("App PDF 打印视图", () => {
 
         findButton(host, "导出 PDF").click();
         await vi.waitFor(() => expect(targetEditor?.whenSettledCalls).toBe(1));
+        expect(host.querySelector(".status-bar")?.textContent).toContain("正在导出文档");
         targetEditor?.emitUpdate("# 导出后正文");
         await nextTick();
         settled.resolve();
@@ -1517,7 +1537,7 @@ describe("App PDF 打印视图", () => {
             base64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGBgAAAABQABpfZFQAAAAABJRU5ErkJggg==",
         });
         findButton(host, "导入图片或附件").click();
-        await vi.waitFor(() => expect(host.textContent).toContain("已导入 1 个资源"));
+        await vi.waitFor(() => expect(URL.createObjectURL).toHaveBeenCalled());
         expect(editorValue(host, "milkdown")).toBe("# 正文不变");
         settled.resolve();
 
@@ -1764,6 +1784,7 @@ describe("App PDF 打印视图", () => {
         findButton(host, "打印").click();
         findButton(host, "打印").click();
         await vi.waitFor(() => expect(editableMilkdown?.whenReadyCalls).toBe(1));
+        expect(host.querySelector(".status-bar")?.textContent).toContain("正在准备打印");
 
         deferred.reject(new Error("Crepe 初始化失败"));
         await vi.waitFor(() => expect(host.textContent).toContain("Crepe 初始化失败"));

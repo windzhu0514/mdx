@@ -1,5 +1,14 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import {
+    computed,
+    customRef,
+    nextTick,
+    onBeforeUnmount,
+    onMounted,
+    reactive,
+    ref,
+    watch,
+} from "vue";
 import { setTheme } from "@tauri-apps/api/app";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -139,8 +148,37 @@ const dirty = computed(() => {
     return activeDocument.value?.dirty ?? false;
 });
 const loading = ref(false);
-const statusMessage = ref("准备就绪");
+let disposeStatusMessage = () => {};
+const statusMessage = customRef<string>((track, trigger) => {
+    let message = "";
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let disposed = false;
+    disposeStatusMessage = () => {
+        disposed = true;
+        clearTimeout(timer);
+    };
+    return {
+        get() {
+            track();
+            return message;
+        },
+        set(value) {
+            if (disposed) return;
+            clearTimeout(timer);
+            message = value;
+            trigger();
+            if (value) {
+                timer = setTimeout(() => {
+                    message = "";
+                    timer = undefined;
+                    trigger();
+                }, 3000);
+            }
+        },
+    };
+});
 const errorMessage = ref("");
+const statusBarRef = ref<InstanceType<typeof StatusBar> | null>(null);
 const editorRef = ref<MoraEditorHandle | null>(null);
 const workspaceSidebarRef = ref<WorkspaceSidebarHandle | null>(null);
 const lastSearchQuery = ref("");
@@ -148,7 +186,8 @@ const findPanel = ref<InstanceType<typeof FindReplacePanel> | null>(null);
 
 const editorMode = ref<EditorMode>("wysiwyg");
 const sourcePreview = ref(true);
-let printing = false;
+const printing = ref(false);
+const documentExportsInProgress = ref(0);
 const showToc = ref(true);
 const compactLayout = ref(false);
 const compactPanel = ref<"workspace" | "outline" | null>(null);
@@ -237,7 +276,31 @@ const commandPaletteBlocked = computed(
         showUpdateDialog.value ||
         mermaidViewerRequest.value !== null,
 );
-const savingDocumentIds = new Set<string>();
+const savingDocumentIds = reactive(new Set<string>());
+const progressMessage = computed(() => {
+    if (savingDocumentIds.size > 0) return "正在保存…";
+    if (documentExportsInProgress.value > 0) return "正在导出文档…";
+    if (printing.value) return "正在准备打印…";
+    if (appUpdater.busy.value) {
+        if (appUpdater.phase.value === "downloading") return "正在下载更新…";
+        if (appUpdater.phase.value === "installing") return "正在安装更新…";
+        return "正在检查更新…";
+    }
+    return loading.value ||
+        libraryLoading.value ||
+        historyLoading.value ||
+        aiKeySaving.value ||
+        mermaidExporting.value
+        ? "正在处理…"
+        : "";
+});
+watch(
+    progressMessage,
+    (message) => {
+        if (message) statusMessage.value = "";
+    },
+    { flush: "sync" },
+);
 const agentBridge = useAgentBridge({
     desktop: tauriRuntime,
     enabled: computed(() => preferences.value.agentAccessEnabled),
@@ -259,23 +322,21 @@ const externalFileSync = useExternalFileSync({
         if (!showConflictPrompt.value) await resolveDocumentConflict(documentId);
     },
 });
-let watcherStatusMessage: string | null = null;
+const watcherStatusMessage = ref("");
 watch(externalFileSync.status, (current) => {
     if (current.state === "active") {
-        if (
-            watcherStatusMessage !== null &&
-            statusMessage.value === watcherStatusMessage
-        ) {
-            statusMessage.value = "";
-        }
-        watcherStatusMessage = null;
+        watcherStatusMessage.value = "";
         return;
     }
-    watcherStatusMessage =
+    watcherStatusMessage.value =
         current.message ??
         (current.state === "degraded" ? "外部文件同步已降级" : "外部文件同步不可用");
-    statusMessage.value = watcherStatusMessage;
 });
+function dismissStatusMessage() {
+    errorMessage.value = "";
+    watcherStatusMessage.value = "";
+    statusMessage.value = "";
+}
 watch(agentStatus, (currentStatus) => {
     if (
         preferences.value.agentAccessEnabled &&
@@ -384,13 +445,6 @@ const windowTitle = computed(() =>
         ? `${dirty.value ? "* " : ""}${title.value} - ${APP_NAME}`
         : `${APP_NAME} ${APP_CN_NAME}`,
 );
-const displayPath = computed(() => {
-    const active = activeDocument.value;
-    if (!active) return "未打开文档";
-    if (active.path) return active.path;
-    if (active.importSourcePath) return `来源：${active.importSourcePath}`;
-    return "未指定保存位置";
-});
 const modeLabel = computed(() => {
     if (editorMode.value === "wysiwyg") return "所见即所得";
     return sourcePreview.value ? "垂直双栏" : "仅源码";
@@ -1175,6 +1229,7 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+    disposeStatusMessage();
     window.removeEventListener("pointerdown", handleWindowPointerDown, true);
     window.removeEventListener("keydown", handleWindowKeyDown);
     compactMedia?.removeEventListener("change", syncCompactLayout);
@@ -1190,7 +1245,7 @@ onBeforeUnmount(() => {
 });
 
 function handleEditorUpdate(markdown: string) {
-    if (printing) return;
+    if (printing.value) return;
     const active = activeDocument.value;
     if (!active) return;
     const persistedContent = active.resources.persistedMarkdown(markdown);
@@ -1487,7 +1542,7 @@ async function openFiles() {
         ],
     });
     if (!selected) {
-        statusMessage.value = "已取消打开";
+        statusMessage.value = "";
         return;
     }
 
@@ -1517,7 +1572,7 @@ async function openWorkspacePath(path: string) {
 async function openFolder() {
     const selected = await open({ directory: true, multiple: false });
     if (!selected || Array.isArray(selected)) {
-        statusMessage.value = "已取消打开文件夹";
+        statusMessage.value = "";
         return;
     }
     await runAction(async () => {
@@ -1619,6 +1674,8 @@ async function exportDocument(format: DocumentExportFormat) {
         return true;
     };
 
+    documentExportsInProgress.value += 1;
+    errorMessage.value = "";
     try {
         const mermaidSources = await (editor?.captureMermaidSources() ??
             Promise.resolve([]));
@@ -1647,15 +1704,18 @@ async function exportDocument(format: DocumentExportFormat) {
     } catch (error) {
         errorMessage.value = stringifyError(error);
         statusMessage.value = `${label} 导出失败`;
+    } finally {
+        documentExportsInProgress.value -= 1;
     }
 }
 
 async function printDocument() {
-    if (printing) return;
+    if (printing.value) return;
     const targetId = activeDocumentId.value;
     if (!targetId) return;
 
-    printing = true;
+    printing.value = true;
+    errorMessage.value = "";
     let printTitleApplied = false;
     const previousMode = editorMode.value;
     const previousSourcePreview = sourcePreview.value;
@@ -1689,7 +1749,7 @@ async function printDocument() {
         editorMode.value = previousMode;
         sourcePreview.value = previousSourcePreview;
         await nextTick();
-        printing = false;
+        printing.value = false;
     }
 }
 
@@ -1776,7 +1836,7 @@ async function saveDocumentAs(id: string) {
             filters: [{ name: "Mora 墨笺笔记", extensions: ["mdx"] }],
         });
         if (!selected) {
-            statusMessage.value = "已取消保存";
+            statusMessage.value = "";
             return false;
         }
 
@@ -1817,7 +1877,7 @@ async function saveMarkdownImportAs(id: string, selected: string, sourcePath: st
     if (plan.items.length > 0) {
         const decision = await requestMarkdownResourceDecision(runtime.displayName, plan);
         if (decision === "cancel") {
-            statusMessage.value = "已取消 Markdown 资源导入";
+            statusMessage.value = "";
             return null;
         }
         if (!documents.value.includes(runtime)) {
@@ -1877,13 +1937,15 @@ async function checkForAppUpdate() {
         statusMessage.value = "已是最新版";
     } else if (result === "failed") {
         showUpdateDialog.value = true;
-        statusMessage.value = "检查更新失败";
+        errorMessage.value = appUpdater.error.value || "检查更新失败";
     }
 }
 
 async function downloadAppUpdate() {
+    errorMessage.value = "";
     const downloaded = await appUpdater.downloadUpdate();
-    statusMessage.value = downloaded ? "更新下载完成" : "更新下载失败";
+    if (downloaded) statusMessage.value = "更新下载完成";
+    else errorMessage.value = appUpdater.error.value || "更新下载失败";
 }
 
 let updateInstallInProgress = false;
@@ -1893,11 +1955,11 @@ async function installDownloadedUpdate() {
     try {
         const canRestart = await session.prepareWindowClose(closeActions);
         if (!canRestart) {
-            statusMessage.value = "更新安装已取消";
+            statusMessage.value = "";
             return;
         }
         const installed = await appUpdater.installUpdate();
-        if (!installed) statusMessage.value = "更新安装失败";
+        if (!installed) errorMessage.value = appUpdater.error.value || "更新安装失败";
     } catch (error) {
         errorMessage.value = `安装更新前处理失败：${stringifyError(error)}`;
         statusMessage.value = "更新安装已取消";
@@ -2132,6 +2194,7 @@ function handleWindowPointerDown(event: PointerEvent) {
 }
 
 function handleWindowKeyDown(event: KeyboardEvent) {
+    if (statusBarRef.value?.isDetailsOpen()) return;
     const key = event.key.toLowerCase();
     if ((event.ctrlKey || event.metaKey) && event.shiftKey && key === "p") {
         event.preventDefault();
@@ -3106,9 +3169,11 @@ function stringifyError(error: unknown) {
             @close="showThemePicker = false"
         />
         <StatusBar
+            ref="statusBarRef"
             :error-message="errorMessage"
+            :persistent-message="watcherStatusMessage"
             :status-message="statusMessage"
-            :path="displayPath"
+            :progress-message="progressMessage"
             :mode-label="modeLabel"
             :word-count="wordCount"
             :workspace-visible="workspaceVisible"
@@ -3116,6 +3181,7 @@ function stringifyError(error: unknown) {
             :outline-available="outlineAvailable"
             @toggle-workspace="toggleWorkspacePanel"
             @toggle-outline="toggleOutlinePanel"
+            @dismiss-message="dismissStatusMessage"
         />
     </main>
 </template>

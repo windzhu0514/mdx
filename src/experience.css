@@ -1551,17 +1551,6 @@ summary:focus-visible,
     visibility: visible;
 }
 
-.status-left {
-    min-width: 0;
-}
-
-.status-left .path {
-    max-width: min(44vw, 520px);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
 .markdown-editor .source-editor,
 .markdown-editor .cm-editor,
 .markdown-editor .cm-gutters {

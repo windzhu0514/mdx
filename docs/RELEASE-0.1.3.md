@@ -35,9 +35,21 @@
 
 产物分别位于 `src-tauri/target/release/bundle/msi/` 和 `src-tauri/target/release/bundle/nsis/`，同目录各有更新签名 `.sig`。MSI 的 ProductLanguage 为 `2052`，ProductVersion 为 `0.1.3`。Tauri 为 MSI/NSIS 分别写入 bundle-type 标记，因此两种安装方式内的 GUI 不应直接按原始二进制哈希互相比对；MSI 解包 GUI 已单独核验版本。
 
-专用测试目录已从 0.1.2 升级至 0.1.3；升级前备份应用元数据，升级后逐文件核对哈希未变。已安装 Agent 与许可证文件和构建源逐字一致，GUI 仅在 Tauri 的三字节 bundle-type 标记上不同（安装包为 NSS，开发产物为 UNK），其余字节一致。原有笔记和草稿未被保存或放弃，测试安装仍保留。
+专用测试目录已从 0.1.2 升级至上述 0.1.3 候选包；升级前备份应用元数据，升级后逐文件核对哈希未变。当时已安装 Agent 与许可证文件和构建源逐字一致，GUI 仅在 Tauri 的三字节 bundle-type 标记上不同（安装包为 NSS，开发产物为 UNK），其余字节一致。原有笔记和草稿未被保存或放弃，测试安装仍保留。
 
 升级后的界面验收再次收到 Escape 停止信号而中止。尚未完成 0.1.3 编辑/保存、异常退出恢复、卸载保留数据，以及真实在线更新；不能据已通过的静默安装升级宣称这些流程已验收。
+
+## 后续状态栏修复
+
+后续源码与开发版 EXE 已移除状态栏来源/路径，主动取消不再显示反馈，普通反馈三秒后清空；保存、导出、打印等进行中状态持续显示，错误与同步告警可查看详情和关闭。详情窗口保留原生选择/复制快捷键，不操作后台编辑器。
+
+- `src/App.vue`：提示生命周期、实际进度、详情框快捷键边界，删除 `displayPath` 展示计算与路径传参。
+- `src/components/StatusBar.vue`：移除路径属性/节点，增加持续提示的详情和关闭入口。
+- `src/style.css`、`src/experience.css`：删除状态栏路径相关样式。
+- `src/App.web.test.ts`、`src/App.editor-integration.test.ts`、`src/components/StatusBar.test.ts`：覆盖三秒到期、重复提示、取消、进度、详情和后台快捷键保护。
+- `src/releaseWorkflow.test.ts`：同步已加入第三方声明生成步骤的构建命令断言。
+
+该修复通过 496 项前端测试、Lint、格式检查、前端构建、Cargo 检查和开发版 EXE 构建；浏览器验证了提示消失、路径缺席、窄窗口深色详情和关闭交互。**上表 MSI/NSIS 为修复前的候选包，尚未重打包，正在运行的旧实例也不会自动更新。** 正式发布前需重新构建安装包并更新对应哈希与验收记录。
 
 ## 独立环境验收待办
 

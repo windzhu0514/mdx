@@ -916,6 +916,63 @@ afterEach(() => {
 });
 
 describe("App Web 预览启动", () => {
+    it("短暂提示三秒后清空，重复操作重新计时，卸载释放计时器", async () => {
+        vi.useFakeTimers();
+        try {
+            const host = await mountApp();
+            findButton(host, "新建文档")!.click();
+            await nextTick();
+            expect(host.querySelector(".status-bar")?.textContent).toContain(
+                "已新建文档",
+            );
+            await vi.advanceTimersByTimeAsync(2500);
+            findButton(host, "新建")!.click();
+            await nextTick();
+            await vi.advanceTimersByTimeAsync(2500);
+            expect(host.querySelector(".status-bar")?.textContent).toContain(
+                "已新建文档",
+            );
+            await vi.advanceTimersByTimeAsync(501);
+            expect(host.querySelector(".status-bar")?.textContent).not.toContain(
+                "已新建文档",
+            );
+            expect(host.querySelector(".status-right")?.textContent).toContain("字");
+            findButton(host, "新建")!.click();
+            await nextTick();
+            cleanup?.();
+            cleanup = undefined;
+            expect(vi.getTimerCount()).toBe(0);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it("处理中提示持续到操作结束，取消保存不留下反馈", async () => {
+        mocks.isTauri.mockReturnValue(true);
+        const host = await mountApp();
+        await vi.waitFor(() => expect(mocks.closeHandler).toBeDefined());
+        findButton(host, "新建文档")!.click();
+        await nextTick();
+        const destination = deferred<string | null>();
+        mocks.saveDialog.mockReturnValue(destination.promise);
+        findButton(host, "保存")!.click();
+        await nextTick();
+        findButton(host, "仅源码")!.click();
+        await nextTick();
+        expect(host.querySelector(".status-bar")?.textContent).toContain("正在保存");
+        vi.useFakeTimers();
+        try {
+            await vi.advanceTimersByTimeAsync(5000);
+            expect(host.querySelector(".status-bar")?.textContent).toContain("正在保存");
+            destination.resolve(null);
+            await vi.advanceTimersByTimeAsync(0);
+            await nextTick();
+            expect(host.querySelector(".status-left")?.textContent?.trim()).toBe("");
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
     it("clears only watcher-owned status after recovery to active", async () => {
         mocks.isTauri.mockReturnValue(true);
         const host = await mountApp();
@@ -950,6 +1007,47 @@ describe("App Web 预览启动", () => {
         publishWatcherStatus({ payload: { state: "active", message: null } });
         await nextTick();
         expect(host.textContent).toContain("无法打开 C:\\notes\\watcher-error.mdx");
+    });
+
+    it("错误持续显示且可关闭，不会重新显示过期操作结果", async () => {
+        mocks.isTauri.mockReturnValue(true);
+        const host = await mountApp();
+        await vi.waitFor(() => expect(mocks.closeHandler).toBeDefined());
+        mocks.openDialog.mockResolvedValue(["C:\\notes\\failure.mdx"]);
+        mocks.openMdxFailures.add("C:\\notes\\failure.mdx");
+        vi.useFakeTimers();
+        try {
+            findButton(host, "打开文件")!.click();
+            await vi.advanceTimersByTimeAsync(0);
+            await nextTick();
+            expect(host.querySelector('[role="status"]')?.textContent).toContain(
+                "无法打开",
+            );
+            await vi.advanceTimersByTimeAsync(10000);
+            expect(host.querySelector('[role="status"]')?.textContent).toContain(
+                "无法打开",
+            );
+            host.querySelector<HTMLButtonElement>('[aria-label="查看提示详情"]')!.click();
+            await nextTick();
+            const detail = host.querySelector(".status-message-dialog p")!;
+            for (const key of ["a", "c", "n"]) {
+                const event = new KeyboardEvent("keydown", {
+                    key,
+                    ctrlKey: true,
+                    bubbles: true,
+                    cancelable: true,
+                });
+                detail.dispatchEvent(event);
+                expect(event.defaultPrevented).toBe(false);
+            }
+            expect(host.querySelector(".mora-editor-stub")).toBeNull();
+            host.querySelector<HTMLButtonElement>('[aria-label="关闭详情"]')!.click();
+            host.querySelector<HTMLButtonElement>('[aria-label="关闭提示"]')!.click();
+            await nextTick();
+            expect(host.querySelector(".status-left")?.textContent?.trim()).toBe("");
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     it("shows update checking under About and disables it in Web preview", async () => {
@@ -1403,7 +1501,7 @@ describe("App Web 预览启动", () => {
         expect(mocks.getMoraEditorAiProvider?.()).toBeUndefined();
     });
 
-    it("新建文档在状态栏显示未指定保存位置", async () => {
+    it("新建文档的状态栏不再显示保存位置", async () => {
         const host = document.createElement("div");
         document.body.append(host);
         const app = createApp(App);
@@ -1415,7 +1513,8 @@ describe("App Web 预览启动", () => {
             expect(host.querySelector(".mora-editor-stub")).not.toBeNull();
         });
 
-        expect(host.querySelector(".status-bar .path")?.textContent?.trim()).toBe(
+        expect(host.querySelector(".status-bar .path")).toBeNull();
+        expect(host.querySelector(".status-bar")?.textContent).not.toContain(
             "未指定保存位置",
         );
     });
@@ -2619,7 +2718,7 @@ describe("App 多文档工作区", () => {
         );
 
         await vi.waitFor(() => {
-            expect(host.textContent).toContain("请先完成当前保存操作");
+            expect(host.querySelector(".status-bar")?.textContent).toContain("正在保存");
             expect(document.activeElement).toBe(openDocumentRow(host, "a"));
         });
         expect(
@@ -2655,7 +2754,7 @@ describe("App 多文档工作区", () => {
         host.querySelector<HTMLButtonElement>('[aria-label="关闭文件夹 notes"]')?.click();
 
         await vi.waitFor(() =>
-            expect(host.textContent).toContain("请先完成当前保存操作"),
+            expect(host.querySelector(".status-bar")?.textContent).toContain("正在保存"),
         );
         expect(host.querySelector('[aria-label="关闭文件夹 notes"]')).not.toBeNull();
         expect(openDocumentRow(host, "a")).not.toBeUndefined();
@@ -2688,7 +2787,7 @@ describe("App 多文档工作区", () => {
         await nextTick();
 
         expect(closeEvent.preventDefault).toHaveBeenCalledTimes(1);
-        expect(host.textContent).toContain("请先完成当前保存操作");
+        expect(host.querySelector(".status-bar")?.textContent).toContain("正在保存");
         expect(
             host.querySelector('[aria-labelledby="leave-dialog-title"][open]'),
         ).toBeNull();
@@ -2715,7 +2814,9 @@ describe("App 多文档工作区", () => {
         expect(unsavedStatuses).toHaveLength(1);
 
         const status = host.querySelector(".status-bar");
-        expect(status?.querySelector(".path")?.textContent).toBe(`来源：${sourcePath}`);
+        expect(status?.querySelector(".path")).toBeNull();
+        expect(status?.textContent).not.toContain("来源：");
+        expect(status?.textContent).not.toContain(sourcePath);
         expect(status?.textContent).not.toContain("尚未保存");
         expect(
             Array.from(status?.querySelectorAll(".status-cell") ?? [], (element) =>
@@ -2985,7 +3086,14 @@ describe("App 多文档工作区", () => {
 
         expect(mocks.saveDialog).toHaveBeenCalledTimes(1);
         destination.resolve(null);
-        await vi.waitFor(() => expect(host.textContent).toContain("已取消保存"));
+        await vi.waitFor(() =>
+            expect(host.querySelector(".status-bar")?.textContent).not.toContain(
+                "正在保存",
+            ),
+        );
+        expect(host.querySelector(".status-bar")?.textContent).not.toContain(
+            "已取消保存",
+        );
     });
 
     it("Markdown 打包失败时保留保存期间产生的新编辑", async () => {
@@ -3063,7 +3171,7 @@ describe("App 多文档工作区", () => {
         await nextTick();
 
         await vi.waitFor(() =>
-            expect(host.textContent).toContain("请先完成当前保存操作"),
+            expect(host.querySelector(".status-bar")?.textContent).toContain("正在保存"),
         );
         expect(
             host.querySelector('[aria-labelledby="leave-dialog-title"][open]'),

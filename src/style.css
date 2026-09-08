@@ -1025,10 +1025,6 @@ summary {
     opacity: 0.3;
 }
 
-.path {
-    color: var(--color-text-main);
-}
-
 .status {
     color: var(--color-success);
 }
@@ -1040,11 +1036,6 @@ summary {
 @media (max-width: 980px) {
     .note-panel {
         padding: 16px 20px;
-    }
-    .status-left .path {
-        min-width: 0;
-        overflow: hidden;
-        text-overflow: ellipsis;
     }
     .find-panel {
         left: 12px;

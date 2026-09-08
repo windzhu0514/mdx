@@ -1,8 +1,11 @@
 <script setup lang="ts">
-defineProps<{
+import { computed, ref } from "vue";
+
+const props = defineProps<{
     errorMessage: string;
     statusMessage: string;
-    path: string;
+    progressMessage?: string;
+    persistentMessage?: string;
     modeLabel: string;
     wordCount: number;
     workspaceVisible: boolean;
@@ -13,11 +16,28 @@ defineProps<{
 const emit = defineEmits<{
     "toggle-workspace": [];
     "toggle-outline": [];
+    "dismiss-message": [];
 }>();
+const persistent = computed(() => props.errorMessage || props.persistentMessage || "");
+const displayMessage = computed(() =>
+    [
+        props.progressMessage,
+        persistent.value || (props.progressMessage ? "" : props.statusMessage),
+    ]
+        .filter(Boolean)
+        .join(" · "),
+);
+const messageDialog = ref<HTMLDialogElement | null>(null);
+const detailsText = ref("");
+function showDetails() {
+    detailsText.value = persistent.value;
+    messageDialog.value?.showModal();
+}
+defineExpose({ isDetailsOpen: () => messageDialog.value?.open ?? false });
 </script>
 
 <template>
-    <footer class="status-bar" aria-live="polite">
+    <footer class="status-bar">
         <button
             type="button"
             class="status-sidebar-toggle workspace-toggle"
@@ -32,11 +52,34 @@ const emit = defineEmits<{
             </svg>
         </button>
         <div class="status-left">
-            <div v-if="errorMessage" class="status-cell status error">
-                {{ errorMessage }}
+            <div class="status-cell status-feedback" :class="{ error: !!errorMessage }">
+                <span
+                    class="status-message-text"
+                    role="status"
+                    aria-live="polite"
+                    aria-atomic="true"
+                >
+                    {{ displayMessage }}
+                </span>
+                <template v-if="persistent">
+                    <button
+                        type="button"
+                        class="status-message-action"
+                        aria-label="查看提示详情"
+                        @click="showDetails"
+                    >
+                        详情
+                    </button>
+                    <button
+                        type="button"
+                        class="status-message-action"
+                        aria-label="关闭提示"
+                        @click="emit('dismiss-message')"
+                    >
+                        ×
+                    </button>
+                </template>
             </div>
-            <div v-else class="status-cell">{{ statusMessage }}</div>
-            <div class="status-cell path" :title="path">{{ path }}</div>
         </div>
         <div class="status-right">
             <div class="status-cell">{{ modeLabel }}</div>
@@ -63,4 +106,76 @@ const emit = defineEmits<{
             </svg>
         </button>
     </footer>
+    <dialog
+        ref="messageDialog"
+        class="status-message-dialog"
+        aria-labelledby="status-message-title"
+        @close="detailsText = ''"
+    >
+        <h2 id="status-message-title">提示详情</h2>
+        <p>{{ detailsText }}</p>
+        <button
+            type="button"
+            class="status-message-action"
+            aria-label="关闭详情"
+            autofocus
+            @click="messageDialog?.close()"
+        >
+            关闭
+        </button>
+    </dialog>
 </template>
+
+<style scoped>
+.status-feedback {
+    min-width: 0;
+    width: 100%;
+    gap: 8px;
+}
+.status-feedback.error {
+    color: var(--color-danger);
+}
+.status-message-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.status-message-action {
+    flex: 0 0 auto;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    padding: 2px 7px;
+    min-height: 24px;
+    background: var(--color-bg-control);
+    color: inherit;
+    cursor: pointer;
+}
+.status-message-action:hover {
+    background: var(--color-bg-control-hover);
+}
+.status-message-dialog {
+    margin: auto;
+    width: min(560px, calc(100vw - 32px));
+    max-height: calc(100vh - 32px);
+    padding: 24px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-bg-popup);
+    color: var(--color-text-main);
+    box-shadow: var(--shadow-lg);
+}
+.status-message-dialog::backdrop {
+    background: rgb(0 0 0 / 30%);
+}
+.status-message-dialog h2 {
+    font-size: 16px;
+}
+.status-message-dialog p {
+    margin: 16px 0;
+    max-height: 55vh;
+    overflow: auto;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    line-height: 1.6;
+}
+</style>
