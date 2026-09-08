@@ -7,7 +7,7 @@
 更新私钥位于：
 
 ```text
-C:\Users\ljc01\.tauri\mora-updater.key
+%USERPROFILE%\.tauri\mora-updater.key
 ```
 
 对应公钥位于同目录的 `mora-updater.key.pub`，公钥已经写入 `src-tauri/tauri.conf.json`。
@@ -37,10 +37,10 @@ C:\Users\ljc01\.tauri\mora-updater.key
 
 ## 4. 本地发布门禁
 
-以 `0.1.1` 为例，在 PowerShell 中验证标签和仓库版本：
+以 `0.1.3` 为例，在 PowerShell 中验证标签和仓库版本：
 
 ```powershell
-$env:RELEASE_TAG = "app-v0.1.1"
+$env:RELEASE_TAG = "app-v0.1.3"
 npm run release:check
 Remove-Item Env:RELEASE_TAG
 ```
@@ -59,6 +59,8 @@ npm run tauri -- build
 ```
 
 任一命令失败都停止发布。Windows 本地正式构建必须提供与 GitHub Secrets 相同的 Tauri 更新签名私钥环境变量，确保安装包带有对应 updater 签名。
+
+`beforeBuildCommand` 会执行 `npm run prepare:notices`，依据锁文件、当前目标平台的 Cargo 依赖闭包和已核实的上游许可文本生成 `THIRD_PARTY_NOTICES.txt`。该步骤默认离线，缺少依赖源码或许可文本时会失败；先完成对应平台依赖获取和许可核查，不要跳过检查。可用 `node scripts/generate-third-party-notices.mjs --check --target x86_64-pc-windows-msvc` 检查当前 Windows 声明是否与锁文件一致。第三方许可补齐文本与准确来源保存在 `third-party-license-sources/`，需与锁文件变更一起复核。
 
 `npm run build:exe` 完成后必须同时存在：
 
@@ -116,8 +118,8 @@ xattr -dr com.apple.quarantine "/Applications/Mora.app"
 只有获得明确发布授权后，才创建并推送与仓库版本完全一致的标签：
 
 ```powershell
-git tag app-v0.1.1
-git push origin app-v0.1.1
+git tag app-v0.1.3
+git push origin app-v0.1.3
 ```
 
 也可以手动运行 `Publish Mora` workflow，并输入已经存在且与仓库版本完全一致的 `release_tag`。工作流始终检出该标签，避免手动触发时误用默认分支的其他提交。创建标签、推送标签和运行工作流都属于发布操作，需要明确授权。
@@ -125,6 +127,10 @@ git push origin app-v0.1.1
 汇总上传中断时可以重新运行相同标签。工作流只会复用同标签且仍为 Draft 的 Release，并覆盖同名资产；如果该标签的 Release 已公开则立即失败，不修改正式版本。
 
 ## 8. 审核并公开
+
+0.1.3 的本机证据与独立环境待办见 [RELEASE-0.1.3.md](RELEASE-0.1.3.md)。公开测试版本需在 GitHub Release 中标记为 Pre-release；草稿及 Pre-release 不应假定可通过客户端默认 `latest` 地址发现。
+
+项目源码的 MIT 许可与第三方许可分别随安装内容保留在 `licenses/`。当前 MSI 保留 MIT 源文件名 `LICENSE`，NSIS 使用映射名 `Mora-LICENSE.txt`；发布前核对对应 MIT 文件和 `THIRD_PARTY_NOTICES.txt` 存在并与源码声明逐字一致。不能用项目 MIT 替代依赖及内嵌字体的独立许可。
 
 在公开 Draft 前逐项确认：
 

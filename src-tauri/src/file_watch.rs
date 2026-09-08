@@ -310,12 +310,6 @@ impl SupervisorMailbox {
     }
 
     fn record_notify(&self, event: notify::Result<Event>) {
-        if event
-            .as_ref()
-            .is_ok_and(|event| matches!(event.kind, EventKind::Access(_)))
-        {
-            return;
-        }
         let Ok(event) = event else {
             self.shared
                 .pending_runtime_failure
@@ -323,6 +317,14 @@ impl SupervisorMailbox {
             self.wake();
             return;
         };
+        if event.need_rescan() {
+            self.shared.overflow_rescan.store(true, Ordering::Release);
+            self.wake();
+            return;
+        }
+        if matches!(event.kind, EventKind::Access(_)) {
+            return;
+        }
         match self.shared.state.try_lock() {
             Ok(mut state) => {
                 if !state.notify_rescan {
@@ -1251,6 +1253,22 @@ mod tests {
 
     fn notify_event(path: impl Into<PathBuf>) -> notify::Result<Event> {
         Ok(Event::new(EventKind::Any).add_path(path.into()))
+    }
+
+    #[test]
+    fn backend_rescan_flag_without_paths_requests_a_full_rescan() {
+        let (mailbox, mut receiver) = SupervisorMailbox::new(4);
+        mailbox.record_notify(Ok(
+            Event::new(EventKind::Other).set_flag(notify::event::Flag::Rescan)
+        ));
+
+        let Some(SupervisorInput::Notify(batch)) = receiver.take_pending() else {
+            panic!("the backend rescan request must not be dropped");
+        };
+        assert!(batch.rescan_all);
+        assert!(batch.paths.is_empty());
+        assert!(!batch.runtime_failure);
+        assert!(receiver.take_pending().is_none());
     }
 
     #[test]

@@ -6,6 +6,7 @@ import type { MdxMetadata, MdxNote, ResourceSaveData } from "./types/mdx";
 import type { MermaidDiagramSnapshot } from "./components/editor/mermaidPreview";
 import type { HistoryListItem, HistorySnapshot } from "./types/history";
 import { countNonWhitespaceCharacters } from "./utils/text";
+import * as resourceSessions from "./composables/useResources";
 
 type LowestEditorControls = {
     cancelAi: ReturnType<typeof vi.fn>;
@@ -1049,6 +1050,87 @@ describe("App 编辑器状态集成", () => {
         expect(URL.revokeObjectURL).toHaveBeenCalledWith(mocks.objectUrl);
     });
 
+    it("关闭文档后丢弃延迟资源读取，不重新创建已释放的 Blob URL", async () => {
+        const host = await mountApp();
+        const pending = createDeferred<string>();
+        const invokeDefault = mocks.invoke.getMockImplementation();
+        mocks.openedNote = createNote("![图](assets/a.png)");
+        mocks.invoke.mockImplementation((command: string, args?: unknown) =>
+            command === "read_asset" ? pending.promise : invokeDefault?.(command, args),
+        );
+        findButton(host, "打开文件").click();
+        await vi.waitFor(() =>
+            expect(mocks.invoke).toHaveBeenCalledWith("read_asset", {
+                path: "C:\\notes\\test.mdx",
+                assetName: "assets/a.png",
+            }),
+        );
+        await nextTick();
+        const row = host.querySelector<HTMLElement>(
+            '[role="treeitem"][aria-current="page"]',
+        );
+        expect(row).not.toBeNull();
+        const key = row!.dataset.treeKey;
+        const close = row!.querySelector<HTMLButtonElement>('button[title="关闭文档"]');
+        expect(close).not.toBeNull();
+        close!.click();
+        await vi.waitFor(() =>
+            expect(host.querySelector(`[data-tree-key="${key}"]`)).toBeNull(),
+        );
+        pending.resolve(mocks.assetBase64);
+        await vi.waitFor(() => expect(host.textContent).toContain("已打开文档"));
+        expect(URL.createObjectURL).not.toHaveBeenCalled();
+    });
+
+    it.each([true, false])(
+        "延迟资源读取仅在资源会话已清理时丢弃（clear=%s）",
+        async (clear) => {
+            const sessions = vi.spyOn(resourceSessions, "createResourceSession");
+            const host = await mountApp();
+            const pending = createDeferred<string>();
+            const invokeDefault = mocks.invoke.getMockImplementation();
+            mocks.openedNote = createNote("![图](assets/a.png)");
+            mocks.invoke.mockImplementation((command: string, args?: unknown) =>
+                command === "read_asset"
+                    ? pending.promise
+                    : invokeDefault?.(command, args),
+            );
+            findButton(host, "打开文件").click();
+            await vi.waitFor(() =>
+                expect(mocks.invoke).toHaveBeenCalledWith("read_asset", {
+                    path: "C:\\notes\\test.mdx",
+                    assetName: "assets/a.png",
+                }),
+            );
+            const resources =
+                sessions.mock.results[sessions.mock.results.length - 1]!.value;
+            if (clear) {
+                // Batch close clears one session before removing all document rows.
+                resources.clear();
+            } else {
+                resources.registerLoaded({
+                    path: "assets/b.png",
+                    originalName: "b.png",
+                    mimeType: "image/png",
+                    size: 1,
+                    base64: "Yg==",
+                    objectUrl: "blob:concurrent",
+                    kind: "asset",
+                    isNew: false,
+                });
+            }
+            pending.resolve(mocks.assetBase64);
+            await vi.waitFor(() => expect(host.textContent).toContain("已打开文档"));
+            expect(URL.createObjectURL).toHaveBeenCalledTimes(clear ? 0 : 1);
+            if (clear) {
+                expect(resources.resource("assets/a.png")).toBeNull();
+            } else {
+                expect(resources.resource("assets/a.png")).not.toBeNull();
+                expect(resources.resource("assets/b.png")).not.toBeNull();
+            }
+        },
+    );
+
     it("打开旧笔记时以文件名显示文档名称而不是包内标题", async () => {
         const note = createNote("# 正文", "C:\\notes\\项目计划.MDX");
         note.title = "包内旧标题";
@@ -1177,7 +1259,11 @@ describe("App 编辑器状态集成", () => {
         await nextTick();
 
         const canonical = "正文\n![图](assets/image-resource-id.png)";
-        expect(host.textContent).toContain("未保存");
+        expect(
+            host.querySelector('[role="treeitem"][aria-current="page"] .workspace-status')
+                ?.textContent,
+        ).toBe("未保存");
+        expect(host.querySelector(".status-bar")?.textContent).not.toContain("未保存");
         expect(host.textContent).toContain(
             `${countNonWhitespaceCharacters(canonical)} 字`,
         );
@@ -1212,8 +1298,15 @@ describe("App 编辑器状态集成", () => {
         });
         await nextTick();
 
-        expect(host.textContent).toContain("已保存");
-        expect(host.textContent).not.toContain("未保存");
+        expect(
+            host.querySelector(
+                '[role="treeitem"][aria-current="page"] .workspace-status',
+            ),
+        ).toBeNull();
+        expect(document.title).not.toMatch(/^\* /u);
+        expect(host.querySelector(".status-bar")?.textContent).not.toMatch(
+            /已保存|未保存/u,
+        );
         expect(findButton(host, "标题")).toBeTruthy();
 
         findButton(host, "仅源码").click();
@@ -1899,7 +1992,13 @@ describe("App 历史版本文档作用域", () => {
         await vi.waitFor(() => expect(host.textContent).toContain("元数据历史"));
         findButton(host, "恢复此版本").click();
 
-        await vi.waitFor(() => expect(host.textContent).toContain("未保存"));
+        await vi.waitFor(() =>
+            expect(
+                host.querySelector(
+                    '[role="treeitem"][aria-current="page"] .workspace-status',
+                )?.textContent,
+            ).toBe("未保存"),
+        );
         findButton(host, "保存").click();
         await vi.waitFor(() => {
             const saveCalls = mocks.invoke.mock.calls.filter(

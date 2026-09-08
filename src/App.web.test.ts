@@ -1403,6 +1403,23 @@ describe("App Web 预览启动", () => {
         expect(mocks.getMoraEditorAiProvider?.()).toBeUndefined();
     });
 
+    it("新建文档在状态栏显示未指定保存位置", async () => {
+        const host = document.createElement("div");
+        document.body.append(host);
+        const app = createApp(App);
+        app.mount(host);
+        cleanup = () => app.unmount();
+
+        findButton(host, "新建文档")?.click();
+        await vi.waitFor(() => {
+            expect(host.querySelector(".mora-editor-stub")).not.toBeNull();
+        });
+
+        expect(host.querySelector(".status-bar .path")?.textContent?.trim()).toBe(
+            "未指定保存位置",
+        );
+    });
+
     it("编辑内容后仍不调用 Tauri 草稿 IPC", async () => {
         const host = document.createElement("div");
         document.body.append(host);
@@ -1421,7 +1438,16 @@ describe("App Web 预览启动", () => {
         try {
             mocks.editorUpdate?.("Web 预览编辑");
             await nextTick();
-            expect(host.textContent).toContain("未保存");
+            await vi.waitFor(() =>
+                expect(
+                    openDocumentRow(host, "未命名文档 1")?.querySelector(
+                        ".workspace-status",
+                    )?.textContent,
+                ).toBe("未保存"),
+            );
+            expect(host.querySelector(".status-bar")?.textContent).not.toContain(
+                "未保存",
+            );
             await vi.advanceTimersByTimeAsync(1600);
 
             expect(mocks.invoke).not.toHaveBeenCalled();
@@ -2677,6 +2703,25 @@ describe("App 多文档工作区", () => {
         });
         await vi.waitFor(() => expect(host.textContent).toContain("保存成功"));
         await closing;
+    });
+
+    it("未保存 Markdown 只在工作区标记且状态栏显示来源路径", async () => {
+        const sourcePath = "C:\\notes\\source.md";
+        const host = await mountMarkdownImport(sourcePath, "# source");
+
+        const unsavedStatuses = Array.from(
+            host.querySelectorAll<HTMLElement>(".workspace-status"),
+        ).filter((element) => element.textContent?.trim() === "未保存");
+        expect(unsavedStatuses).toHaveLength(1);
+
+        const status = host.querySelector(".status-bar");
+        expect(status?.querySelector(".path")?.textContent).toBe(`来源：${sourcePath}`);
+        expect(status?.textContent).not.toContain("尚未保存");
+        expect(
+            Array.from(status?.querySelectorAll(".status-cell") ?? [], (element) =>
+                element.textContent?.trim(),
+            ),
+        ).not.toContain("未保存");
     });
 
     it("Markdown 导入记录源文件并在确认资源后另存为同目录 mdx", async () => {

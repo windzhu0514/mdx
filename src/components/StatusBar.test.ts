@@ -22,7 +22,6 @@ it("places workspace and outline controls at opposite status-bar edges", () => {
                 errorMessage: "",
                 statusMessage: "准备就绪",
                 path: "C:\\note.mdx",
-                dirty: false,
                 modeLabel: "所见即所得",
                 wordCount: 10,
                 workspaceVisible: true,

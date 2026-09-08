@@ -22,8 +22,8 @@ useScrollActivity(outlineScrollElement);
 
 <template>
     <aside
-        ref="outlineScrollElement"
         v-if="props.visible && props.items.length"
+        ref="outlineScrollElement"
         class="toc-sidebar"
         :class="{ 'is-compact': props.compact }"
         aria-label="本文目录"

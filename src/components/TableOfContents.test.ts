@@ -1,5 +1,4 @@
 /** @vitest-environment jsdom */
-/* eslint-disable vue/one-component-per-file */
 
 import { createApp, h, type App } from "vue";
 import { afterEach, describe, expect, it } from "vitest";

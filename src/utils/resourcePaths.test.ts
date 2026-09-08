@@ -36,6 +36,70 @@ describe("resource markdown mapping", () => {
         );
     });
 
+    it.each([
+        '![图](assets/photo.png "说明")',
+        "![图](<assets/photo.png> '说明')",
+        '![图][photo]\n\n[photo]: <assets/photo.png> "说明"',
+        "![photo][]\n\n[photo]: assets/photo.png",
+        "![photo]\n\n[photo]: assets/photo.png",
+    ])(
+        "round trips resource destinations without changing Markdown syntax: %s",
+        (source) => {
+            const display = source.replace("assets/photo.png", "blob:mora-photo");
+
+            expect(referencedResourcePaths(source)).toEqual(
+                new Set(["assets/photo.png"]),
+            );
+            expect(toDisplayMarkdown(source, urls)).toBe(display);
+            expect(toPersistedMarkdown(display, urls)).toBe(source);
+        },
+    );
+
+    it.each([
+        "`![图](assets/photo.png)`",
+        '```markdown\n![图](assets/photo.png)\n<img src="assets/photo.png">\n```',
+        '    ![图](assets/photo.png)\n    <img src="assets/photo.png">',
+        '<!-- <img src="assets/photo.png"> -->',
+        '正文 src="assets/photo.png"',
+        '<img data-src="assets/photo.png">',
+    ])("preserves non-resource examples and attributes: %s", (source) => {
+        expect(referencedResourcePaths(source)).toEqual(new Set());
+        expect(toDisplayMarkdown(source, urls)).toBe(source);
+        const display = source.split("assets/photo.png").join("blob:mora-photo");
+        expect(toPersistedMarkdown(display, urls)).toBe(display);
+    });
+
+    it("maps valid HTML attributes with whitespace, case and unquoted values", () => {
+        const source = '<img SRC = "assets/photo.png"><a href=assets/photo.png>图</a>';
+        const display = source.split("assets/photo.png").join("blob:mora-photo");
+        expect(referencedResourcePaths(source)).toEqual(new Set(["assets/photo.png"]));
+        expect(toDisplayMarkdown(source, urls)).toBe(display);
+        expect(toPersistedMarkdown(display, urls)).toBe(source);
+    });
+
+    it("maps multiple real resources while preserving examples in the same document", () => {
+        const source = [
+            '![图](assets/photo.png "说明") and `![示例](assets/photo.png)`',
+            "",
+            '<img src="assets/photo.png">',
+            "",
+            '```html\n<img src="assets/photo.png">\n```',
+            "",
+            '[附件](attachments/a.pdf "文件")',
+        ].join("\n");
+        const resources = new Map([
+            ...urls,
+            ["attachments/a.pdf", "blob:mora-attachment"],
+        ]);
+        const display = source
+            .replace('![图](assets/photo.png "说明")', '![图](blob:mora-photo "说明")')
+            .replace('<img src="assets/photo.png">', '<img src="blob:mora-photo">')
+            .replace("attachments/a.pdf", "blob:mora-attachment");
+
+        expect(toDisplayMarkdown(source, resources)).toBe(display);
+        expect(toPersistedMarkdown(display, resources)).toBe(source);
+    });
+
     it("extracts unique package resources from Markdown and HTML", () => {
         expect(
             referencedResourcePaths(

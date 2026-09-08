@@ -200,6 +200,9 @@ onMounted(() => {
         [Crepe.Feature.AI]: props.aiProvider ? true : false,
     };
     const featureConfigs = {
+        [Crepe.Feature.Placeholder]: {
+            text: "开始写作…",
+        },
         [Crepe.Feature.CodeMirror]: {
             languages: codeBlockLanguages,
             renderPreview: renderMermaidPreview,

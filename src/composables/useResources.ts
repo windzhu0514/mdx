@@ -17,6 +17,7 @@ export function createResourceSession() {
     const resources = new Map<string, PendingResource>();
     const removed = new Set<string>();
     const revision = ref(0);
+    let loadGeneration = 0;
 
     function register(resource: PendingResource) {
         const previous = resources.get(resource.path);
@@ -100,6 +101,10 @@ export function createResourceSession() {
         return revision.value;
     }
 
+    function generation(): number {
+        return loadGeneration;
+    }
+
     function markSaved() {
         for (const resource of resources.values()) {
             resource.isNew = false;
@@ -133,6 +138,7 @@ export function createResourceSession() {
     }
 
     function clear() {
+        loadGeneration += 1;
         for (const resource of resources.values()) {
             URL.revokeObjectURL(resource.objectUrl);
         }
@@ -155,6 +161,7 @@ export function createResourceSession() {
         exportResources,
         exportSnapshot,
         resourceRevision,
+        generation,
         markSaved,
         snapshot,
         restore,

@@ -52,8 +52,9 @@ export function useAppUpdater(enabled: boolean) {
 
         phase.value = "checking";
         error.value = "";
-        clearMetadata();
         try {
+            await availableUpdate.value?.close();
+            clearMetadata();
             const update = await check();
             if (!update) {
                 phase.value = "idle";

@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { computed, ref, shallowRef, triggerRef } from "vue";
+import { computed, ref, shallowRef } from "vue";
 
 import type {
     ImportedMarkdown,
@@ -481,7 +481,7 @@ export function useDocumentSession(desktop: boolean) {
         runtime.changeSource = source;
         touchLiveRevision(runtime);
         runtime.draft.schedule();
-        triggerRef(documents);
+        documents.value = [...documents.value];
     }
 
     function assertLiveRevision(id: string, baseLiveRevision: string) {
@@ -507,7 +507,7 @@ export function useDocumentSession(desktop: boolean) {
         runtime.meta = meta;
         runtime.dirty = true;
         runtime.draft.schedule();
-        triggerRef(documents);
+        documents.value = [...documents.value];
     }
 
     async function releaseDocument(runtime: SessionDocument) {
@@ -579,7 +579,7 @@ export function useDocumentSession(desktop: boolean) {
             runtime.resources.markSaved();
             await runtime.draft.remove(storageKey);
         }
-        triggerRef(documents);
+        documents.value = [...documents.value];
         return runtime;
     }
 
@@ -647,7 +647,7 @@ export function useDocumentSession(desktop: boolean) {
             runtime.resources.markSaved();
             await runtime.draft.remove(previousDraftKey);
         }
-        triggerRef(documents);
+        documents.value = [...documents.value];
         scheduleSessionWrite();
         return runtime;
     }

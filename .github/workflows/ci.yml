@@ -48,6 +48,9 @@ jobs:
             - name: Run frontend tests
               run: npm test
 
+            - name: Run release tooling tests
+              run: node --test scripts/*.test.mjs
+
             - name: Lint source
               run: npm run lint
 

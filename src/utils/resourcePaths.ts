@@ -1,56 +1,54 @@
-const MARKDOWN_DESTINATION_SOURCE = String.raw`(!?\[[^\]]*\]\()([^\s)]+)(\))`;
-const HTML_ATTRIBUTE_SOURCE = String.raw`\b(src|href)=(['"])([^'"]+)\2`;
+import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 
-function markdownDestinationPattern() {
-    return new RegExp(MARKDOWN_DESTINATION_SOURCE, "gu");
+const resourceParser = markdown({ base: markdownLanguage }).language.parser;
+
+interface ResourceDestination {
+    from: number;
+    to: number;
+    value: string;
 }
 
-function htmlAttributePattern() {
-    return new RegExp(HTML_ATTRIBUTE_SOURCE, "gu");
-}
+function resourceDestinations(source: string) {
+    const destinations: ResourceDestination[] = [];
+    const add = (from: number, to: number) => {
+        destinations.push({ from, to, value: source.slice(from, to) });
+    };
 
-function* resourceDestinations(markdown: string) {
-    for (const match of markdown.matchAll(markdownDestinationPattern())) {
-        const destination = match[2];
-        if (destination) yield destination;
-    }
-    for (const match of markdown.matchAll(htmlAttributePattern())) {
-        const destination = match[3];
-        if (destination) yield destination;
-    }
-}
-
-function replaceMarkdownDestinations(
-    markdown: string,
-    replacements: ReadonlyMap<string, string>,
-) {
-    return markdown.replace(
-        markdownDestinationPattern(),
-        (match, prefix: string, destination: string, suffix: string) => {
-            const replacement = replacements.get(destination);
-            return replacement ? `${prefix}${replacement}${suffix}` : match;
+    resourceParser.parse(source).iterate({
+        enter(node) {
+            if (node.name === "URL") {
+                const wrapped = source[node.from] === "<";
+                add(node.from + Number(wrapped), node.to - Number(wrapped));
+            } else if (node.name === "HTMLTag" || node.name === "HTMLBlock") {
+                // HTML is a mounted language tree; enter it through Lezer's public API.
+                node.node
+                    .enter(node.from, 1)
+                    ?.cursor()
+                    .iterate((htmlNode) => {
+                        if (htmlNode.name !== "Attribute") return;
+                        const name = htmlNode.node.getChild("AttributeName");
+                        const value =
+                            htmlNode.node.getChild("AttributeValue") ??
+                            htmlNode.node.getChild("UnquotedAttributeValue");
+                        if (!name || !value) return;
+                        const attribute = source.slice(name.from, name.to).toLowerCase();
+                        if (attribute !== "src" && attribute !== "href") return;
+                        const quoted = value.name === "AttributeValue";
+                        add(value.from + Number(quoted), value.to - Number(quoted));
+                    });
+                return false;
+            }
         },
-    );
-}
+    });
 
-function replaceHtmlAttributes(
-    markdown: string,
-    replacements: ReadonlyMap<string, string>,
-) {
-    return markdown.replace(
-        htmlAttributePattern(),
-        (match, attribute: string, quote: string, value: string) => {
-            const replacement = replacements.get(value);
-            return replacement ? `${attribute}=${quote}${replacement}${quote}` : match;
-        },
-    );
+    return destinations;
 }
 
 export function referencedResourcePaths(markdown: string) {
     const paths = new Set<string>();
-    for (const destination of resourceDestinations(markdown)) {
-        if (/^(?:assets|attachments)\/[^/\\]+$/u.test(destination)) {
-            paths.add(destination);
+    for (const { value } of resourceDestinations(markdown)) {
+        if (/^(?:assets|attachments)\/[^/\\]+$/u.test(value)) {
+            paths.add(value);
         }
     }
     return paths;
@@ -60,10 +58,17 @@ function replaceResourceReferences(
     markdown: string,
     replacements: ReadonlyMap<string, string>,
 ) {
-    return replaceHtmlAttributes(
-        replaceMarkdownDestinations(markdown, replacements),
-        replacements,
-    );
+    if (replacements.size === 0) return markdown;
+    const chunks: string[] = [];
+    let offset = 0;
+    for (const { from, to, value } of resourceDestinations(markdown)) {
+        const replacement = replacements.get(value);
+        if (replacement === undefined) continue;
+        chunks.push(markdown.slice(offset, from), replacement);
+        offset = to;
+    }
+    chunks.push(markdown.slice(offset));
+    return chunks.join("");
 }
 
 export function toDisplayMarkdown(

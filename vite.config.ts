@@ -4,6 +4,9 @@ import { configDefaults, defineConfig } from "vitest/config";
 export default defineConfig({
     plugins: [vue()],
     clearScreen: false,
+    optimizeDeps: {
+        entries: ["index.html"],
+    },
     build: {
         rolldownOptions: {
             output: {

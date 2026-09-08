@@ -1,6 +1,7 @@
 [package]
 name = "mora"
-version = "0.1.2"
+version = "0.1.3"
+license = "MIT"
 description = "Mora 墨笺 desktop MDX note editor"
 authors = ["Mora"]
 edition = "2021"

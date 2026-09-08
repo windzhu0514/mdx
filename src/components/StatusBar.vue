@@ -3,7 +3,6 @@ defineProps<{
     errorMessage: string;
     statusMessage: string;
     path: string;
-    dirty: boolean;
     modeLabel: string;
     wordCount: number;
     workspaceVisible: boolean;
@@ -40,7 +39,6 @@ const emit = defineEmits<{
             <div class="status-cell path" :title="path">{{ path }}</div>
         </div>
         <div class="status-right">
-            <div class="status-cell">{{ dirty ? "未保存" : "已保存" }}</div>
             <div class="status-cell">{{ modeLabel }}</div>
             <div class="status-cell">{{ wordCount }} 字</div>
         </div>

@@ -384,9 +384,13 @@ const windowTitle = computed(() =>
         ? `${dirty.value ? "* " : ""}${title.value} - ${APP_NAME}`
         : `${APP_NAME} ${APP_CN_NAME}`,
 );
-const displayPath = computed(() =>
-    activeDocument.value ? currentPath.value || "尚未保存" : "未打开文档",
-);
+const displayPath = computed(() => {
+    const active = activeDocument.value;
+    if (!active) return "未打开文档";
+    if (active.path) return active.path;
+    if (active.importSourcePath) return `来源：${active.importSourcePath}`;
+    return "未指定保存位置";
+});
 const modeLabel = computed(() => {
     if (editorMode.value === "wysiwyg") return "所见即所得";
     return sourcePreview.value ? "垂直双栏" : "仅源码";
@@ -1204,16 +1208,33 @@ function handleAiError(message: string) {
 
 async function hydrateDocumentResources(runtime: SessionDocument) {
     const persistedContent = runtime.content;
-    if (runtime.path && runtime.meta) {
+    const sourcePath = runtime.path;
+    const sourceRevision = runtime.diskRevision;
+    const resourceGeneration = runtime.resources.generation();
+    if (sourcePath && runtime.meta) {
         const assetPaths = referencedResourcePaths(persistedContent);
 
         for (const assetPath of assetPaths) {
             try {
-                if (runtime.resources.objectUrls().has(assetPath)) continue;
+                if (runtime.resources.resource(assetPath)) continue;
                 const base64 = await invoke<string>("read_asset", {
-                    path: runtime.path,
+                    path: sourcePath,
                     assetName: assetPath,
                 });
+                if (
+                    !documents.value.includes(runtime) ||
+                    runtime.path !== sourcePath ||
+                    runtime.diskRevision !== sourceRevision ||
+                    runtime.resources.generation() !== resourceGeneration
+                ) {
+                    return;
+                }
+                if (
+                    runtime.resources.resource(assetPath) ||
+                    runtime.resources.removedResources().includes(assetPath)
+                ) {
+                    continue;
+                }
                 const resourceMeta = [
                     ...runtime.meta.assets,
                     ...runtime.meta.attachments,
@@ -3088,7 +3109,6 @@ function stringifyError(error: unknown) {
             :error-message="errorMessage"
             :status-message="statusMessage"
             :path="displayPath"
-            :dirty="dirty"
             :mode-label="modeLabel"
             :word-count="wordCount"
             :workspace-visible="workspaceVisible"

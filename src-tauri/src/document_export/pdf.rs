@@ -8,7 +8,6 @@ use typst::World;
 use typst_as_lib::{typst_kit_options::TypstKitFontOptions, TypstEngine, TypstTemplateMainFile};
 
 const CHINESE_FONT_ERROR: &str = "未找到可用于 PDF 导出的中文字体。";
-const FONT_FALLBACK: &str = "(\"Microsoft YaHei\", \"SimSun\", \"Noto Sans CJK SC\", \"Arial\")";
 const FONT_FAMILIES: [&str; 4] = ["Microsoft YaHei", "SimSun", "Noto Sans CJK SC", "Arial"];
 const CHINESE_FONT_PROBE: &str = "中文测试";
 const HEADER: &str = r#"#set page(paper: "a4", margin: 25mm, numbering: "1")
@@ -32,6 +31,8 @@ pub fn render_pdf(model: &DocumentModel) -> Result<Vec<u8>, String> {
 ///
 /// This is public for integration tests. Resources are represented by stable,
 /// generated static-resolver paths rather than user-provided paths.
+#[cfg(test)]
+#[allow(dead_code)] // Used by the integration-test copy of this module.
 pub fn render_typst_source(model: &DocumentModel) -> String {
     render(model).source
 }

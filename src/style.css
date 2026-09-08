@@ -184,6 +184,24 @@ summary {
     padding: 4px 12px;
     color: var(--color-text-muted);
     font-size: 12px;
+    line-height: 1.6;
+}
+
+.workspace-empty button {
+    margin-top: 8px;
+    min-height: 30px;
+    padding: 4px 10px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    background: var(--color-bg-surface);
+    color: var(--color-text-main);
+    cursor: pointer;
+}
+
+.workspace-empty button:hover,
+.workspace-welcome-actions button:not(.primary):hover {
+    border-color: var(--color-hover-border);
+    background: var(--color-bg-control-hover);
 }
 
 .workspace-tree-row {
@@ -801,7 +819,11 @@ summary {
 .workspace-welcome-actions button.primary {
     border-color: var(--color-primary);
     background: var(--color-primary);
-    color: white;
+    color: var(--color-on-primary);
+}
+
+.workspace-welcome-actions button.primary:hover {
+    box-shadow: 0 0 0 3px var(--color-primary-soft);
 }
 
 /* Editor Container */

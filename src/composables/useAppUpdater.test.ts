@@ -25,6 +25,7 @@ function fakeUpdate() {
         body: "修复保存并改进编辑体验",
         download: vi.fn(),
         install: vi.fn(),
+        close: vi.fn(),
     };
 }
 
@@ -84,6 +85,41 @@ describe("app updater check", () => {
         await expect(updater.checkForUpdate({ silent: false })).resolves.toBe("failed");
         expect(updater.phase.value).toBe("error");
         expect(updater.error.value).toContain("network unavailable");
+    });
+
+    it("releases a downloaded update before checking again", async () => {
+        const released = deferred<void>();
+        const update = fakeUpdate();
+        update.close.mockReturnValue(released.promise);
+        check.mockResolvedValueOnce(update).mockResolvedValueOnce(null);
+        const updater = useAppUpdater(true);
+        await updater.checkForUpdate({ silent: false });
+        await updater.downloadUpdate();
+
+        const nextCheck = updater.checkForUpdate({ silent: false });
+        expect(update.close).toHaveBeenCalledTimes(1);
+        expect(check).toHaveBeenCalledTimes(1);
+        expect(updater.phase.value).toBe("checking");
+
+        released.resolve();
+        await expect(nextCheck).resolves.toBe("current");
+        expect(updater.version.value).toBe("");
+        expect(check).toHaveBeenCalledTimes(2);
+    });
+
+    it("retains an update for cleanup retry when closing it fails", async () => {
+        const update = fakeUpdate();
+        update.close.mockRejectedValueOnce(new Error("resource close failed"));
+        check.mockResolvedValueOnce(update).mockResolvedValueOnce(null);
+        const updater = useAppUpdater(true);
+        await updater.checkForUpdate({ silent: false });
+
+        await expect(updater.checkForUpdate({ silent: false })).resolves.toBe("failed");
+        expect(updater.error.value).toContain("resource close failed");
+        expect(check).toHaveBeenCalledTimes(1);
+
+        await expect(updater.checkForUpdate({ silent: false })).resolves.toBe("current");
+        expect(update.close).toHaveBeenCalledTimes(2);
     });
 });
 

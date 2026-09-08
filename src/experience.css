@@ -16,6 +16,7 @@
     --color-text-main: #2c3031;
     --color-text-muted: #687174;
     --color-primary: #596164;
+    --color-on-primary: #ffffff;
     --color-primary-light: #eef0ef;
     --color-danger: #a7484d;
     --color-success: #3c7655;
@@ -47,6 +48,7 @@
     --color-text-main: #e4eded;
     --color-text-muted: #9cacae;
     --color-primary: #b8c0c3;
+    --color-on-primary: #0d1419;
     --color-primary-light: rgba(184, 192, 195, 0.16);
     --color-danger: #ef8c93;
     --color-success: #75c99f;
@@ -77,6 +79,7 @@
     --color-text-main: #e7edf3;
     --color-text-muted: #aab9c7;
     --color-primary: #668db3;
+    --color-on-primary: #101820;
     --color-primary-light: rgba(102, 141, 179, 0.24);
     --color-danger: #f09aa4;
     --color-success: #82c9ad;
@@ -554,7 +557,7 @@ summary:focus-visible,
 .attachment-toolbar .primary {
     border-color: var(--color-primary);
     background: var(--color-primary);
-    color: white;
+    color: var(--color-on-primary);
 }
 
 .attachment-list {

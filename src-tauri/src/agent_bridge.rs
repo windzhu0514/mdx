@@ -106,6 +106,33 @@ impl PendingFrontend {
     }
 }
 
+struct PendingFrontendReceiver {
+    receiver: oneshot::Receiver<AgentFrontendResponse>,
+    inner: std::sync::Weak<AgentBridgeInner>,
+    dispatch_token: String,
+}
+
+impl std::future::Future for PendingFrontendReceiver {
+    type Output = Result<AgentFrontendResponse, oneshot::error::RecvError>;
+
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        context: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        std::future::Future::poll(std::pin::Pin::new(&mut self.get_mut().receiver), context)
+    }
+}
+
+impl Drop for PendingFrontendReceiver {
+    fn drop(&mut self) {
+        if let Some(inner) = self.inner.upgrade() {
+            if let Ok(mut pending) = inner.pending.lock() {
+                pending.remove(&self.dispatch_token);
+            };
+        }
+    }
+}
+
 #[derive(Clone)]
 struct WriteOperations {
     gate: Arc<tokio::sync::Mutex<()>>,
@@ -656,7 +683,7 @@ impl AgentBridgeState {
         request_id: &str,
         operation_generation: u64,
         is_write: bool,
-    ) -> Result<(String, oneshot::Receiver<AgentFrontendResponse>), AgentError> {
+    ) -> Result<(String, PendingFrontendReceiver), AgentError> {
         let sequence = self
             .inner
             .next_dispatch_token
@@ -676,7 +703,14 @@ impl AgentBridgeState {
                     sender,
                 },
             );
-        Ok((dispatch_token, receiver))
+        Ok((
+            dispatch_token.clone(),
+            PendingFrontendReceiver {
+                receiver,
+                inner: Arc::downgrade(&self.inner),
+                dispatch_token,
+            },
+        ))
     }
 
     fn remove_pending(&self, dispatch_token: &str) -> Result<(), AgentError> {
@@ -975,6 +1009,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cancelling_a_frontend_wait_removes_its_pending_dispatch() {
+        let state = AgentBridgeState::default();
+        let (token, receiver) = state.register_pending("cancelled-read", 1, false).unwrap();
+        assert!(state.inner.pending.lock().unwrap().contains_key(&token));
+
+        let task = tokio::spawn(async move { receiver.await });
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+
+        assert!(state.inner.pending.lock().unwrap().is_empty());
+        assert!(state
+            .complete_frontend(AgentFrontendResponse::failure(
+                "cancelled-read",
+                token,
+                1,
+                AgentError::new(BRIDGE_UNAVAILABLE, "late reply"),
+            ))
+            .is_err());
+    }
+
+    #[tokio::test]
     async fn synchronous_shutdown_fails_pending_requests() {
         let state = AgentBridgeState::default();
         let (_token, receiver) = state.register_pending("pending-1", 1, false).unwrap();
@@ -1255,7 +1310,7 @@ mod tests {
         };
         assert!(state.complete_frontend(old_response).is_err());
         assert!(matches!(
-            new_receiver.try_recv(),
+            new_receiver.receiver.try_recv(),
             Err(tokio::sync::oneshot::error::TryRecvError::Empty)
         ));
 

@@ -4,7 +4,7 @@
 
 Mora 墨笺是一款本地优先的桌面笔记软件。它把 Markdown 正文、图片和附件封装在一个 `.mdx` 文件中，让一篇笔记既能像 Word 文档一样独立保存和传递，又保留 Markdown 的透明结构与可迁移性。
 
-> **当前版本：** `app-v0.1.2`，提供 Windows x64、macOS Apple Silicon/Intel 和 Linux x64 安装包。
+> **当前源码版本：** `0.1.3`（发布准备中）。已公开版本及安装包以 [GitHub Releases](https://github.com/windzhu0514/mdx/releases) 为准。
 
 ## 为什么需要 Mora
 
@@ -106,6 +106,8 @@ MCP 使用 stdio，没有 URL 或端口。第三方 MCP 客户端配置应使用
 当前实现包含 Windows 与 Unix 本地 IPC 代码及跨平台打包配置；本次本机验收只验证 Windows Named Pipe、Windows 可执行文件和 Windows 安装包。macOS/Linux 的打包由对应 CI Runner 验证，本 Windows 环境不声称已验证 Unix runtime。首版不提供远程访问、HTTP、云同步、CRDT/OT、离线 Agent 编辑器或资源变更工具。
 
 ## 当前限制
+
+- Mora 源码采用 [MIT 许可证](LICENSE)。第三方库和字体分别遵循其自身许可证，[第三方声明](THIRD_PARTY_NOTICES.txt) 随安装包提供。
 
 - Agent 本机运行与安装包验收当前以 Windows 为范围；macOS/Linux 由对应 CI Runner 验证。
 - 不提供云同步、多人协作或加密笔记。

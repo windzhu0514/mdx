@@ -1,9 +1,9 @@
 use chrono::{DateTime, FixedOffset};
 use serde_json::Value;
-use std::fs::{self, File};
+use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use uuid::Uuid;
+use tempfile::NamedTempFile;
 
 pub fn validate_draft_key(key: &str) -> Result<(), String> {
     if key.is_empty()
@@ -25,18 +25,18 @@ fn draft_path(directory: &Path, key: &str) -> Result<PathBuf, String> {
 pub fn write_draft_file(directory: &Path, key: &str, draft: &Value) -> Result<(), String> {
     fs::create_dir_all(directory).map_err(|err| err.to_string())?;
     let target = draft_path(directory, key)?;
-    let temporary = directory.join(format!(".{key}-{}.tmp", Uuid::new_v4()));
     let bytes = serde_json::to_vec_pretty(draft).map_err(|err| err.to_string())?;
 
-    let mut file = File::create(&temporary).map_err(|err| err.to_string())?;
-    file.write_all(&bytes).map_err(|err| err.to_string())?;
-    file.sync_all().map_err(|err| err.to_string())?;
-    drop(file);
-
-    if target.exists() {
-        fs::remove_file(&target).map_err(|err| err.to_string())?;
-    }
-    fs::rename(&temporary, &target).map_err(|err| err.to_string())
+    let mut temporary = NamedTempFile::new_in(directory).map_err(|err| err.to_string())?;
+    temporary.write_all(&bytes).map_err(|err| err.to_string())?;
+    temporary
+        .as_file()
+        .sync_all()
+        .map_err(|err| err.to_string())?;
+    temporary
+        .persist(&target)
+        .map_err(|error| error.error.to_string())?;
+    Ok(())
 }
 
 pub fn read_draft_file(directory: &Path, key: &str) -> Result<Option<Value>, String> {
@@ -101,5 +101,41 @@ pub fn delete_draft_file(directory: &Path, key: &str) -> Result<(), String> {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{read_draft_file, write_draft_file};
+    use serde_json::json;
+    use std::fs;
+
+    #[test]
+    fn overwrites_draft_without_leaving_temporary_files() {
+        let directory = tempfile::tempdir().unwrap();
+        write_draft_file(directory.path(), "note", &json!({"revision": 0})).unwrap();
+        write_draft_file(directory.path(), "note", &json!({"revision": 1})).unwrap();
+
+        assert_eq!(
+            read_draft_file(directory.path(), "note").unwrap(),
+            Some(json!({"revision": 1}))
+        );
+        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn failed_draft_replacement_preserves_target_and_cleans_temporary_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("note.json");
+        fs::create_dir(&target).unwrap();
+        fs::write(target.join("keep.txt"), "existing data").unwrap();
+
+        assert!(write_draft_file(directory.path(), "note", &json!({"revision": 1})).is_err());
+
+        assert_eq!(
+            fs::read_to_string(target.join("keep.txt")).unwrap(),
+            "existing data"
+        );
+        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
     }
 }

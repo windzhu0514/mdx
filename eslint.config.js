@@ -17,6 +17,12 @@ export default tseslint.config(
     ...tseslint.configs.recommended,
     ...vue.configs["flat/recommended"],
     {
+        files: ["**/*.test.ts"],
+        rules: {
+            "vue/one-component-per-file": "off",
+        },
+    },
+    {
         files: ["**/*.{js,mjs}"],
         languageOptions: { globals: globals.node },
     },

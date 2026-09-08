@@ -1,0 +1,80 @@
+{
+  "vendor": "Microsoft Corporation",
+  "component": "WebView2Loader",
+  "package": "Microsoft.Web.WebView2",
+  "version": "1.0.3650.58",
+  "containingRustPackage": "webview2-com-sys@0.38.2",
+  "sourceUrl": "https://api.nuget.org/v3-flatcontainer/microsoft.web.webview2/1.0.3650.58/microsoft.web.webview2.1.0.3650.58.nupkg",
+  "packagePage": "https://www.nuget.org/packages/Microsoft.Web.WebView2/1.0.3650.58",
+  "licensePage": "https://www.nuget.org/packages/Microsoft.Web.WebView2/1.0.3650.58/License",
+  "archiveSha256": "911a472128c82ac8baa0c486c23342cc9dd6e7dc50d754e676726642ca065c60",
+  "observedDllFileVersion": "1.0.3650.58",
+  "licenseFile": "LICENSE.txt",
+  "noticeFile": "NOTICE.txt",
+  "redistributionSource": "Original LICENSE.txt, which contains the source and binary redistribution conditions; copied verbatim without interpretation.",
+  "files": [
+    {
+      "packagePath": "x64/WebView2Loader.dll",
+      "archivePath": "build/native/x64/WebView2Loader.dll",
+      "sha256": "8427b1fc58ec707813e5c0a51eb5d69397bb333250a7b891be4d3b123f1e0f1c",
+      "byteLength": 160320,
+      "matchesOfficialArchive": true
+    },
+    {
+      "packagePath": "x64/WebView2Loader.dll.lib",
+      "archivePath": "build/native/x64/WebView2Loader.dll.lib",
+      "sha256": "bfc8ccaaa056be95243a5b66a827e5849d2bb39676fca4dcc2053796d8e15c6d",
+      "byteLength": 2916,
+      "matchesOfficialArchive": true
+    },
+    {
+      "packagePath": "x64/WebView2LoaderStatic.lib",
+      "archivePath": "build/native/x64/WebView2LoaderStatic.lib",
+      "sha256": "0659b741bde6348d4c4a6ec4ceb9af50e3d0048ed9cd3c8659bccbb61fde55ee",
+      "byteLength": 10500016,
+      "matchesOfficialArchive": true
+    },
+    {
+      "packagePath": "x86/WebView2Loader.dll",
+      "archivePath": "build/native/x86/WebView2Loader.dll",
+      "sha256": "44ab92c2246ebfb5f98aa5726626fb44beb61543f2ef1803338af9fd295e63f0",
+      "byteLength": 120904,
+      "matchesOfficialArchive": true
+    },
+    {
+      "packagePath": "x86/WebView2Loader.dll.lib",
+      "archivePath": "build/native/x86/WebView2Loader.dll.lib",
+      "sha256": "a3ec0ee539d58fe72391f2e89cb814f96fab721c6d8d30953d152ea95dffad49",
+      "byteLength": 2998,
+      "matchesOfficialArchive": true
+    },
+    {
+      "packagePath": "x86/WebView2LoaderStatic.lib",
+      "archivePath": "build/native/x86/WebView2LoaderStatic.lib",
+      "sha256": "6649ce9ca24e7a5693ee54178f42e0378004ce537d82d15354e6c9adb467bc16",
+      "byteLength": 10464618,
+      "matchesOfficialArchive": true
+    },
+    {
+      "packagePath": "arm64/WebView2Loader.dll",
+      "archivePath": "build/native/arm64/WebView2Loader.dll",
+      "sha256": "df5816669f5123595c475d97929240d7d0e04f0bdc7dbe18af1dda42348b73a6",
+      "byteLength": 145984,
+      "matchesOfficialArchive": true
+    },
+    {
+      "packagePath": "arm64/WebView2Loader.dll.lib",
+      "archivePath": "build/native/arm64/WebView2Loader.dll.lib",
+      "sha256": "d70271daa44507865ca0696cd1c1ede5e58e694eec74cb2d06e17dbbe205e9a2",
+      "byteLength": 2916,
+      "matchesOfficialArchive": true
+    },
+    {
+      "packagePath": "arm64/WebView2LoaderStatic.lib",
+      "archivePath": "build/native/arm64/WebView2LoaderStatic.lib",
+      "sha256": "506ffde430bee7f91f2ce1a078effb5289b7cec3b0c7283647f0842def524ab4",
+      "byteLength": 10504842,
+      "matchesOfficialArchive": true
+    }
+  ]
+}

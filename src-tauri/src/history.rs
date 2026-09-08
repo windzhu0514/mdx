@@ -2,12 +2,13 @@ use chrono::Local;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs::File;
-use std::io::Read;
 use std::path::Path;
 use uuid::Uuid;
 use zip::ZipArchive;
 
-use crate::archive_security::{validate_archive, validate_archive_entry_name};
+use crate::archive_security::{
+    read_archive_entry_bytes, validate_archive, validate_archive_entry_name, MAX_TEXT_ENTRY_BYTES,
+};
 
 #[derive(Debug, Clone)]
 pub struct HistoryArchiveEntry {
@@ -58,13 +59,29 @@ pub fn new_history_entry(
         meta,
         created_at: Local::now().to_rfc3339(),
     };
+    validate_snapshot_size(&snapshot)?;
     let name = format!(
         "history/{}-{}.json",
         Local::now().format("%Y%m%d-%H%M%S-%3f"),
         &Uuid::new_v4().simple().to_string()[..8]
     );
-    let bytes = serde_json::to_vec_pretty(&snapshot).map_err(|err| err.to_string())?;
+    let bytes = serde_json::to_vec(&snapshot).map_err(|err| err.to_string())?;
     Ok(HistoryArchiveEntry { name, bytes })
+}
+
+fn validate_snapshot_size(snapshot: &HistorySnapshot) -> Result<(), String> {
+    if snapshot.content.len() as u64 > MAX_TEXT_ENTRY_BYTES {
+        return Err("历史版本正文超过 16 MiB 限制。".to_string());
+    }
+    let metadata = serde_json::to_vec(&snapshot.meta).map_err(|error| error.to_string())?;
+    if metadata.len() as u64 > MAX_TEXT_ENTRY_BYTES {
+        return Err("历史版本元数据超过 16 MiB 限制。".to_string());
+    }
+    let title = serde_json::to_vec(&snapshot.title).map_err(|error| error.to_string())?;
+    if title.len() as u64 > MAX_TEXT_ENTRY_BYTES {
+        return Err("历史版本标题超过 16 MiB 限制。".to_string());
+    }
+    Ok(())
 }
 
 fn read_snapshot(archive: &mut ZipArchive<File>, name: &str) -> Result<HistorySnapshot, String> {
@@ -73,10 +90,10 @@ fn read_snapshot(archive: &mut ZipArchive<File>, name: &str) -> Result<HistorySn
         return Err("历史版本路径无效。".to_string());
     }
     let mut file = archive.by_name(name).map_err(|err| err.to_string())?;
-    let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)
-        .map_err(|err| err.to_string())?;
-    serde_json::from_slice(&bytes).map_err(|err| err.to_string())
+    let bytes = read_archive_entry_bytes(&mut file)?;
+    let snapshot = serde_json::from_slice(&bytes).map_err(|err| err.to_string())?;
+    validate_snapshot_size(&snapshot)?;
+    Ok(snapshot)
 }
 
 pub fn list_history_file(path: &Path) -> Result<Vec<HistoryListItem>, String> {
@@ -111,4 +128,47 @@ pub fn read_history_file(path: &Path, name: &str) -> Result<HistorySnapshot, Str
     let mut archive = ZipArchive::new(file).map_err(|err| err.to_string())?;
     validate_archive(&mut archive)?;
     read_snapshot(&mut archive, name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{new_history_entry, read_history_file};
+    use serde_json::json;
+    use std::fs::File;
+    use std::io::Write;
+    use zip::write::FileOptions;
+
+    #[test]
+    fn history_rejects_decoded_content_over_the_document_limit() {
+        let content = "x".repeat(16 * 1024 * 1024 + 1);
+        assert!(new_history_entry("title", &content, json!({})).is_err());
+    }
+
+    #[test]
+    fn history_rejects_metadata_over_the_document_limit() {
+        let metadata = json!({"value": "x".repeat(16 * 1024 * 1024)});
+        assert!(new_history_entry("title", "content", metadata).is_err());
+    }
+
+    #[test]
+    fn reading_history_rejects_decoded_content_over_the_document_limit() {
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("oversized-history.mdx");
+        let snapshot = json!({
+            "title": "title",
+            "content": "x".repeat(16 * 1024 * 1024 + 1),
+            "meta": {},
+            "createdAt": "2026-09-08T00:00:00Z"
+        });
+        let mut archive = zip::ZipWriter::new(File::create(&target).unwrap());
+        archive
+            .start_file("history/test.json", FileOptions::default())
+            .unwrap();
+        archive
+            .write_all(&serde_json::to_vec(&snapshot).unwrap())
+            .unwrap();
+        archive.finish().unwrap();
+
+        assert!(read_history_file(&target, "history/test.json").is_err());
+    }
 }

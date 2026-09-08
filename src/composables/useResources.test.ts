@@ -39,6 +39,23 @@ describe("resource session", () => {
         expect(session.objectUrls().size).toBe(0);
     });
 
+    it("invalidates load generations only when the resource session is cleared", () => {
+        const session = createResourceSession();
+        const generation = session.generation();
+        session.registerLoaded({ ...newImage, isNew: false });
+        session.registerNew({ ...newImage, path: "assets/b.png", objectUrl: "blob:b" });
+        session.rename("assets/a.png", "renamed.png");
+        session.remove("assets/b.png");
+        session.markSaved();
+        expect(session.generation()).toBe(generation);
+
+        session.clear();
+        const clearedGeneration = session.generation();
+        expect(clearedGeneration).not.toBe(generation);
+        session.clear();
+        expect(session.generation()).not.toBe(clearedGeneration);
+    });
+
     it("does not resend a resource after save", () => {
         const session = createResourceSession();
         session.registerNew(newImage);

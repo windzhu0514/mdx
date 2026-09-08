@@ -1,5 +1,4 @@
 /** @vitest-environment jsdom */
-/* eslint-disable vue/one-component-per-file */
 
 import type { AIPromptContext } from "@milkdown/crepe/feature/ai";
 import type { MoraAIProvider } from "./ai/openAICompatible";

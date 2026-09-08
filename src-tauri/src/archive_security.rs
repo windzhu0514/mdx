@@ -1,10 +1,12 @@
 use std::collections::HashSet;
 use std::io::{Read, Seek};
 
-use zip::ZipArchive;
+use zip::{read::ZipFile, ZipArchive};
 
 pub const MAX_ARCHIVE_ENTRIES: usize = 4096;
 pub const MAX_TEXT_ENTRY_BYTES: u64 = 16 * 1024 * 1024;
+// A snapshot duplicates the title and can expand each Markdown byte to a six-byte JSON escape.
+pub const MAX_HISTORY_ENTRY_BYTES: u64 = MAX_TEXT_ENTRY_BYTES * 8 + 1024;
 pub const MAX_RESOURCE_ENTRY_BYTES: u64 = 512 * 1024 * 1024;
 pub const MAX_TOTAL_UNCOMPRESSED_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const SUPPORTED_MAJOR_VERSION: u32 = 1;
@@ -73,7 +75,9 @@ pub fn validate_new_resource_name(name: &str) -> Result<(), String> {
 }
 
 fn entry_limit(name: &str) -> u64 {
-    if name.starts_with("assets/")
+    if name.starts_with("history/") && name.ends_with(".json") {
+        MAX_HISTORY_ENTRY_BYTES
+    } else if name.starts_with("assets/")
         || name.starts_with("attachments/")
         || name.starts_with("thumbnails/")
     {
@@ -81,6 +85,25 @@ fn entry_limit(name: &str) -> u64 {
     } else {
         MAX_TEXT_ENTRY_BYTES
     }
+}
+
+pub(crate) fn read_archive_entry_bytes(file: &mut ZipFile<'_>) -> Result<Vec<u8>, String> {
+    let name = file.name().to_string();
+    validate_archive_entry_name(&name)?;
+    let declared_size = file.size();
+    if declared_size > entry_limit(&name) {
+        return Err(format!("MDXNote 条目过大：{name}"));
+    }
+
+    // ZIP sizes are untrusted: stop after one excess byte instead of expanding the entire entry.
+    let mut bytes = Vec::new();
+    file.take(declared_size + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| error.to_string())?;
+    if bytes.len() as u64 != declared_size {
+        return Err(format!("MDXNote 条目实际大小与声明不一致：{name}"));
+    }
+    Ok(bytes)
 }
 
 pub fn validate_archive<R: Read + Seek>(archive: &mut ZipArchive<R>) -> Result<(), String> {

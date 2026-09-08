@@ -23,10 +23,10 @@ pub mod workspace;
 mod workspace_session;
 
 use ai::AiRequestState;
-use archive_security::validate_archive;
 pub use archive_security::{
     parse_supported_format_version, validate_archive_entry_name, validate_new_resource_name,
 };
+use archive_security::{read_archive_entry_bytes, validate_archive};
 pub use draft_store::{
     delete_draft_file, read_draft_file, read_latest_draft_file, validate_draft_key,
     write_draft_file,
@@ -73,6 +73,8 @@ use zip::write::FileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
 const INVALID_MDX_ERROR: &str = "这不是有效的 MDXNote 笔记文件。";
+// Recovery must never move a backup while a save in this process is using it.
+static DOCUMENT_FILE_TRANSACTION: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 pub fn validate_archive_bytes(bytes: &[u8]) -> Result<(), String> {
     let cursor = Cursor::new(bytes);
@@ -268,7 +270,7 @@ fn create_mdx() -> Result<MdxNote, String> {
 
 #[tauri::command]
 fn open_mdx(app: AppHandle, path: String) -> Result<MdxNote, String> {
-    let note = read_mdx(Path::new(&path))?;
+    let note = read_recoverable_mdx(Path::new(&path))?;
     let _ = index_note(&app, &note);
     Ok(note)
 }
@@ -276,9 +278,14 @@ fn open_mdx(app: AppHandle, path: String) -> Result<MdxNote, String> {
 #[tauri::command]
 fn resolve_path(path: String) -> Result<PathIdentity, String> {
     let normalized = normalize_path(Path::new(&path))?;
+    let resolved = Path::new(&normalized);
+    let recoverable_backup = resolved
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("mdx"))
+        && document_export::companion_path(resolved, ".bak").is_file();
     Ok(PathIdentity {
         identity: path_identity(Path::new(&normalized))?,
-        available: Path::new(&normalized).exists(),
+        available: resolved.exists() || recoverable_backup,
         path: normalized,
     })
 }
@@ -410,6 +417,9 @@ fn save_to_path_with_fingerprint(
     request: MdxSaveRequest,
     path: PathBuf,
 ) -> Result<(MdxNote, file_watch::ContentFingerprint), String> {
+    let _transaction = DOCUMENT_FILE_TRANSACTION
+        .lock()
+        .map_err(|_| "文档保存锁不可用。".to_string())?;
     let target_path = ensure_mdx_extension(path);
     let source_path = request.path.as_deref().map(PathBuf::from);
     let removed_resources = validated_resource_paths(&request.removed_resources)?;
@@ -452,6 +462,16 @@ fn save_to_path_with_fingerprint(
         },
         fingerprint,
     ))
+}
+
+fn read_recoverable_mdx(path: &Path) -> Result<MdxNote, String> {
+    let _transaction = DOCUMENT_FILE_TRANSACTION
+        .lock()
+        .map_err(|_| "文档恢复锁不可用。".to_string())?;
+    if !path.exists() {
+        recover_interrupted_save(path)?;
+    }
+    read_mdx(path)
 }
 
 fn read_mdx(path: &Path) -> Result<MdxNote, String> {
@@ -581,11 +601,7 @@ fn read_archive_resource_bytes(path: &Path, resource_path: &str) -> Result<Vec<u
     let mut resource = archive
         .by_name(resource_path)
         .map_err(|_| "未找到附件。".to_string())?;
-    let mut bytes = Vec::new();
-    resource
-        .read_to_end(&mut bytes)
-        .map_err(|_| "无法读取附件。".to_string())?;
-    Ok(bytes)
+    read_archive_entry_bytes(&mut resource).map_err(|error| format!("无法读取附件：{error}"))
 }
 
 fn read_attachment_bytes(request: &AttachmentReadRequest) -> Result<Vec<u8>, String> {
@@ -862,10 +878,8 @@ fn read_zip_text<R: Read + Seek>(
     let mut file = archive
         .by_name(name)
         .map_err(|_| INVALID_MDX_ERROR.to_string())?;
-    let mut text = String::new();
-    file.read_to_string(&mut text)
-        .map_err(|_| INVALID_MDX_ERROR.to_string())?;
-    Ok(text)
+    String::from_utf8(read_archive_entry_bytes(&mut file)?)
+        .map_err(|_| INVALID_MDX_ERROR.to_string())
 }
 
 fn validate_manifest(manifest: &MdxManifest) -> Result<(), String> {
@@ -1067,9 +1081,7 @@ fn collect_preserved_entries(source_path: &Path) -> Result<Vec<(String, Vec<u8>)
             continue;
         }
 
-        let mut bytes = Vec::new();
-        file.read_to_end(&mut bytes)
-            .map_err(|err| err.to_string())?;
+        let bytes = read_archive_entry_bytes(&mut file)?;
         entries.push((name, bytes));
     }
 
@@ -1111,6 +1123,7 @@ fn recover_interrupted_save(target_path: &Path) -> Result<(), String> {
     }
 
     if !target_path.exists() {
+        read_mdx(&backup_path)?;
         fs::rename(&backup_path, target_path).map_err(|err| err.to_string())?;
         return Ok(());
     }
@@ -1120,8 +1133,7 @@ fn recover_interrupted_save(target_path: &Path) -> Result<(), String> {
         return Ok(());
     }
 
-    fs::remove_file(target_path).map_err(|err| err.to_string())?;
-    fs::rename(&backup_path, target_path).map_err(|err| err.to_string())
+    Err("现有文档无法读取，已保留原文件和备份，请检查文件格式或访问权限。".to_string())
 }
 
 fn safe_write_file(target_path: &Path, bytes: &[u8]) -> Result<(), String> {
@@ -1830,17 +1842,175 @@ mod tests {
     }
 
     #[test]
-    fn interrupted_backup_is_restored_when_target_is_missing() {
+    fn opening_restores_a_valid_interrupted_save_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("note.mdx");
+        save_to_path(
+            MdxSaveRequest {
+                path: None,
+                title: "recover".to_string(),
+                content: "preserved content".to_string(),
+                meta: None,
+                new_assets: Vec::new(),
+                removed_resources: Vec::new(),
+            },
+            target.clone(),
+        )
+        .unwrap();
+        let backup = document_export::companion_path(&target, ".bak");
+        fs::rename(&target, &backup).unwrap();
+        assert!(
+            resolve_path(target.to_string_lossy().into_owned())
+                .unwrap()
+                .available
+        );
+        let restored = read_recoverable_mdx(&target).unwrap();
+        assert_eq!(restored.content, "preserved content");
+        assert_eq!(restored.path.as_deref(), target.to_str());
+        assert!(target.is_file());
+        assert!(!backup.exists());
+    }
+
+    #[test]
+    fn invalid_backup_does_not_replace_a_damaged_original() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("note.mdx");
+        let backup = document_export::companion_path(&target, ".bak");
+        fs::write(&target, b"damaged original worth preserving").unwrap();
+        fs::write(&backup, b"invalid backup").unwrap();
+        assert!(recover_interrupted_save(&target).is_err());
+        assert_eq!(
+            fs::read(&target).unwrap(),
+            b"damaged original worth preserving"
+        );
+        assert!(backup.exists());
+    }
+
+    #[test]
+    fn opening_an_unsupported_original_preserves_it_and_the_valid_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("note.mdx");
+        save_to_path(
+            MdxSaveRequest {
+                path: None,
+                title: "backup".to_string(),
+                content: "old content".to_string(),
+                meta: None,
+                new_assets: Vec::new(),
+                removed_resources: Vec::new(),
+            },
+            target.clone(),
+        )
+        .unwrap();
+        let backup = document_export::companion_path(&target, ".bak");
+        fs::rename(&target, &backup).unwrap();
+        let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+        writer
+            .start_file("manifest.json", FileOptions::default())
+            .unwrap();
+        let mut manifest = MdxManifest::default();
+        manifest.format_version = "99.0.0".to_string();
+        writer
+            .write_all(&serde_json::to_vec(&manifest).unwrap())
+            .unwrap();
+        let original = writer.finish().unwrap().into_inner();
+        fs::write(&target, &original).unwrap();
+        assert!(read_recoverable_mdx(&target).is_err());
+        assert_eq!(fs::read(&target).unwrap(), original);
+        assert_eq!(read_mdx(&backup).unwrap().content, "old content");
+        assert!(recover_interrupted_save(&target).is_err());
+        assert_eq!(fs::read(&target).unwrap(), original);
+    }
+
+    fn falsify_entry_uncompressed_size(bytes: &mut [u8], name: &str, declared_size: u32) {
+        let central_offset = bytes
+            .windows(4)
+            .enumerate()
+            .find_map(|(offset, signature)| {
+                (signature == b"PK\x01\x02"
+                    && bytes.get(offset + 46..offset + 46 + name.len()) == Some(name.as_bytes()))
+                .then_some(offset)
+            })
+            .expect("fixture contains the requested central-directory entry");
+        let local_offset = u32::from_le_bytes(
+            bytes[central_offset + 42..central_offset + 46]
+                .try_into()
+                .unwrap(),
+        ) as usize;
+        bytes[central_offset + 24..central_offset + 28]
+            .copy_from_slice(&declared_size.to_le_bytes());
+        bytes[local_offset + 22..local_offset + 26].copy_from_slice(&declared_size.to_le_bytes());
+    }
+
+    #[test]
+    fn opening_rejects_content_larger_than_declared_zip_size() {
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("oversized-content.mdx");
+        let mut bytes = build_mdx_archive(
+            None,
+            &MdxMetadata::default(),
+            "body longer than the declared byte",
+            &[],
+            &std::collections::BTreeSet::new(),
+        )
+        .unwrap();
+        falsify_entry_uncompressed_size(&mut bytes, "content.md", 1);
+        fs::write(&target, bytes).unwrap();
+
+        assert!(read_mdx(&target).is_err());
+    }
+
+    #[test]
+    fn saving_a_valid_large_note_allows_json_expansion_in_history() {
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("escaped-content.mdx");
+        let request = MdxSaveRequest {
+            path: None,
+            title: "Escaped content".to_string(),
+            content: "\\".repeat(9 * 1024 * 1024),
+            meta: Some(MdxMetadata::default()),
+            new_assets: Vec::new(),
+            removed_resources: Vec::new(),
+        };
+        save_to_path(request, target.clone()).unwrap();
+        let mut request = save_request_for(&target, Vec::new(), Vec::new());
+        request.content = "shortened body".to_string();
+
+        save_to_path(request, target.clone()).unwrap();
+
+        assert_eq!(read_mdx(&target).unwrap().content, "shortened body");
+        let history = list_history_file(&target).unwrap();
+        assert_eq!(history.len(), 1);
+        let previous = read_history_file(&target, &history[0].name).unwrap();
+        assert_eq!(previous.content.len(), 9 * 1024 * 1024);
+        assert!(previous.content.bytes().all(|byte| byte == b'\\'));
+    }
+
+    #[test]
+    fn resource_reads_reject_data_larger_than_declared_zip_size() {
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("oversized-attachment.mdx");
+        write_note_with_resources(&target, &[("attachments/a.txt", b"more than one byte")]);
+        let mut bytes = fs::read(&target).unwrap();
+        falsify_entry_uncompressed_size(&mut bytes, "attachments/a.txt", 1);
+        fs::write(&target, bytes).unwrap();
+
+        assert!(read_archive_resource_bytes(&target, "attachments/a.txt").is_err());
+        assert!(collect_preserved_entries(&target).is_err());
+    }
+
+    #[test]
+    fn invalid_backup_is_preserved_when_target_is_missing() {
         let dir = temp_test_dir("backup-restore");
         fs::create_dir_all(&dir).unwrap();
         let target = dir.join("note.mdx");
         let backup = target.with_extension("mdx.bak");
         fs::write(&backup, b"backup").unwrap();
 
-        recover_interrupted_save(&target).unwrap();
+        assert!(recover_interrupted_save(&target).is_err());
 
-        assert_eq!(fs::read(&target).unwrap(), b"backup");
-        assert!(!backup.exists());
+        assert!(!target.exists());
+        assert_eq!(fs::read(&backup).unwrap(), b"backup");
         fs::remove_dir_all(dir).unwrap();
     }
 }
