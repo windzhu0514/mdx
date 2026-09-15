@@ -177,6 +177,20 @@ describe("GitHub Draft Release workflow", () => {
         );
     });
 
+    it("prefetches the locked dependency sources before offline notice generation", () => {
+        const workflow = readRepositoryFile(".github/workflows/publish.yml");
+        const buildJob = workflow.slice(
+            workflow.indexOf("\n    build:"),
+            workflow.indexOf("\n    release:"),
+        );
+        const fetch = "run: cargo fetch --manifest-path src-tauri/Cargo.toml --locked";
+        expect(buildJob).toContain(fetch);
+        expect(buildJob.indexOf(fetch)).toBeLessThan(
+            buildJob.indexOf("name: Build signed release bundles"),
+        );
+        expect(buildJob).not.toContain(fetch + " --target");
+    });
+
     it("builds and bundles exactly one target-specific mora-agent sidecar", () => {
         const config = JSON.parse(
             readRepositoryFile("src-tauri/tauri.conf.json"),

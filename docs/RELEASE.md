@@ -60,7 +60,7 @@ npm run tauri -- build
 
 任一命令失败都停止发布。Windows 本地正式构建必须提供与 GitHub Secrets 相同的 Tauri 更新签名私钥环境变量，确保安装包带有对应 updater 签名。
 
-`beforeBuildCommand` 会执行 `npm run prepare:notices`，依据锁文件、当前目标平台的 Cargo 依赖闭包和已核实的上游许可文本生成 `THIRD_PARTY_NOTICES.txt`。该步骤默认离线，缺少依赖源码或许可文本时会失败；先完成对应平台依赖获取和许可核查，不要跳过检查。可用 `node scripts/generate-third-party-notices.mjs --check --target x86_64-pc-windows-msvc` 检查当前 Windows 声明是否与锁文件一致。第三方许可补齐文本与准确来源保存在 `third-party-license-sources/`，需与锁文件变更一起复核。
+`beforeBuildCommand` 会执行 `npm run prepare:notices`，依据锁文件、当前目标平台的 Cargo 依赖闭包和已核实的上游许可文本生成 `THIRD_PARTY_NOTICES.txt`。该步骤默认离线；构建前运行 `cargo fetch --manifest-path src-tauri/Cargo.toml --locked` 预取锁定源码（不加 `--target`，保证 metadata 可读取未实际编译的依赖）。缺少依赖源码或许可文本时会失败；先完成对应平台依赖获取和许可核查，不要跳过检查。可用 `node scripts/generate-third-party-notices.mjs --check --target x86_64-pc-windows-msvc` 检查当前 Windows 声明是否与锁文件一致。第三方许可补齐文本与准确来源保存在 `third-party-license-sources/`，需与锁文件变更一起复核。
 
 `npm run build:exe` 完成后必须同时存在：
 

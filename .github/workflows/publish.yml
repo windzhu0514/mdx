@@ -139,6 +139,9 @@ jobs:
             - name: Install frontend dependencies
               run: npm ci
 
+            - name: Fetch locked dependency sources for license metadata
+              run: cargo fetch --manifest-path src-tauri/Cargo.toml --locked
+
             - name: Prepare target-specific mora-agent sidecar
               env:
                   TAURI_ENV_DEBUG: "true"
