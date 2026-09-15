@@ -4,11 +4,11 @@
             v-show="mode === 'wysiwyg'"
             ref="milkdownEditor"
             :document-id="documentId"
-            :model-value="displayValue ?? modelValue"
+            :model-value="richMarkdown"
             :readonly="readonly || mode !== 'wysiwyg'"
             :upload-image="uploadImage"
             :ai-provider="readonly ? undefined : aiProvider"
-            @update:model-value="emit('update:modelValue', $event)"
+            @update:model-value="updateRichMarkdown"
             @ai-error="emit('ai-error', $event)"
             @open-mermaid="emit('open-mermaid', $event)"
         />
@@ -28,7 +28,7 @@
                 v-if="mode === 'source' && sourcePreview"
                 ref="previewEditor"
                 :document-id="`${documentId}:preview`"
-                :model-value="displayValue ?? modelValue"
+                :model-value="richMarkdown"
                 readonly
                 @open-mermaid="emit('open-mermaid', $event)"
             />
@@ -38,7 +38,8 @@
 
 <script setup lang="ts">
 import type { AIProvider } from "@milkdown/crepe/feature/ai";
-import { ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
+import { splitMarkdownPrefix } from "../../utils/markdownFrontMatter";
 import type {
     EditorCommand,
     EditorMode,
@@ -65,6 +66,26 @@ const emit = defineEmits<{
     "ai-error": [message: string];
     "open-mermaid": [request: MermaidViewerRequest];
 }>();
+
+const canonicalMarkdown = computed(() => splitMarkdownPrefix(props.modelValue));
+const richMarkdown = computed(
+    () => splitMarkdownPrefix(props.displayValue ?? props.modelValue).body,
+);
+
+function updateRichMarkdown(markdown: string): void {
+    const { prefix } = canonicalMarkdown.value;
+    // A header closed at EOF needs a line break before the first body edit.
+    const separator =
+        prefix.includes("\n") &&
+        !prefix.endsWith("\n") &&
+        markdown &&
+        !/^\r?\n/.test(markdown)
+            ? prefix.includes("\r\n")
+                ? "\r\n"
+                : "\n"
+            : "";
+    emit("update:modelValue", prefix + separator + markdown);
+}
 
 const milkdownEditor = ref<MoraEditorHandle | null>(null);
 const sourceEditor = ref<MoraEditorHandle | null>(null);

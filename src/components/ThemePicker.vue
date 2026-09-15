@@ -7,7 +7,6 @@ defineProps<{
 
 const emit = defineEmits<{
     select: [theme: ThemeId];
-    close: [];
 }>();
 </script>
 
@@ -18,14 +17,6 @@ const emit = defineEmits<{
                 <h2 id="theme-picker-title">选择主题</h2>
                 <p>横向滚动浏览，点击后立即切换</p>
             </div>
-            <button
-                type="button"
-                class="theme-picker-close"
-                aria-label="关闭主题选择"
-                @click="emit('close')"
-            >
-                ×
-            </button>
         </header>
 
         <div class="theme-picker-track" role="radiogroup" aria-label="界面主题">

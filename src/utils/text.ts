@@ -1,3 +1,5 @@
+import { splitMarkdownPrefix } from "./markdownFrontMatter";
+
 export const UNNAMED_DOCUMENT_NAME = "未命名文档";
 
 export function documentNameFromPath(path: string | null | undefined): string {
@@ -36,11 +38,12 @@ export type MarkdownHeading = {
 };
 
 export function extractMarkdownHeadings(markdown: string): MarkdownHeading[] {
+    const { prefix, body } = splitMarkdownPrefix(markdown);
     const headings: MarkdownHeading[] = [];
     let fence: { character: "`" | "~"; length: number } | undefined;
-    let offset = 0;
+    let offset = prefix.length;
 
-    for (const rawLine of markdown.split("\n")) {
+    for (const rawLine of body.split("\n")) {
         const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
         const fenceMatch = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
 

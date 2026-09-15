@@ -1,4 +1,5 @@
 import type { MdxMetadata, ResourceSaveData } from "../types/mdx";
+import type { DiskRevision } from "../types/workspace";
 
 export type DraftSnapshot = {
     path: string | null;
@@ -8,6 +9,7 @@ export type DraftSnapshot = {
     newResources: ResourceSaveData[];
     removedResources?: string[];
     updatedAt: string;
+    baseDiskRevision?: DiskRevision | null;
 };
 
 export type DraftStore = {

@@ -108,3 +108,18 @@ export type MdxSaveRequest = {
     newResources: ResourceSaveData[];
     removedResources: string[];
 };
+
+export type DocumentFormat = "markdown" | "mdx";
+
+export type MarkdownNote = {
+    path: string;
+    title: string;
+    content: string;
+    meta: MdxMetadata;
+    diskRevision: import("./workspace").DiskRevision | null;
+};
+
+export type MarkdownSaveResult = MarkdownNote & {
+    resourceRewrites: Record<string, string>;
+    warning?: string | null;
+};

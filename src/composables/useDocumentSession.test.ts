@@ -181,6 +181,31 @@ describe("document session", () => {
                         fileName(path).replace(/\.mdx$/i, ""),
                 );
             }
+            if (command === "open_markdown") {
+                const path = normalizedPath(String(payload.path));
+                return {
+                    ...note(
+                        path,
+                        fileName(path),
+                        diskContents.get(pathKey(path)) ?? "---\ncustom: kept\n---\nbody",
+                    ),
+                    diskRevision: { path, modifiedAtMs: 1, size: 1 },
+                };
+            }
+            if (command === "save_markdown") {
+                const request = payload.request as {
+                    content: string;
+                    title: string;
+                    meta: MdxMetadata;
+                };
+                const path = normalizedPath(String(payload.path));
+                return {
+                    ...note(path, request.title, request.content),
+                    meta: request.meta ?? metadata(request.title),
+                    diskRevision: { path, modifiedAtMs: 1, size: 1 },
+                    resourceRewrites: {},
+                };
+            }
             if (command === "import_markdown") {
                 const path = normalizedPath(String(payload.path));
                 return {
@@ -276,6 +301,582 @@ describe("document session", () => {
             throw new Error(`Unexpected command: ${command}`);
         });
     });
+
+    it("opens and directly saves Markdown with its complete front matter", async () => {
+        const session = useDocumentSession(true);
+        const runtime = await session.openMarkdown("C:\\Notes\\plain.md");
+        expect(runtime).toMatchObject({
+            path: "C:\\Notes\\plain.md",
+            sourceKind: "markdown",
+            dirty: false,
+            content: "---\ncustom: kept\n---\nbody",
+        });
+        session.updateContent(runtime.id, runtime.content + " changed");
+        await session.save(runtime.id);
+        expect(runtime.dirty).toBe(false);
+        expect(invoke).toHaveBeenCalledWith(
+            "save_markdown",
+            expect.objectContaining({
+                path: runtime.path,
+                request: expect.objectContaining({
+                    sourceFormat: "markdown",
+                    content: "---\ncustom: kept\n---\nbody changed",
+                }),
+            }),
+        );
+    });
+
+    it("creates a Markdown document and infers the save-as format from extension", async () => {
+        const session = useDocumentSession(true);
+        const runtime = session.newDocument("markdown");
+        expect(runtime.sourceKind).toBe("markdown");
+        session.updateContent(runtime.id, "plain");
+        await session.saveAs(runtime.id, "C:\\Notes\\plain.markdown");
+        expect(runtime.path).toBe("C:\\Notes\\plain.markdown");
+        expect(runtime.sourceKind).toBe("markdown");
+        await session.saveAs(runtime.id, "C:\\Notes\\packed.mdx");
+        expect(invoke).toHaveBeenCalledWith(
+            "save_mdx_as",
+            expect.objectContaining({ request: expect.objectContaining({ path: null }) }),
+        );
+    });
+
+    it("reloads Markdown through its text reader after an external change", async () => {
+        const session = useDocumentSession(true);
+        const runtime = await session.openMarkdown("C:\\Notes\\plain.md");
+        diskContents.set(pathKey(runtime.path!), "---\nexternal: true\n---\nnew");
+        diskRevisions.set(pathKey(runtime.path!), 2);
+        expect(await session.refreshDiskState()).toEqual([runtime.id]);
+        expect(runtime.content).toBe("---\nexternal: true\n---\nnew");
+    });
+
+    it.each([false, true])(
+        "migrates legacy Markdown imports without losing front matter or drafts: %s",
+        async (hasDraft) => {
+            workspaceRead = {
+                warning: null,
+                session: {
+                    version: 1,
+                    documents: [
+                        {
+                            id: "legacy",
+                            path: null,
+                            sourceKind: "markdown-import",
+                            importSourcePath: "C:\\Notes\\old.md",
+                            draftKey: "legacy-key",
+                        },
+                    ],
+                    folderPaths: [],
+                    expandedPaths: [],
+                    activeDocumentId: "legacy",
+                    sidebarCollapsed: false,
+                    sidebarWidth: 260,
+                },
+            };
+            if (hasDraft)
+                drafts.set("legacy-key", {
+                    path: null,
+                    title: "edited",
+                    content: "edited body",
+                    meta: metadata("edited"),
+                    newResources: [],
+                    updatedAt: "now",
+                });
+            const session = useDocumentSession(true);
+            await session.restore();
+            const runtime = session.document("legacy");
+            expect(runtime.path).toBe("C:\\Notes\\old.md");
+            expect(runtime.sourceKind).toBe("markdown");
+            expect(runtime.dirty).toBe(hasDraft);
+            expect(runtime.content).toBe(
+                "---\ncustom: kept\n---\n" + (hasDraft ? "edited body" : "body"),
+            );
+        },
+    );
+
+    it("rebases save-as races and rekeys saved resources without discarding newer edits", async () => {
+        const session = useDocumentSession(true);
+        const runtime = await session.openMarkdown("C:\\Notes\\source.md");
+        runtime.resources.registerNew(pendingImage);
+        session.updateContent(runtime.id, "![old](assets/a.png)");
+        const pending = deferred<unknown>();
+        const original = invoke.getMockImplementation()!;
+        invoke.mockImplementation((command, args) =>
+            command === "save_markdown" ? pending.promise : original(command, args),
+        );
+        const saving = session.saveAs(runtime.id, "D:\\Other\\copy.md");
+        await vi.waitFor(() =>
+            expect(invoke).toHaveBeenCalledWith("save_markdown", expect.anything()),
+        );
+        runtime.resources.registerNew({
+            ...pendingImage,
+            path: "assets/b.png",
+            objectUrl: "blob:b",
+        });
+        session.updateContent(
+            runtime.id,
+            "![old](assets/a.png) ![new](late.png) ![pending](assets/b.png)",
+        );
+        pending.resolve({
+            ...note("D:\\Other\\copy.md", "copy", "![old](copy.assets/a.png)"),
+            diskRevision: { path: "D:\\Other\\copy.md", modifiedAtMs: 1, size: 1 },
+            resourceRewrites: { "assets/a.png": "copy.assets/a.png" },
+        });
+        await saving;
+        expect(runtime.content).toBe(
+            "![old](copy.assets/a.png) ![new](file:///C:/Notes/late.png) ![pending](assets/b.png)",
+        );
+        expect(runtime.dirty).toBe(true);
+        expect(runtime.resources.objectUrls().get("copy.assets/a.png")).toBe("blob:a");
+        expect(runtime.resources.newResources().map((r) => r.name)).toEqual([
+            "copy.assets/a.png",
+            "assets/b.png",
+        ]);
+    });
+
+    it("uses the Markdown filename even when metadata supplies a different title", async () => {
+        const original = invoke.getMockImplementation()!;
+        invoke.mockImplementation(async (command, args) => {
+            const result = await original(command, args);
+            return command === "open_markdown" || command === "save_markdown"
+                ? { ...result, title: "YAML title" }
+                : result;
+        });
+        const session = useDocumentSession(true);
+        const runtime = await session.openMarkdown("C:\\Notes\\filename.md");
+        expect(runtime.displayName).toBe("filename.md");
+        await session.save(runtime.id);
+        expect(runtime.displayName).toBe("filename.md");
+        await session.reloadFromDisk(runtime.id);
+        expect(runtime.displayName).toBe("filename.md");
+    });
+
+    it("keeps the source and resources intact when prepared conversion fails", async () => {
+        const session = useDocumentSession(true);
+        const runtime = await session.openMarkdown("C:\\Notes\\source.md");
+        runtime.resources.registerLoaded({
+            ...pendingImage,
+            path: "pic.png",
+            isNew: false,
+        });
+        session.updateContent(runtime.id, "![pic](pic.png)");
+        const original = invoke.getMockImplementation()!;
+        invoke.mockImplementation((command, args) =>
+            command === "save_mdx_as"
+                ? Promise.reject(new Error("write failed"))
+                : original(command, args),
+        );
+        await expect(
+            session.saveAs(runtime.id, "D:\\Other\\copy.mdx", "mdx", {
+                content: "![pic](assets/a.png)",
+                resources: [
+                    {
+                        name: "assets/a.png",
+                        originalName: "pic.png",
+                        mimeType: "image/png",
+                        base64: "YQ==",
+                        size: 1,
+                        kind: "asset",
+                    },
+                ],
+                resourceRewrites: { "pic.png": "assets/a.png" },
+            }),
+        ).rejects.toThrow("write failed");
+        expect(runtime).toMatchObject({
+            path: "C:\\Notes\\source.md",
+            sourceKind: "markdown",
+            content: "![pic](pic.png)",
+            dirty: true,
+        });
+        expect(runtime.resources.objectUrls().get("pic.png")).toBe("blob:a");
+        expect(runtime.resources.objectUrls().has("assets/a.png")).toBe(false);
+    });
+
+    it("retains edits made during resource preparation and rebases their relative links", async () => {
+        const session = useDocumentSession(true);
+        const runtime = await session.openMarkdown("C:\\Notes\\source.md");
+        session.updateContent(runtime.id, "![pic](pic.png)");
+        const baseContent = runtime.content;
+        session.updateContent(runtime.id, "![pic](pic.png) [later](later.txt)");
+        await session.saveAs(runtime.id, "D:\\Other\\copy.mdx", "mdx", {
+            content: "![pic](assets/a.png)",
+            baseContent,
+            resources: [
+                {
+                    name: "assets/a.png",
+                    originalName: "pic.png",
+                    mimeType: "image/png",
+                    base64: "YQ==",
+                    size: 1,
+                    kind: "asset",
+                },
+            ],
+            resourceRewrites: { "pic.png": "assets/a.png" },
+        });
+        expect(runtime.content).toBe(
+            "![pic](assets/a.png) [later](file:///C:/Notes/later.txt)",
+        );
+        expect(runtime.dirty).toBe(true);
+        expect(runtime.resources.resource("assets/a.png")?.base64).toBe("YQ==");
+        expect(invoke).toHaveBeenCalledWith(
+            "save_mdx_as",
+            expect.objectContaining({
+                request: expect.objectContaining({
+                    path: null,
+                    content: "![pic](assets/a.png)",
+                }),
+            }),
+        );
+    });
+
+    it("checks external conflicts and duplicate Markdown targets before writing", async () => {
+        const session = useDocumentSession(true);
+        const runtime = await session.openMarkdown("C:\\Notes\\source.md");
+        diskRevisions.set(pathKey(runtime.path!), 2);
+        session.updateContent(runtime.id, "local");
+        await expect(session.save(runtime.id)).rejects.toMatchObject({
+            code: "EXTERNAL_CONFLICT",
+        });
+        const another = session.newDocument("markdown");
+        await expect(
+            session.saveAs(another.id, "c:\\notes\\SOURCE.md"),
+        ).rejects.toMatchObject({ code: "TARGET_ALREADY_OPEN" });
+        expect(invoke).not.toHaveBeenCalledWith("save_markdown", expect.anything());
+        await session.save(runtime.id, { overwrite: true });
+        expect(runtime.dirty).toBe(false);
+    });
+
+    it("rekeys the metadata edited during Markdown save alongside content and resources", async () => {
+        const session = useDocumentSession(true);
+        const runtime = await session.openMarkdown("C:\\Notes\\source.md");
+        runtime.resources.registerNew(pendingImage);
+        session.updateContent(runtime.id, "![pic](assets/a.png)");
+        const pending = deferred<unknown>();
+        const original = invoke.getMockImplementation()!;
+        invoke.mockImplementation((command, args) =>
+            command === "save_markdown" ? pending.promise : original(command, args),
+        );
+        const saving = session.save(runtime.id);
+        await vi.waitFor(() =>
+            expect(invoke).toHaveBeenCalledWith("save_markdown", expect.anything()),
+        );
+        session.updateMetadata(runtime.id, {
+            ...runtime.meta!,
+            tags: ["new tag"],
+            cover: "assets/a.png",
+        });
+        pending.resolve({
+            ...note(runtime.path, "source", "![pic](source.assets/a.png)"),
+            diskRevision: { path: runtime.path, modifiedAtMs: 1, size: 1 },
+            resourceRewrites: { "assets/a.png": "source.assets/a.png" },
+        });
+        await saving;
+        expect(runtime.meta?.tags).toEqual(["new tag"]);
+        expect(runtime.meta?.cover).toBe("source.assets/a.png");
+        expect(runtime.content).toBe("![pic](source.assets/a.png)");
+        expect(runtime.dirty).toBe(true);
+    });
+
+    it("sends the selected Markdown target revision when replacing an existing file", async () => {
+        const session = useDocumentSession(true);
+        const runtime = await session.openMarkdown("C:\\Notes\\source.md");
+        diskRevisions.set(pathKey("D:\\Other\\copy.md"), 7);
+        await session.saveAs(runtime.id, "D:\\Other\\copy.md");
+        expect(invoke).toHaveBeenCalledWith(
+            "save_markdown",
+            expect.objectContaining({
+                request: expect.objectContaining({
+                    expectedRevision: {
+                        path: "D:\\Other\\copy.md",
+                        modifiedAtMs: 7,
+                        size: 1,
+                    },
+                    overwrite: false,
+                }),
+            }),
+        );
+    });
+
+    it("projects loaded Markdown resource metadata before conversion without retaining old paths", async () => {
+        const session = useDocumentSession(true);
+        const runtime = await session.openMarkdown("C:\\Notes\\source.md");
+        const asset = {
+            id: "pic",
+            originalName: "pic.png",
+            storedName: "pic.png",
+            path: "images/pic.png",
+            type: "image/png",
+            size: 1,
+            createdAt: "now",
+        };
+        session.updateMetadata(runtime.id, {
+            ...runtime.meta!,
+            cover: "images/pic.png",
+            assets: [asset],
+        });
+        session.updateContent(runtime.id, "![pic](images/pic.png)");
+        await session.saveAs(runtime.id, "D:\\Other\\copy.mdx", "mdx", {
+            content: "![pic](assets/a.png)",
+            resources: [
+                {
+                    name: "assets/a.png",
+                    originalName: "pic.png",
+                    mimeType: "image/png",
+                    base64: "YQ==",
+                    size: 1,
+                    kind: "asset",
+                },
+            ],
+            resourceRewrites: { "images/pic.png": "assets/a.png" },
+        });
+        expect(runtime.meta?.cover).toBe("assets/a.png");
+        expect(runtime.meta?.assets).toEqual([
+            { ...asset, path: "assets/a.png", storedName: "a.png" },
+        ]);
+        expect(invoke).toHaveBeenCalledWith(
+            "save_mdx_as",
+            expect.objectContaining({
+                request: expect.objectContaining({
+                    meta: expect.objectContaining({
+                        cover: "assets/a.png",
+                        assets: [expect.objectContaining({ path: "assets/a.png" })],
+                    }),
+                }),
+            }),
+        );
+    });
+
+    it("stores actual archive names in converted metadata while retaining URI fragments in Markdown", async () => {
+        const session = useDocumentSession(true);
+        const runtime = await session.openMarkdown("C:\\Notes\\source.md");
+        const attachment = {
+            id: "pdf",
+            originalName: "manual 中文.pdf",
+            storedName: "manual 中文.pdf",
+            path: "manual%20%E4%B8%AD%E6%96%87.pdf#page=2",
+            type: "application/pdf",
+            size: 1,
+            createdAt: "now",
+        };
+        const asset = {
+            ...attachment,
+            id: "image",
+            originalName: "pic #1.png",
+            storedName: "pic #1.png",
+            path: "pic%20%231.png?size=small#view",
+            type: "image/png",
+        };
+        session.updateMetadata(runtime.id, {
+            ...runtime.meta!,
+            attachments: [
+                attachment,
+                {
+                    ...attachment,
+                    id: "alias",
+                    path: "./manual%20%E4%B8%AD%E6%96%87.pdf#page=4",
+                },
+            ],
+            assets: [asset],
+        });
+        session.updateContent(
+            runtime.id,
+            "[manual](manual%20%E4%B8%AD%E6%96%87.pdf#page=2) ![pic](pic%20%231.png?size=small#view)",
+        );
+        const content =
+            "[manual](attachments/manual%20%E4%B8%AD%E6%96%87.pdf#page=2) ![pic](assets/pic%20%231.png?size=small#view)";
+        await session.saveAs(runtime.id, "D:\\Other\\copy.mdx", "mdx", {
+            content,
+            resources: [
+                {
+                    name: "attachments/manual 中文.pdf",
+                    originalName: "manual 中文.pdf",
+                    mimeType: "application/pdf",
+                    base64: "YQ==",
+                    size: 1,
+                    kind: "attachment",
+                },
+                {
+                    name: "assets/pic #1.png",
+                    originalName: "pic #1.png",
+                    mimeType: "image/png",
+                    base64: "YQ==",
+                    size: 1,
+                    kind: "asset",
+                },
+            ],
+            resourceRewrites: {
+                "manual%20%E4%B8%AD%E6%96%87.pdf#page=2":
+                    "attachments/manual%20%E4%B8%AD%E6%96%87.pdf#page=2",
+                "./manual%20%E4%B8%AD%E6%96%87.pdf#page=4":
+                    "attachments/manual%20%E4%B8%AD%E6%96%87.pdf#page=4",
+                "pic%20%231.png?size=small#view": "assets/pic%20%231.png?size=small#view",
+            },
+        });
+        expect(runtime.content).toBe(content);
+        expect(runtime.meta?.attachments).toHaveLength(1);
+        expect(runtime.meta?.attachments[0]).toMatchObject({
+            path: "attachments/manual 中文.pdf",
+            storedName: "manual 中文.pdf",
+        });
+        expect(runtime.meta?.assets[0]).toMatchObject({
+            path: "assets/pic #1.png",
+            storedName: "pic #1.png",
+        });
+        expect(invoke).toHaveBeenCalledWith(
+            "save_mdx_as",
+            expect.objectContaining({
+                request: expect.objectContaining({
+                    meta: expect.objectContaining({
+                        attachments: [
+                            expect.objectContaining({
+                                path: "attachments/manual 中文.pdf",
+                            }),
+                        ],
+                        assets: [expect.objectContaining({ path: "assets/pic #1.png" })],
+                    }),
+                }),
+            }),
+        );
+    });
+
+    it.each([false, true])(
+        "retains the draft disk baseline across restart with an external edit: %s",
+        async (externalEdit) => {
+            const session = useDocumentSession(true);
+            const runtime = await session.openMarkdown("C:\\Notes\\draft.md");
+            session.updateContent(runtime.id, "unsaved draft");
+            await runtime.draft.flush();
+            const snapshot = drafts.get(draftKey(runtime.path, runtime.id));
+            expect(snapshot).toMatchObject({
+                baseDiskRevision: { path: runtime.path, modifiedAtMs: 1, size: 1 },
+            });
+            await session.dispose();
+            workspaceRead = {
+                warning: null,
+                session: workspaceWriteSnapshots[workspaceWriteSnapshots.length - 1],
+            };
+            if (externalEdit) {
+                diskContents.set(pathKey("C:\\Notes\\draft.md"), "external edit");
+                diskRevisions.set(pathKey("C:\\Notes\\draft.md"), 2);
+            }
+            const restored = useDocumentSession(true);
+            await restored.restore();
+            const draft = restored.documents.value[0];
+            expect(draft.content).toBe("unsaved draft");
+            expect(draft.conflict).toBe(externalEdit);
+            expect(draft.diskRevision?.modifiedAtMs).toBe(1);
+            if (externalEdit) {
+                await expect(restored.save(draft.id)).rejects.toMatchObject({
+                    code: "EXTERNAL_CONFLICT",
+                });
+                expect(invoke).not.toHaveBeenCalledWith(
+                    "save_markdown",
+                    expect.anything(),
+                );
+                expect(diskContents.get(pathKey(draft.path!))).toBe("external edit");
+                expect(draft.dirty).toBe(true);
+            } else {
+                await restored.save(draft.id);
+                expect(draft.dirty).toBe(false);
+                expect(draft.conflict).toBe(false);
+            }
+        },
+    );
+
+    it.each(["markdown", "markdown-import"] as const)(
+        "protects an old %s draft without a disk baseline even after watcher refresh",
+        async (sourceKind) => {
+            const source = "C:\\Notes\\old.md";
+            workspaceRead = {
+                warning: null,
+                session: {
+                    version: 1,
+                    documents: [
+                        {
+                            id: "old",
+                            path: sourceKind === "markdown" ? source : null,
+                            sourceKind,
+                            importSourcePath:
+                                sourceKind === "markdown-import" ? source : null,
+                            draftKey: "old-draft",
+                        },
+                    ],
+                    folderPaths: [],
+                    expandedPaths: [],
+                    activeDocumentId: "old",
+                    sidebarCollapsed: false,
+                    sidebarWidth: 260,
+                },
+            };
+            drafts.set("old-draft", {
+                path: null,
+                title: "old",
+                content: "legacy draft",
+                meta: metadata("old"),
+                newResources: [],
+                updatedAt: "now",
+            });
+            const session = useDocumentSession(true);
+            await session.restore();
+            const runtime = session.document("old");
+            expect(runtime.conflict).toBe(true);
+            await session.refreshDiskState();
+            expect(runtime.diskRevision).toBeNull();
+            await expect(session.save(runtime.id)).rejects.toMatchObject({
+                code: "EXTERNAL_CONFLICT",
+            });
+            session.updateContent(runtime.id, "continued draft");
+            await runtime.draft.flush();
+            expect(drafts.get("old-draft")?.baseDiskRevision).toBeNull();
+            await session.save(runtime.id, { overwrite: true });
+            expect(runtime.conflict).toBe(false);
+            expect(runtime.dirty).toBe(false);
+        },
+    );
+
+    it.each(["markdown", "markdown-import"] as const)(
+        "restores an identical old %s draft without unnecessary conflict",
+        async (sourceKind) => {
+            const source = "C:\\Notes\\same.md";
+            workspaceRead = {
+                warning: null,
+                session: {
+                    version: 1,
+                    documents: [
+                        {
+                            id: "same",
+                            path: sourceKind === "markdown" ? source : null,
+                            sourceKind,
+                            importSourcePath:
+                                sourceKind === "markdown-import" ? source : null,
+                            draftKey: "same-draft",
+                        },
+                    ],
+                    folderPaths: [],
+                    expandedPaths: [],
+                    activeDocumentId: "same",
+                    sidebarCollapsed: false,
+                    sidebarWidth: 260,
+                },
+            };
+            drafts.set("same-draft", {
+                path: null,
+                title: "same",
+                content:
+                    sourceKind === "markdown" ? "---\ncustom: kept\n---\nbody" : "body",
+                meta: metadata("same"),
+                newResources: [],
+                updatedAt: "now",
+            });
+            const session = useDocumentSession(true);
+            await session.restore();
+            const runtime = session.document("same");
+            expect(runtime.conflict).toBe(false);
+            expect(runtime.diskRevision?.modifiedAtMs).toBe(1);
+            await session.save(runtime.id);
+            expect(runtime.dirty).toBe(false);
+        },
+    );
 
     it("guards agent replacement with the current live revision", () => {
         const session = useDocumentSession(false);

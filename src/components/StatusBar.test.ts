@@ -22,7 +22,6 @@ it("places workspace and outline controls at opposite status-bar edges", () => {
             h(StatusBar, {
                 errorMessage: "",
                 statusMessage: "准备就绪",
-                modeLabel: "所见即所得",
                 wordCount: 10,
                 workspaceVisible: true,
                 outlineVisible: false,
@@ -40,6 +39,7 @@ it("places workspace and outline controls at opposite status-bar edges", () => {
     (footer?.firstElementChild as HTMLButtonElement | null)?.click();
     expect(events).toEqual(["workspace"]);
     expect(footer?.getAttribute("aria-live")).toBeNull();
+    expect(host.querySelector(".status-right")?.textContent?.trim()).toBe("10 字");
 });
 
 it("keeps an error visible, opens full details, and lets the user dismiss it", async () => {
@@ -63,7 +63,6 @@ it("keeps an error visible, opens full details, and lets the user dismiss it", a
             h(StatusBar, {
                 errorMessage: state.error,
                 statusMessage: "保存成功",
-                modeLabel: "仅源码",
                 wordCount: 12,
                 workspaceVisible: true,
                 outlineVisible: false,

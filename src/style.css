@@ -188,7 +188,6 @@ summary {
 }
 
 .workspace-empty button {
-    margin-top: 8px;
     min-height: 30px;
     padding: 4px 10px;
     border: 1px solid var(--color-border);
@@ -225,14 +224,17 @@ summary {
     outline: none;
 }
 
-.workspace-tree-row:hover .workspace-tree-item,
-.workspace-tree-row:focus-visible .workspace-tree-item {
+.workspace-tree-row:hover,
+.workspace-tree-row:focus-within {
     background: var(--color-primary-light);
+}
+
+.workspace-tree-row[aria-current="page"] {
+    background: var(--color-primary-soft);
 }
 
 .workspace-tree-item.active {
     color: var(--color-primary);
-    background: var(--color-primary-soft);
 }
 
 .workspace-disclosure {
@@ -520,6 +522,17 @@ summary {
     white-space: nowrap;
 }
 
+.menu-document-format {
+    flex: 0 0 auto;
+    padding: 2px 6px;
+    margin-right: 6px;
+    border-radius: var(--radius-sm);
+    background: var(--color-bg-control);
+    color: var(--color-text-muted);
+    font-size: 10px;
+    line-height: 1.4;
+}
+
 .menu-group {
     position: relative;
 }
@@ -600,6 +613,10 @@ summary {
     line-height: 1.5;
 }
 
+.about-card p + p {
+    margin-top: 8px;
+}
+
 .menu-popup button {
     display: flex;
     justify-content: space-between;
@@ -656,6 +673,16 @@ summary {
     left: calc(100% + 8px);
     min-width: 284px;
     display: none;
+}
+
+.menu-popup-submenu::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    right: 100%;
+    /* Cover the 8px gap and the submenu border to keep hover continuous. */
+    width: 9px;
 }
 
 .menu-submenu:hover > .menu-popup-submenu,

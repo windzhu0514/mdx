@@ -29,6 +29,29 @@ describe("resource session", () => {
         });
     });
 
+    it("rekeys loaded and pending resources and tombstones without invalidating their object URLs", () => {
+        const session = createResourceSession();
+        session.registerNew(newImage);
+        session.registerLoaded({ ...newImage, path: "old.png", objectUrl: "blob:old" });
+        session.remove("removed.png");
+        const generation = session.generation();
+        session.rewritePaths({
+            "assets/a.png": "note.assets/a.png",
+            "old.png": "note.assets/old.png",
+            "removed.png": "note.assets/removed.png",
+        });
+        expect(session.displayMarkdown("![pic](note.assets/a.png)")).toBe(
+            "![pic](blob:a)",
+        );
+        expect(session.persistedMarkdown("![pic](blob:old)")).toBe(
+            "![pic](note.assets/old.png)",
+        );
+        expect(session.newResources().map((r) => r.name)).toEqual(["note.assets/a.png"]);
+        expect(session.removedResources()).toEqual(["note.assets/removed.png"]);
+        expect(session.generation()).not.toBe(generation);
+        expect(URL.revokeObjectURL).not.toHaveBeenCalled();
+    });
+
     it("clears and revokes every object URL", () => {
         const session = createResourceSession();
         session.registerLoaded({ ...newImage, isNew: false });

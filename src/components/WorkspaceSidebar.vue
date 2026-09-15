@@ -61,6 +61,7 @@ const props = defineProps<{
 const emit = defineEmits<{
     activate: [id: string];
     "open-path": [path: string];
+    "open-file": [];
     "open-folder": [];
     "close-document": [id: string];
     "close-folder": [path: string];
@@ -190,7 +191,7 @@ const documentRows = computed<TreeRow[]>(() =>
 
 const rows = computed(() => [...documentRows.value, ...folderRows.value]);
 const workspaceSections = computed(() => [
-    { id: "open-documents", title: "已打开文件", rows: documentRows.value },
+    { id: "open-documents", title: "文件", rows: documentRows.value },
     { id: "workspace-folders", title: "文件夹", rows: folderRows.value },
 ]);
 const nonEmptyWorkspaceSections = computed(() =>
@@ -387,8 +388,16 @@ function onPointerUp(event: PointerEvent) {
                 class="workspace-section"
                 aria-labelledby="open-documents-heading"
             >
-                <h2 id="open-documents-heading">已打开文件</h2>
-                <p class="workspace-empty">没有打开文件</p>
+                <h2 id="open-documents-heading">文件</h2>
+                <div class="workspace-empty">
+                    <button
+                        type="button"
+                        aria-label="打开文件"
+                        @click="emit('open-file')"
+                    >
+                        打开文件
+                    </button>
+                </div>
             </section>
             <div
                 v-if="rows.length"
@@ -493,7 +502,6 @@ function onPointerUp(event: PointerEvent) {
             >
                 <h2 id="workspace-folders-heading">文件夹</h2>
                 <div class="workspace-empty">
-                    <p>尚未打开文件夹</p>
                     <button
                         :ref="setOpenFolderButton"
                         type="button"

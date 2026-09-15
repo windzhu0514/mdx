@@ -176,6 +176,8 @@ vi.mock("./SourceEditor.vue", () => ({
 
 type MountedEditor = {
     documentId: Ref<string>;
+    modelValue: Ref<string>;
+    displayValue: Ref<string | undefined>;
     handle: Ref<MoraEditorHandle | null>;
     host: HTMLDivElement;
     mode: Ref<EditorMode>;
@@ -197,6 +199,8 @@ function mountEditor(
     const modeValue = ref<EditorMode>(mode);
     const previewValue = ref(sourcePreview);
     const documentIdValue = ref(documentId);
+    const modelValue = ref("# 标题");
+    const displayValue = ref<string | undefined>("# 显示标题");
     const updates: string[] = [];
     const mermaidRequests: MermaidViewerRequest[] = [];
     const app = createApp({
@@ -205,15 +209,18 @@ function mountEditor(
                 h(MoraEditor, {
                     ref: handle,
                     documentId: documentIdValue.value,
-                    modelValue: "# 标题",
-                    displayValue: "# 显示标题",
+                    modelValue: modelValue.value,
+                    displayValue: displayValue.value,
                     mode: modeValue.value,
                     sourcePreview: previewValue.value,
                     readonly,
                     aiProvider,
                     onOpenMermaid: (request: MermaidViewerRequest) =>
                         mermaidRequests.push(request),
-                    "onUpdate:modelValue": (markdown: string) => updates.push(markdown),
+                    "onUpdate:modelValue": (markdown: string) => {
+                        updates.push(markdown);
+                        modelValue.value = markdown;
+                    },
                 });
         },
     });
@@ -222,6 +229,8 @@ function mountEditor(
     app.mount(host);
     return {
         documentId: documentIdValue,
+        modelValue,
+        displayValue,
         handle,
         host,
         mode: modeValue,
@@ -246,6 +255,163 @@ afterEach(() => {
 });
 
 describe("MoraEditor", () => {
+    it.each([
+        ["---\ntitle: 标题\n---\n", "\n# 正文"],
+        ["\uFEFF---\r\ntitle: 标题\r\n...\r\n", "\r\n# 正文"],
+        ["--- \ntitle: 标题\n--- \n", "# 正文"],
+        ["---\n---\n", "# 正文"],
+        ["\uFEFF", "# 正文"],
+    ])(
+        "preserves the exact metadata prefix while editing the body: %j",
+        async (prefix, body) => {
+            const editor = mountEditor("source", true);
+            cleanup = editor.unmount;
+            editor.modelValue.value = prefix + body;
+            editor.displayValue.value = undefined;
+            await nextTick();
+
+            const richEditors = editor.host.querySelectorAll(".milkdown-editor-stub");
+            expect(
+                Array.from(richEditors, (child) =>
+                    child.getAttribute("data-model-value"),
+                ),
+            ).toEqual([body, body]);
+            expect(
+                editor.host
+                    .querySelector(".source-editor-stub")
+                    ?.getAttribute("data-model-value"),
+            ).toBe(prefix + body);
+
+            editor.mode.value = "wysiwyg";
+            await nextTick();
+            childHandles.milkdown[0].emitUpdate("# 已编辑\n");
+            await nextTick();
+            expect(editor.updates).toEqual([prefix + "# 已编辑\n"]);
+            expect(
+                editor.host
+                    .querySelector(".source-editor-stub")
+                    ?.getAttribute("data-model-value"),
+            ).toBe(prefix + "# 已编辑\n");
+        },
+    );
+
+    it("projects display resources but restores metadata from the canonical source", async () => {
+        const editor = mountEditor("wysiwyg", false);
+        cleanup = editor.unmount;
+        editor.modelValue.value = "---\nimage: assets/a.png\n---\n![图](assets/a.png)";
+        editor.displayValue.value = "---\nimage: blob:display\n---\n![图](blob:display)";
+        await nextTick();
+
+        expect(
+            editor.host
+                .querySelector(".milkdown-editor-stub")
+                ?.getAttribute("data-model-value"),
+        ).toBe("![图](blob:display)");
+        childHandles.milkdown[0].emitUpdate("正文\n\n![图](blob:display)");
+        expect(editor.updates).toEqual([
+            "---\nimage: assets/a.png\n---\n正文\n\n![图](blob:display)",
+        ]);
+    });
+
+    it("uses frontmatter added, changed, or removed in source mode for the next body edit", async () => {
+        const editor = mountEditor("source", true);
+        cleanup = editor.unmount;
+        editor.displayValue.value = undefined;
+        await nextTick();
+
+        for (const prefix of [
+            "---\ntitle: 新增\n---\n",
+            "\uFEFF---\r\ntitle: 修改\r\n...\r\n",
+            "",
+        ]) {
+            editor.mode.value = "source";
+            await nextTick();
+            childHandles.source[0].emitUpdate(prefix + "# 源码正文");
+            await nextTick();
+            expect(editor.modelValue.value).toBe(prefix + "# 源码正文");
+            expect(
+                editor.host
+                    .querySelectorAll(".milkdown-editor-stub")[1]
+                    .getAttribute("data-model-value"),
+            ).toBe("# 源码正文");
+            editor.mode.value = "wysiwyg";
+            await nextTick();
+            childHandles.milkdown[0].emitUpdate("# 富文本正文");
+            await nextTick();
+            expect(editor.updates[editor.updates.length - 1]).toBe(
+                prefix + "# 富文本正文",
+            );
+        }
+    });
+
+    it("does not carry metadata across documents", async () => {
+        const editor = mountEditor("wysiwyg", false);
+        cleanup = editor.unmount;
+        editor.displayValue.value = undefined;
+        editor.modelValue.value = "---\ntitle: A\n---\n# A";
+        await nextTick();
+
+        editor.documentId.value = "doc-b";
+        editor.modelValue.value = "\uFEFF---\ntitle: B\n---\n# B";
+        await nextTick();
+        childHandles.milkdown[0].emitUpdate("# 修改 B");
+        expect(editor.updates[editor.updates.length - 1]).toBe(
+            "\uFEFF---\ntitle: B\n---\n# 修改 B",
+        );
+
+        editor.documentId.value = "doc-c";
+        editor.modelValue.value = "# C";
+        await nextTick();
+        childHandles.milkdown[0].emitUpdate("# 修改 C");
+        expect(editor.updates[editor.updates.length - 1]).toBe("# 修改 C");
+    });
+
+    it.each([
+        "# 普通正文\n\n---\n分隔线",
+        "---\ntitle: 未闭合",
+        "---\ntitle: 值\n---不是闭合",
+        "\n---\ntitle: 非头部\n---\n正文",
+    ])(
+        "keeps incomplete headers and ordinary Markdown in the body: %j",
+        async (markdown) => {
+            const editor = mountEditor("wysiwyg", false);
+            cleanup = editor.unmount;
+            editor.displayValue.value = undefined;
+            editor.modelValue.value = markdown;
+            await nextTick();
+
+            expect(
+                editor.host
+                    .querySelector(".milkdown-editor-stub")
+                    ?.getAttribute("data-model-value"),
+            ).toBe(markdown);
+            childHandles.milkdown[0].emitUpdate("# 修改");
+            expect(editor.updates).toEqual(["# 修改"]);
+        },
+    );
+
+    it("separates new body text from a header whose closing delimiter is at EOF", async () => {
+        const editor = mountEditor("wysiwyg", false);
+        cleanup = editor.unmount;
+        editor.displayValue.value = undefined;
+        editor.modelValue.value = "---\r\ntitle: 仅头部\r\n---";
+        await nextTick();
+
+        expect(
+            editor.host
+                .querySelector(".milkdown-editor-stub")
+                ?.getAttribute("data-model-value"),
+        ).toBe("");
+        childHandles.milkdown[0].emitUpdate("");
+        expect(editor.updates[editor.updates.length - 1]).toBe(
+            "---\r\ntitle: 仅头部\r\n---",
+        );
+        childHandles.milkdown[0].emitUpdate("# 新正文");
+        expect(editor.updates[editor.updates.length - 1]).toBe(
+            "---\r\ntitle: 仅头部\r\n---\r\n# 新正文",
+        );
+    });
+
     it("renders one editable Milkdown editor in WYSIWYG mode", async () => {
         const aiProvider = vi.fn() as unknown as AIProvider;
         const editor = mountEditor("wysiwyg", false, false, aiProvider);

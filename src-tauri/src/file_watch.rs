@@ -1,5 +1,5 @@
 use crate::workspace::{disk_revision, DiskRevision};
-use crate::{normalize_path, path_identity, validate_mdx_path};
+use crate::{normalize_path, path_identity};
 use notify::{Config, Event, EventKind, PollWatcher, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -1109,7 +1109,7 @@ async fn stabilize_path(
             .is_some_and(|(first, second)| {
                 first.revision == second.revision && first.fingerprint == second.fingerprint
             })
-            && validate_mdx_path(path).is_ok()
+            && crate::markdown_file::validate_document(path).is_ok()
         {
             let snapshot = second.expect("stable snapshot was present");
             return Some(StabilityOutcome {
@@ -1149,6 +1149,15 @@ mod tests {
     use super::*;
     use std::sync::atomic::AtomicBool;
     use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn stable_plain_markdown_is_valid_for_external_reload() {
+        let root = tempdir().unwrap();
+        let path = root.path().join("note.markdown");
+        std::fs::write(&path, "---\ntitle: Kept\n---\n# Body").unwrap();
+        let (_sender, receiver) = watch::channel(false);
+        assert!(stabilize_path(&path, receiver).await.unwrap().valid);
+    }
 
     #[derive(Clone, Default)]
     struct FakeWatcherFactory {

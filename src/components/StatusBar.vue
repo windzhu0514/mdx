@@ -6,7 +6,6 @@ const props = defineProps<{
     statusMessage: string;
     progressMessage?: string;
     persistentMessage?: string;
-    modeLabel: string;
     wordCount: number;
     workspaceVisible: boolean;
     outlineVisible: boolean;
@@ -82,7 +81,6 @@ defineExpose({ isDetailsOpen: () => messageDialog.value?.open ?? false });
             </div>
         </div>
         <div class="status-right">
-            <div class="status-cell">{{ modeLabel }}</div>
             <div class="status-cell">{{ wordCount }} 字</div>
         </div>
         <button

@@ -3,19 +3,11 @@ use crate::resource_import::{
     MAX_TOTAL_IMPORTED_RESOURCE_BYTES,
 };
 use base64::{engine::general_purpose, Engine as _};
-use regex::Regex;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::io::Read;
 use std::path::{Component, Path, PathBuf};
-use std::sync::LazyLock;
-
-static MARKDOWN_DESTINATION: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(!?\[[^\]]*\]\()(?P<url><[^>]+>|[^\s)]+)(?:\s+["'][^"']*["'])?(\))"#).unwrap()
-});
-static HTML_DESTINATION: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"\b(?:src|href)=(?P<quote>["'])(?P<url>[^"']+)(?:["'])"#).unwrap()
-});
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -33,11 +25,12 @@ pub struct MarkdownResourcePlan {
     pub rewritten_content: String,
     pub resources: Vec<ImportedResource>,
     pub items: Vec<MarkdownResourceItem>,
+    pub resource_rewrites: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Debug)]
 struct Reference {
-    range: std::ops::Range<usize>,
+    range: Option<std::ops::Range<usize>>,
     original: String,
     resolution: String,
     wrapped: bool,
@@ -52,22 +45,117 @@ pub fn prepare_markdown_resources(
     source_path: &Path,
     markdown: &str,
 ) -> Result<MarkdownResourcePlan, String> {
-    let references = discover_references(markdown);
+    prepare_markdown_resources_with_pending(source_path, markdown, &[])
+}
+
+pub(crate) fn prepare_markdown_resources_with_pending(
+    source_path: &Path,
+    markdown: &str,
+    pending: &[crate::ResourceData],
+) -> Result<MarkdownResourcePlan, String> {
+    let mut references = discover_references(markdown);
+    references.extend(
+        crate::markdown_file::stored_resource_references(source_path)
+            .into_iter()
+            .map(|original| Reference {
+                range: None,
+                resolution: original.clone(),
+                original,
+                wrapped: false,
+            }),
+    );
     let source_directory = source_path.parent().unwrap_or_else(|| Path::new(""));
     let mut outcomes = HashMap::<PathBuf, SourceOutcome>::new();
     let mut resources = Vec::new();
     let mut items = Vec::new();
     let mut allocated_names = HashSet::new();
+    let mut pending_targets = HashMap::new();
     let mut total_bytes = 0_u64;
+    for resource in pending {
+        let estimated = (resource.base64.len() as u64 / 4 * 3).saturating_sub(
+            resource
+                .base64
+                .bytes()
+                .rev()
+                .take_while(|byte| *byte == b'=')
+                .count() as u64,
+        );
+        crate::markdown_file::checked_resource_total(total_bytes, estimated)?;
+        let bytes = crate::markdown_file::pending_bytes(resource)?;
+        total_bytes = total_bytes.saturating_add(bytes.len() as u64);
+        if total_bytes > MAX_TOTAL_IMPORTED_RESOURCE_BYTES {
+            return Err("资源总大小超过导入限制。".to_string());
+        }
+        let is_image = matches!(resource.kind, crate::ResourceKind::Asset);
+        let target = if crate::validate_new_resource_name(&resource.name).is_ok()
+            && resource
+                .name
+                .rsplit('/')
+                .next()
+                .is_some_and(|name| safe_resource_file_name(name) == name)
+            && allocated_names.insert(resource.name.clone())
+        {
+            resource.name.clone()
+        } else {
+            allocate_target_path(&resource.original_name, is_image, &mut allocated_names)
+        };
+        pending_targets.insert(resource.name.clone(), target.clone());
+        resources.push(ImportedResource {
+            name: target,
+            original_name: resource.original_name.clone(),
+            mime_type: resource.mime_type.clone(),
+            size: bytes.len() as u64,
+            kind: if is_image { "asset" } else { "attachment" }.to_string(),
+            base64: resource.base64.clone(),
+        });
+    }
+    let pending_paths: HashMap<PathBuf, &String> = pending_targets
+        .keys()
+        .filter_map(|reference| {
+            local_reference_path(source_path, reference)
+                .ok()
+                .flatten()
+                .map(|path| (normalize_source_path(&path), reference))
+        })
+        .collect();
     let mut replacements = Vec::new();
+    let mut resource_rewrites = std::collections::BTreeMap::new();
 
     for reference in references {
-        if is_external_reference(&reference.resolution) {
+        let pending_key = pending_targets
+            .get_key_value(&reference.resolution)
+            .map(|(key, _)| key)
+            .or_else(|| {
+                local_reference_path(source_path, &reference.resolution)
+                    .ok()
+                    .flatten()
+                    .and_then(|path| pending_paths.get(&normalize_source_path(&path)).copied())
+            });
+        if let Some(target) = pending_key.and_then(|key| pending_targets.get(key)) {
+            let replacement = crate::export::serialize_destination(&format!(
+                "{target}{}",
+                reference_suffix(&reference.resolution)
+            ));
+            if let Some(range) = reference.range.clone() {
+                replacements.push((range, replacement.clone()));
+            }
+            resource_rewrites.insert(reference.original.clone(), replacement);
+            items.push(MarkdownResourceItem {
+                original_reference: reference.original,
+                resolved_path: None,
+                status: "ready".to_string(),
+                target_path: Some(target.clone()),
+                message: None,
+            });
             continue;
         }
-
-        let normalized =
-            normalize_source_path(&resolve_local_path(source_directory, &reference.resolution));
+        let normalized = match local_reference_path(source_path, &reference.resolution) {
+            Ok(Some(path)) => normalize_source_path(&path),
+            Ok(None) => continue,
+            Err(_) => {
+                normalize_source_path(&resolve_local_path(source_directory, &reference.resolution))
+            }
+        };
         if !outcomes.contains_key(&normalized) {
             let (outcome, item, resource) = inspect_source(
                 &normalized,
@@ -86,16 +174,29 @@ pub fn prepare_markdown_resources(
             .get(&normalized)
             .and_then(|outcome| outcome.target_path.as_ref())
         {
+            let target_path = crate::export::serialize_destination(&format!(
+                "{}{}",
+                target_path,
+                reference_suffix(&reference.resolution)
+            ));
             let replacement = if reference.wrapped {
                 format!("<{target_path}>")
             } else {
-                target_path.clone()
+                target_path
             };
-            replacements.push((reference.range, replacement));
+            if let Some(range) = reference.range {
+                replacements.push((range, replacement.clone()));
+            }
+            resource_rewrites.insert(reference.original, replacement);
         }
     }
 
     replacements.sort_by(|left, right| right.0.start.cmp(&left.0.start));
+    resource_rewrites.extend(
+        pending_targets
+            .iter()
+            .map(|(original, target)| (original.clone(), target.clone())),
+    );
     let mut rewritten_content = markdown.to_string();
     for (range, replacement) in replacements {
         rewritten_content.replace_range(range, &replacement);
@@ -105,35 +206,20 @@ pub fn prepare_markdown_resources(
         rewritten_content,
         resources,
         items,
+        resource_rewrites,
     })
 }
 
 fn discover_references(markdown: &str) -> Vec<Reference> {
-    let mut references = Vec::new();
-    for captures in MARKDOWN_DESTINATION.captures_iter(markdown) {
-        push_reference(&mut references, captures.name("url").unwrap());
-    }
-    for captures in HTML_DESTINATION.captures_iter(markdown) {
-        push_reference(&mut references, captures.name("url").unwrap());
-    }
-    references.sort_by_key(|reference| reference.range.start);
-    references
-}
-
-fn push_reference(references: &mut Vec<Reference>, matched: regex::Match<'_>) {
-    let original = matched.as_str().to_string();
-    let wrapped = original.starts_with('<') && original.ends_with('>');
-    let resolution = if wrapped {
-        original[1..original.len() - 1].to_string()
-    } else {
-        original.clone()
-    };
-    references.push(Reference {
-        range: matched.range(),
-        original,
-        resolution,
-        wrapped,
-    });
+    crate::export::resource_references(markdown)
+        .into_iter()
+        .map(|reference| Reference {
+            original: markdown[reference.range.clone()].to_string(),
+            range: Some(reference.range),
+            resolution: reference.destination,
+            wrapped: false,
+        })
+        .collect()
 }
 
 fn is_external_reference(reference: &str) -> bool {
@@ -161,7 +247,58 @@ fn resolve_local_path(source_directory: &Path, reference: &str) -> PathBuf {
     }
 }
 
-fn normalize_source_path(path: &Path) -> PathBuf {
+pub(crate) fn reference_suffix(reference: &str) -> &str {
+    let index = reference.find(['?', '#']).unwrap_or(reference.len());
+    &reference[index..]
+}
+
+pub(crate) fn local_reference_path(
+    source_path: &Path,
+    reference: &str,
+) -> Result<Option<PathBuf>, String> {
+    if reference.starts_with('#') || reference.starts_with("//") {
+        return Ok(None);
+    }
+    if reference.starts_with("file:") {
+        return url::Url::parse(reference)
+            .map_err(|error| error.to_string())?
+            .to_file_path()
+            .map(Some)
+            .map_err(|_| "本地文件 URL 无效。".to_string());
+    }
+    if is_external_reference(reference) {
+        return Ok(None);
+    }
+    let suffix = reference_suffix(reference);
+    let reference = &reference[..reference.len() - suffix.len()];
+    let bytes = reference.as_bytes();
+    let mut decoded = Vec::new();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            if let (Some(high), Some(low)) = (
+                (bytes[index + 1] as char).to_digit(16),
+                (bytes[index + 2] as char).to_digit(16),
+            ) {
+                decoded.push((high * 16 + low) as u8);
+                index += 3;
+                continue;
+            }
+        }
+        decoded.push(bytes[index]);
+        index += 1;
+    }
+    let decoded = String::from_utf8(decoded).map_err(|_| "资源路径不是有效 UTF-8。".to_string())?;
+    if decoded.contains('\0') {
+        return Err("资源路径包含无效字符。".to_string());
+    }
+    Ok(Some(resolve_local_path(
+        source_path.parent().unwrap_or_else(|| Path::new("")),
+        &decoded,
+    )))
+}
+
+pub(crate) fn normalize_source_path(path: &Path) -> PathBuf {
     fs::canonicalize(path).unwrap_or_else(|_| lexical_normalize(path))
 }
 
@@ -247,7 +384,13 @@ fn inspect_source(
     let mime_type = infer_mime_type(&original_name).to_string();
     let is_image = mime_type.starts_with("image/");
     let target_path = allocate_target_path(&original_name, is_image, allocated_names);
-    let bytes = match fs::read(source_path) {
+    let limit = MAX_IMPORTED_RESOURCE_BYTES
+        .min(MAX_TOTAL_IMPORTED_RESOURCE_BYTES.saturating_sub(*total_bytes));
+    let bytes = match fs::File::open(source_path).and_then(|file| {
+        let mut bytes = Vec::new();
+        file.take(limit + 1).read_to_end(&mut bytes)?;
+        Ok(bytes)
+    }) {
         Ok(bytes) => bytes,
         Err(_) => {
             return unresolved_outcome(
@@ -258,7 +401,17 @@ fn inspect_source(
             )
         }
     };
-    *total_bytes += metadata.len();
+    if bytes.len() as u64 > MAX_IMPORTED_RESOURCE_BYTES
+        || total_bytes.saturating_add(bytes.len() as u64) > MAX_TOTAL_IMPORTED_RESOURCE_BYTES
+    {
+        return unresolved_outcome(
+            original_reference,
+            &resolved_path,
+            "oversized",
+            "引用的本地资源超过导入限制。",
+        );
+    }
+    *total_bytes += bytes.len() as u64;
 
     let resource = ImportedResource {
         name: target_path.clone(),
@@ -336,4 +489,113 @@ fn allocate_target_path(
         }
     }
     unreachable!("u32 suffixes are finite but resource naming must not exhaust them")
+}
+
+#[cfg(test)]
+mod precise_reference_tests {
+    use super::*;
+    #[test]
+    fn references_support_encoded_spaces_fragments_html_and_preserve_yaml() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("a b.png"), b"image").unwrap();
+        let content = "\u{feff}---\r\nexample: '![yaml](missing.png)'\r\n---\r\n![image](a%20b.png#section)\n<img SRC = \"a%20b.png\">\n\n[other]: <a b.png>\n";
+        let plan = prepare_markdown_resources(&root.path().join("note.md"), content).unwrap();
+        assert_eq!(plan.resources.len(), 1);
+        assert!(plan
+            .rewritten_content
+            .starts_with("\u{feff}---\r\nexample: '![yaml](missing.png)'\r\n---\r\n"));
+        assert!(plan.rewritten_content.contains("assets/a-b.png#section"));
+        assert!(plan.rewritten_content.contains("SRC = \"assets/a-b.png\""));
+        assert!(plan.rewritten_content.contains("[other]: <assets/a-b.png>"));
+        assert_eq!(plan.resource_rewrites.len(), 3);
+    }
+    #[test]
+    fn pending_resources_override_only_their_own_reference_and_survive_without_reference() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("assets")).unwrap();
+        fs::write(root.path().join("assets/image.png"), b"disk").unwrap();
+        let pending = crate::ResourceData {
+            name: "note_files/assets/image.png".to_string(),
+            original_name: "image.png".to_string(),
+            mime_type: "image/png".to_string(),
+            size: 7,
+            kind: crate::ResourceKind::Asset,
+            base64: general_purpose::STANDARD.encode(b"pending"),
+        };
+        let attachment = crate::ResourceData {
+            name: "note_files/attachments/manual.pdf".to_string(),
+            original_name: "manual.pdf".to_string(),
+            mime_type: "application/pdf".to_string(),
+            size: 3,
+            kind: crate::ResourceKind::Attachment,
+            base64: general_purpose::STANDARD.encode(b"pdf"),
+        };
+        let plan = prepare_markdown_resources_with_pending(
+            &root.path().join("note.md"),
+            "![pending](note_files/assets/image.png) ![disk](assets/image.png)",
+            &[pending, attachment],
+        )
+        .unwrap();
+        assert_eq!(plan.resources.len(), 3);
+        let rewritten_pending = &plan.resource_rewrites["note_files/assets/image.png"];
+        let rewritten_disk = &plan.resource_rewrites["assets/image.png"];
+        assert_ne!(rewritten_pending, rewritten_disk);
+        assert_eq!(
+            plan.resources
+                .iter()
+                .find(|resource| &resource.name == rewritten_pending)
+                .unwrap()
+                .base64,
+            general_purpose::STANDARD.encode(b"pending")
+        );
+        assert!(plan
+            .resource_rewrites
+            .contains_key("note_files/attachments/manual.pdf"));
+    }
+    #[test]
+    fn file_urls_and_pending_fragment_references_are_packaged() {
+        let root = tempfile::tempdir().unwrap();
+        let file = root.path().join("local image.png");
+        fs::write(&file, b"image").unwrap();
+        let url = url::Url::from_file_path(&file).unwrap();
+        let pending = crate::ResourceData {
+            name: "attachments/manual.pdf".to_string(),
+            original_name: "manual.pdf".to_string(),
+            mime_type: "application/pdf".to_string(),
+            size: 3,
+            kind: crate::ResourceKind::Attachment,
+            base64: general_purpose::STANDARD.encode(b"pdf"),
+        };
+        let content = format!("![file]({url}) [manual](attachments/manual.pdf#page=2)");
+        let plan = prepare_markdown_resources_with_pending(
+            &root.path().join("note.md"),
+            &content,
+            &[pending],
+        )
+        .unwrap();
+        assert_eq!(plan.resources.len(), 2);
+        assert!(plan.items.iter().all(|item| item.status == "ready"));
+        assert!(plan
+            .rewritten_content
+            .contains("![file](assets/local-image.png)"));
+        assert!(plan
+            .rewritten_content
+            .contains("[manual](attachments/manual.pdf#page=2)"));
+        assert_eq!(
+            plan.resource_rewrites["attachments/manual.pdf#page=2"],
+            "attachments/manual.pdf#page=2"
+        );
+    }
+    #[test]
+    fn markdown_resources_ignore_code_and_find_reference_definitions() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("real.png"), b"real").unwrap();
+        fs::write(root.path().join("code.png"), b"code").unwrap();
+        let content = "![real][image]\n\n[image]: real.png\n\n`![code](code.png)`\n\n```md\n![code](code.png)\n```\n";
+        let plan = prepare_markdown_resources(&root.path().join("note.md"), content).unwrap();
+        assert_eq!(plan.resources.len(), 1);
+        assert_eq!(plan.resources[0].original_name, "real.png");
+        assert!(plan.rewritten_content.contains("[image]: assets/real.png"));
+        assert!(plan.rewritten_content.contains("`![code](code.png)`"));
+    }
 }

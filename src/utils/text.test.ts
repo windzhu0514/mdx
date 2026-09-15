@@ -38,6 +38,26 @@ describe("normalizeMarkdownHeadingText", () => {
 });
 
 describe("extractMarkdownHeadings", () => {
+    it("excludes YAML headings while preserving full-source offsets through BOM and CRLF", () => {
+        expect(
+            extractMarkdownHeadings(
+                "\uFEFF---\r\n# Metadata\r\n---\r\n# Body\r\n## Next",
+            ),
+        ).toEqual([
+            { level: 1, text: "Body", id: 23 },
+            { level: 2, text: "Next", id: 31 },
+        ]);
+        expect(extractMarkdownHeadings("\uFEFF# Body")).toEqual([
+            { level: 1, text: "Body", id: 1 },
+        ]);
+    });
+
+    it("keeps headings in an incomplete YAML-looking prefix", () => {
+        expect(extractMarkdownHeadings("---\n# Body")).toEqual([
+            { level: 1, text: "Body", id: 4 },
+        ]);
+    });
+
     it("recognizes ATX headings with up to three leading spaces while excluding four-space lines and fenced pseudo headings", () => {
         expect(
             extractMarkdownHeadings(

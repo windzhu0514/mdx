@@ -181,7 +181,9 @@ describe("WorkspaceSidebar", () => {
             expandedPaths: ["C:\\Root"],
         });
 
-        expect(sidebar.host.textContent).toContain("已打开文件");
+        expect(sidebar.host.querySelector("#open-documents-heading")?.textContent).toBe(
+            "文件",
+        );
         expect(sidebar.host.textContent).toContain("文件夹");
         expect(sidebar.host.textContent).toContain("outside.mdx");
         expect(sidebar.host.textContent).toContain("draft.md");
@@ -237,8 +239,15 @@ describe("WorkspaceSidebar", () => {
 
     it("shows the open-document empty state and keeps opening a folder available", () => {
         const sidebar = mountSidebar();
+        expect(sidebar.host.querySelector("#open-documents-heading")?.textContent).toBe(
+            "文件",
+        );
+        expect(sidebar.host.textContent).not.toContain("尚未打开文件夹");
 
-        expect(sidebar.host.textContent).toContain("没有打开文件");
+        expect(sidebar.host.textContent).not.toContain("没有打开文件");
+        expect(
+            sidebar.host.querySelector<HTMLButtonElement>('[aria-label="打开文件"]'),
+        ).not.toBeNull();
         expect(
             sidebar.host.querySelector<HTMLButtonElement>('[aria-label="打开文件夹"]'),
         ).not.toBeNull();

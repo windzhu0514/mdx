@@ -1,6 +1,9 @@
+use html5ever::tokenizer::{BufferQueue, Token, TokenSink, TokenSinkResult, Tokenizer};
 use pulldown_cmark::{Event, LinkType, Options, Parser, Tag, TagEnd};
 use regex::Regex;
 use serde_json::Value;
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::fs::{self, File};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -59,7 +62,47 @@ fn destination_start(content: &str, mut offset: usize, end: usize) -> usize {
     offset
 }
 
-fn html_resource_offsets(content: &str, ranges: &[Range<usize>], offsets: &mut Vec<usize>) {
+#[derive(Debug)]
+pub(crate) struct ResourceReference {
+    pub range: Range<usize>,
+    // Decoded once by the syntax parser. Local path resolution must never decode entities again.
+    pub destination: String,
+}
+
+#[derive(Default)]
+struct HtmlAttributes(RefCell<HashMap<String, String>>);
+
+impl TokenSink for HtmlAttributes {
+    type Handle = ();
+    fn process_token(&self, token: Token, _line: u64) -> TokenSinkResult<()> {
+        if let Token::TagToken(tag) = token {
+            for attribute in tag.attrs {
+                let name = attribute.name.local.to_string();
+                if matches!(name.as_str(), "src" | "href") {
+                    self.0
+                        .borrow_mut()
+                        .insert(name, attribute.value.to_string());
+                }
+            }
+        }
+        TokenSinkResult::Continue
+    }
+}
+
+fn html_attributes(tag: &str) -> HashMap<String, String> {
+    let input = BufferQueue::default();
+    input.push_back(tag.into());
+    let tokenizer = Tokenizer::new(HtmlAttributes::default(), Default::default());
+    let _ = tokenizer.feed(&input);
+    tokenizer.end();
+    tokenizer.sink.0.into_inner()
+}
+
+fn html_resource_offsets(
+    content: &str,
+    ranges: &[Range<usize>],
+    offsets: &mut Vec<ResourceReference>,
+) {
     let mut raw_text_tag: Option<String> = None;
     for range in ranges {
         for captures in HTML_TAG.captures_iter(&content[range.clone()]) {
@@ -78,6 +121,7 @@ fn html_resource_offsets(content: &str, ranges: &[Range<usize>], offsets: &mut V
             if closing {
                 continue;
             }
+            let mut decoded_attributes = html_attributes(captures.get(0).unwrap().as_str());
             let attributes = captures.name("attributes").unwrap();
             for attribute in HTML_ATTRIBUTE.captures_iter(attributes.as_str()) {
                 let name = attribute.name("name").unwrap().as_str();
@@ -88,9 +132,15 @@ fn html_resource_offsets(content: &str, ranges: &[Range<usize>], offsets: &mut V
                     .name("double")
                     .or_else(|| attribute.name("single"))
                     .or_else(|| attribute.name("bare"))
-                    .filter(|value| is_resource_destination(value.as_str()))
                 {
-                    offsets.push(range.start + attributes.start() + value.start());
+                    if let Some(destination) = decoded_attributes.remove(&name.to_ascii_lowercase())
+                    {
+                        offsets.push(ResourceReference {
+                            range: (range.start + attributes.start() + value.start())
+                                ..(range.start + attributes.start() + value.end()),
+                            destination,
+                        });
+                    }
                 }
             }
             let tag = tag.as_str().to_ascii_lowercase();
@@ -104,15 +154,38 @@ fn html_resource_offsets(content: &str, ranges: &[Range<usize>], offsets: &mut V
     }
 }
 
-fn rewrite_resource_destinations(content: &str, folder_name: &str) -> String {
+pub(crate) fn resource_destinations(content: &str) -> Vec<Range<usize>> {
+    resource_references(content)
+        .into_iter()
+        .map(|reference| reference.range)
+        .collect()
+}
+
+pub(crate) fn resource_references(content: &str) -> Vec<ResourceReference> {
+    let body = crate::document_export::markdown_body(content);
+    let offset = content.len() - body.len();
+    resource_destinations_in_body(body)
+        .into_iter()
+        .map(|reference| ResourceReference {
+            range: (reference.range.start + offset)..(reference.range.end + offset),
+            destination: reference.destination,
+        })
+        .collect()
+}
+
+pub(crate) fn reference_destination(markdown: &str, literal: &str) -> Option<String> {
+    resource_references(markdown)
+        .into_iter()
+        .find(|reference| &markdown[reference.range.clone()] == literal)
+        .map(|reference| reference.destination)
+}
+
+fn resource_destinations_in_body(content: &str) -> Vec<ResourceReference> {
     let options =
         Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
     let parser = Parser::new_ext(content, options);
     let mut offsets = Vec::new();
     for (_, definition) in parser.reference_definitions().iter() {
-        if !is_resource_destination(&definition.dest) {
-            continue;
-        }
         let source = &content[definition.span.clone()];
         let mut escaped = false;
         for (index, byte) in source.bytes().enumerate() {
@@ -121,17 +194,20 @@ fn rewrite_resource_destinations(content: &str, folder_name: &str) -> String {
             } else if byte == b'\\' {
                 escaped = true;
             } else if byte == b']' && source.as_bytes().get(index + 1) == Some(&b':') {
-                offsets.push(destination_start(
-                    content,
-                    definition.span.start + index + 2,
-                    definition.span.end,
+                offsets.push((
+                    destination_start(
+                        content,
+                        definition.span.start + index + 2,
+                        definition.span.end,
+                    ),
+                    definition.dest.to_string(),
                 ));
                 break;
             }
         }
     }
 
-    let mut links: Vec<(bool, usize)> = Vec::new();
+    let mut links: Vec<(Option<String>, usize)> = Vec::new();
     let mut html_ranges: Vec<Range<usize>> = Vec::new();
     for (event, range) in parser.into_offset_iter() {
         match event {
@@ -151,16 +227,19 @@ fn rewrite_resource_destinations(content: &str, folder_name: &str) -> String {
                     *label_end = (*label_end).max(range.end);
                 }
                 links.push((
-                    link_type == LinkType::Inline && is_resource_destination(&dest_url),
+                    (link_type == LinkType::Inline).then(|| dest_url.to_string()),
                     range.start,
                 ));
             }
             Event::End(TagEnd::Link | TagEnd::Image) => {
-                if let Some((true, label_end)) = links.pop() {
+                if let Some((Some(destination), label_end)) = links.pop() {
                     // Child offsets exclude the link syntax, so a `](` inside label code
                     // or a nested image cannot be mistaken for this destination.
                     if let Some(index) = content[label_end..range.end].find("](") {
-                        offsets.push(destination_start(content, label_end + index + 2, range.end));
+                        offsets.push((
+                            destination_start(content, label_end + index + 2, range.end),
+                            destination,
+                        ));
                     }
                 }
             }
@@ -181,31 +260,105 @@ fn rewrite_resource_destinations(content: &str, folder_name: &str) -> String {
             }
         }
     }
-    html_resource_offsets(content, &html_ranges, &mut offsets);
-    offsets.sort_unstable();
-    offsets.dedup();
 
-    let mut prefix = String::new();
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
-    for byte in folder_name.bytes() {
-        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
-            prefix.push(char::from(byte));
-        } else {
-            prefix.push('%');
-            prefix.push(char::from(HEX[(byte >> 4) as usize]));
-            prefix.push(char::from(HEX[(byte & 15) as usize]));
+    let mut ranges: Vec<ResourceReference> = offsets
+        .into_iter()
+        .map(|(start, destination)| {
+            let bytes = content.as_bytes();
+            let wrapped = start > 0 && bytes[start - 1] == b'<';
+            let mut end = start;
+            let mut depth = 0_u32;
+            while end < bytes.len() {
+                match bytes[end] {
+                    b'\\' if end + 1 < bytes.len() && bytes[end + 1].is_ascii_punctuation() => {
+                        end += 2;
+                        continue;
+                    }
+                    b'>' if wrapped => break,
+                    b'(' if !wrapped => depth += 1,
+                    b')' if !wrapped => {
+                        if depth == 0 {
+                            break;
+                        }
+                        depth -= 1;
+                    }
+                    byte if !wrapped && byte.is_ascii_whitespace() => break,
+                    _ => {}
+                }
+                end += 1;
+            }
+            ResourceReference {
+                range: start..end,
+                destination,
+            }
+        })
+        .collect();
+    html_resource_offsets(content, &html_ranges, &mut ranges);
+    ranges.sort_by_key(|reference| reference.range.start);
+    ranges.dedup_by(|left, right| left.range == right.range);
+    ranges
+}
+
+pub(crate) fn rewrite_destinations(
+    content: &str,
+    replacements: &std::collections::BTreeMap<String, String>,
+) -> String {
+    let mut rewritten = content.to_string();
+    for range in resource_destinations(content).into_iter().rev() {
+        if let Some(replacement) = replacements.get(&content[range.clone()]) {
+            rewritten.replace_range(range, replacement);
         }
     }
-    prefix.push('/');
-    let mut rewritten = String::with_capacity(content.len());
-    let mut previous = 0;
-    for offset in offsets {
-        rewritten.push_str(&content[previous..offset]);
-        rewritten.push_str(&prefix);
-        previous = offset;
-    }
-    rewritten.push_str(&content[previous..]);
     rewritten
+}
+
+// A decoded destination must be serialized before inserting it into either Markdown or HTML.
+// In particular, a literal "&copy;" from an already-decoded fragment must not decode a second time.
+pub(crate) fn serialize_destination(destination: &str) -> String {
+    let mut serialized = String::new();
+    for character in destination.chars() {
+        match character {
+            '&' => serialized.push_str("&amp;"),
+            '<' => serialized.push_str("&lt;"),
+            '>' => serialized.push_str("&gt;"),
+            '"' => serialized.push_str("&quot;"),
+            '\'' => serialized.push_str("&#39;"),
+            '(' => serialized.push_str("&#40;"),
+            ')' => serialized.push_str("&#41;"),
+            '\\' => serialized.push_str("&#92;"),
+            character if character.is_whitespace() => {
+                serialized.push_str(&format!("&#{};", character as u32))
+            }
+            character => serialized.push(character),
+        }
+    }
+    serialized
+}
+
+pub(crate) fn encode_destination(value: &str) -> String {
+    let mut encoded = String::new();
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~' | b'/') {
+            encoded.push(char::from(byte));
+        } else {
+            encoded.push('%');
+            encoded.push(char::from(HEX[(byte >> 4) as usize]));
+            encoded.push(char::from(HEX[(byte & 15) as usize]));
+        }
+    }
+    encoded
+}
+
+fn rewrite_resource_destinations(content: &str, folder_name: &str) -> String {
+    let prefix = format!("{}/", encode_destination(folder_name));
+    let replacements = resource_references(content)
+        .into_iter()
+        .filter(|reference| is_resource_destination(&reference.destination))
+        .map(|reference| content[reference.range].to_string())
+        .map(|value| (value.clone(), format!("{prefix}{value}")))
+        .collect();
+    rewrite_destinations(content, &replacements)
 }
 
 pub fn export_markdown_file(source: &Path, destination: &Path) -> Result<(), String> {

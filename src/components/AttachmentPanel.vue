@@ -8,6 +8,7 @@ const props = defineProps<{
     documentName: string;
     items: AttachmentListItem[];
     busyPath?: string | null;
+    format?: "markdown" | "mdx";
 }>();
 
 const emit = defineEmits<{
@@ -34,8 +35,8 @@ function resetLocalActions() {
 }
 
 watch(
-    () => props.open,
-    (open) => {
+    () => [props.open, props.format] as const,
+    ([open]) => {
         resetLocalActions();
         if (open) void nextTick(() => panel.value?.focus());
     },
@@ -55,6 +56,7 @@ function formatSize(bytes: number) {
 }
 
 function beginRename(item: AttachmentListItem) {
+    if (props.format === "markdown") return;
     deletingPath.value = null;
     renamingPath.value = item.path;
     renameValue.value = item.originalName;
@@ -75,6 +77,7 @@ function cancelRename() {
 }
 
 function submitRename(path: string) {
+    if (props.format === "markdown") return;
     const originalName = renameValue.value.trim();
     if (!originalName) {
         renameError.value = "文件名不能为空";
@@ -85,12 +88,13 @@ function submitRename(path: string) {
 }
 
 function beginDelete(item: AttachmentListItem) {
-    if (item.referenced) return;
+    if (props.format === "markdown" || item.referenced) return;
     cancelRename();
     deletingPath.value = item.path;
 }
 
 function confirmDelete(path: string) {
+    if (props.format === "markdown") return;
     emit("remove", path);
     deletingPath.value = null;
 }
@@ -143,6 +147,10 @@ function handleEscape() {
                     添加附件
                 </button>
             </div>
+
+            <p v-if="format === 'markdown'" class="attachment-summary">
+                外置资源请在文件夹中管理。
+            </p>
 
             <ul v-if="items.length" class="attachment-list">
                 <li
@@ -226,7 +234,7 @@ function handleEscape() {
                         </button>
                         <button
                             type="button"
-                            :disabled="busyPath === item.path"
+                            :disabled="format === 'markdown' || busyPath === item.path"
                             @click="beginRename(item)"
                         >
                             重命名
@@ -234,18 +242,27 @@ function handleEscape() {
                         <button
                             type="button"
                             class="danger"
-                            :disabled="item.referenced || busyPath === item.path"
+                            :disabled="
+                                format === 'markdown' ||
+                                item.referenced ||
+                                busyPath === item.path
+                            "
                             :title="
-                                item.referenced
-                                    ? '请先移除正文引用，再删除附件'
-                                    : '从当前文档删除附件'
+                                format === 'markdown'
+                                    ? '外置资源请在文件夹中管理'
+                                    : item.referenced
+                                      ? '请先移除正文引用，再删除附件'
+                                      : '从当前文档删除附件'
                             "
                             @click="beginDelete(item)"
                         >
                             删除
                         </button>
                     </div>
-                    <p v-if="item.referenced" class="attachment-reference-help">
+                    <p
+                        v-if="item.referenced && format !== 'markdown'"
+                        class="attachment-reference-help"
+                    >
                         请先移除正文引用，再删除附件。
                     </p>
                 </li>
@@ -253,7 +270,13 @@ function handleEscape() {
 
             <div v-else class="attachment-empty">
                 <strong>还没有附件</strong>
-                <p>添加的文件会封装在当前 .mdx 文档中。</p>
+                <p>
+                    {{
+                        format === "markdown"
+                            ? "添加的文件会保存到文档旁的资源文件夹，请与文档一起保留。"
+                            : "添加的文件会封装在当前 .mdx 文档中。"
+                    }}
+                </p>
                 <button type="button" @click="emit('add')">添加附件</button>
             </div>
         </section>

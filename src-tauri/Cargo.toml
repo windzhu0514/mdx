@@ -41,6 +41,8 @@ notify = "8.2.0"
 sha2 = "0.10.9"
 rmcp = { version = "3.1.4", default-features = false, features = ["server", "macros", "schemars", "transport-io"] }
 pulldown-cmark = "0.13.4"
+# Already locked transitively by Tauri; use its public HTML tokenizer for complete attribute entity semantics.
+html5ever = "0.38.0"
 docx-rs = "0.4.22"
 fontdb = "0.23.0"
 typst-as-lib = { version = "0.16.0", features = ["typst-kit-fonts", "typst-kit-embed-fonts"] }

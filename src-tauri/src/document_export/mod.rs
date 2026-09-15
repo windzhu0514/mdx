@@ -41,24 +41,50 @@ pub fn safe_write_bytes(target_path: &Path, bytes: &[u8]) -> Result<(), String> 
 pub(crate) fn safe_write_bytes_with_rename<F>(
     target_path: &Path,
     bytes: &[u8],
-    mut rename: F,
+    rename: F,
 ) -> Result<(), String>
 where
     F: FnMut(&Path, &Path) -> io::Result<()>,
 {
+    safe_write_bytes_using(target_path, bytes, rename, false)
+}
+
+pub(crate) fn safe_write_bytes_exclusive(target_path: &Path, bytes: &[u8]) -> Result<(), String> {
+    safe_write_bytes_exclusive_with_rename(target_path, bytes, |from, to| fs::rename(from, to))
+}
+
+pub(crate) fn safe_write_bytes_exclusive_with_rename<F>(target_path: &Path, bytes: &[u8], rename: F) -> Result<(), String>
+where F: FnMut(&Path, &Path) -> io::Result<()> {
+    safe_write_bytes_using(target_path, bytes, rename, true)
+}
+
+fn safe_write_bytes_using<F>(target_path: &Path, bytes: &[u8], mut rename: F, exclusive: bool) -> Result<(), String>
+where F: FnMut(&Path, &Path) -> io::Result<()> {
     validate_destination(target_path)?;
     let temporary_path = companion_path(target_path, ".tmp");
     let backup_path = companion_path(target_path, ".bak");
 
-    remove_existing_temporary(&temporary_path)?;
-    recover_interrupted_write(target_path, &backup_path, &mut rename)?;
-
-    if let Err(error) = write_temporary(&temporary_path, bytes) {
-        return Err(cleanup_temporary_error(
-            "写入导出临时文件失败",
-            error,
-            &temporary_path,
-        ));
+    if exclusive {
+        if fs::symlink_metadata(&backup_path).is_ok() {
+            return Err("目标旁存在备份文件，已保留该文件；请选择其他保存位置。".to_string());
+        }
+        // A failed exclusive create never gives us ownership, so never clean that path on error.
+        let mut temporary = fs::OpenOptions::new().write(true).create_new(true).open(&temporary_path)
+            .map_err(|error| format!("无法独占创建临时文件，已保留现有文件：{error}"))?;
+        if let Err(error) = temporary.write_all(bytes).and_then(|_| temporary.sync_all()) {
+            drop(temporary);
+            return Err(cleanup_temporary_error("写入临时文件失败", error, &temporary_path));
+        }
+        drop(temporary);
+        if fs::symlink_metadata(&backup_path).is_ok() {
+            return Err(cleanup_temporary_error("保存期间出现其他备份，已停止替换", io::Error::other("备份已存在"), &temporary_path));
+        }
+    } else {
+        remove_existing_temporary(&temporary_path)?;
+        recover_interrupted_write(target_path, &backup_path, &mut rename)?;
+        if let Err(error) = write_temporary(&temporary_path, bytes) {
+            return Err(cleanup_temporary_error("写入导出临时文件失败", error, &temporary_path));
+        }
     }
 
     if target_path.exists() {
@@ -315,6 +341,29 @@ struct DecodedResource {
     bytes: Vec<u8>,
 }
 
+/// Projects only the body; incomplete frontmatter remains ordinary Markdown.
+pub(crate) fn markdown_body(markdown: &str) -> &str {
+    let markdown = markdown.strip_prefix('\u{feff}').unwrap_or(markdown);
+    let mut lines = markdown.split_inclusive('\n');
+    let Some(opening) = lines.next() else {
+        return markdown;
+    };
+    if !opening.ends_with('\n') || opening.trim_end_matches(['\r', '\n', ' ', '\t']) != "---" {
+        return markdown;
+    }
+    let mut offset = opening.len();
+    for line in lines {
+        offset += line.len();
+        if matches!(
+            line.trim_end_matches(['\r', '\n', ' ', '\t']),
+            "---" | "..."
+        ) {
+            return &markdown[offset..];
+        }
+    }
+    markdown
+}
+
 pub fn parse_document(request: &ExportDocumentRequest) -> Result<DocumentModel, String> {
     let resources = decode_resources(&request.resources)?;
     let mut mermaid_images = mermaid_images(&request.mermaid_diagrams);
@@ -324,7 +373,7 @@ pub fn parse_document(request: &ExportDocumentRequest) -> Result<DocumentModel, 
     let options =
         Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
 
-    for event in Parser::new_ext(&request.markdown, options) {
+    for event in Parser::new_ext(markdown_body(&request.markdown), options) {
         match event {
             Event::Start(tag) => start_tag(tag, &mut block_stack, &mut inline_stack)?,
             Event::End(tag) => end_tag(
@@ -980,11 +1029,7 @@ fn finish_image(
     }
 
     let alt = inline_text(&alt);
-    let image = if destination.starts_with("assets/") {
-        asset_image(&destination, resources)?
-    } else {
-        None
-    };
+    let image = asset_image(&destination, resources)?;
     let inline_image = Inline::Image {
         alt: alt.clone(),
         path: destination.clone(),
@@ -1193,4 +1238,87 @@ fn inline_text(inlines: &[Inline]) -> String {
 fn attachment_reference(path: &str) -> String {
     let name = path.rsplit('/').next().unwrap_or(path);
     format!("附件：{name}")
+}
+
+#[cfg(test)]
+mod markdown_boundary_tests {
+    use super::*;
+
+    fn request(markdown: &str) -> ExportDocumentRequest {
+        ExportDocumentRequest {
+            destination_path: "unused.docx".to_string(),
+            title: "文档".to_string(),
+            markdown: markdown.to_string(),
+            resources: Vec::new(),
+            mermaid_diagrams: Vec::new(),
+            format: ExportFormat::Docx,
+        }
+    }
+
+    #[test]
+    fn omits_complete_yaml_and_bom_from_exported_body() {
+        for markdown in [
+            "---\ntitle: metadata\n---\n# 正文",
+            "\u{feff}---\r\ntitle: metadata\r\n...\r\n# 正文",
+            "---\n---\n# 正文",
+            "\u{feff}# 正文",
+        ] {
+            let model = parse_document(&request(markdown)).unwrap();
+            assert_eq!(
+                model.blocks,
+                vec![Block::Heading {
+                    level: 1,
+                    content: vec![Inline::Text("正文".to_string())]
+                }]
+            );
+        }
+        assert!(parse_document(&request("---\ntitle: only metadata\n---"))
+            .unwrap()
+            .blocks
+            .is_empty());
+    }
+
+    #[test]
+    fn preserves_incomplete_headers_and_body_separators() {
+        let incomplete = parse_document(&request("---\ntitle: incomplete")).unwrap();
+        assert_eq!(
+            incomplete.blocks,
+            vec![
+                Block::Rule,
+                Block::Paragraph(vec![Inline::Text("title: incomplete".to_string())])
+            ]
+        );
+        let body = "# 正文\n\n---\n\n其他内容\n\n---";
+        assert_eq!(parse_document(&request(body)).unwrap().blocks.len(), 4);
+    }
+
+    #[test]
+    fn exports_supplied_relative_images_without_loading_unprovided_resources() {
+        let bytes = vec![
+            b'G', b'I', b'F', b'8', b'9', b'a', 1, 0, 1, 0, 0x80, 0, 0, 0, 0, 0, 0xff, 0xff, 0xff,
+            0x2c, 0, 0, 0, 0, 1, 0, 1, 0, 0, 2, 2, 0x44, 0x01, 0, 0x3b,
+        ];
+        let mut input = request("![图](../images/a.gif)\n\n![缺失](images/missing.gif)\n\n![远程](https://example.com/a.gif)");
+        input.resources.push(ExportResource {
+            name: "../images/a.gif".to_string(),
+            original_name: "a.gif".to_string(),
+            mime_type: "image/gif".to_string(),
+            size: bytes.len() as u64,
+            kind: "asset".to_string(),
+            base64: general_purpose::STANDARD.encode(&bytes),
+        });
+        let model = parse_document(&input).unwrap();
+        let Block::Image {
+            path,
+            image: Some(image),
+            ..
+        } = &model.blocks[0]
+        else {
+            panic!("provided relative image must be embedded")
+        };
+        assert_eq!(path, "../images/a.gif");
+        assert_eq!(image.bytes, bytes);
+        assert!(matches!(model.blocks[1], Block::Image { image: None, .. }));
+        assert!(matches!(model.blocks[2], Block::Image { image: None, .. }));
+    }
 }

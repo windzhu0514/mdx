@@ -3545,6 +3545,7 @@ dependencies = [
  "eventsource-stream",
  "fontdb",
  "futures-util",
+ "html5ever",
  "keyring",
  "libc",
  "lopdf",

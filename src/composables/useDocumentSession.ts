@@ -2,7 +2,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { computed, ref, shallowRef } from "vue";
 
 import type {
-    ImportedMarkdown,
+    DocumentFormat,
+    MarkdownNote,
+    MarkdownSaveResult,
     MdxMetadata,
     MdxNote,
     ResourceSaveData,
@@ -25,12 +27,14 @@ import {
 } from "./useDraftRecovery";
 import { createResourceSession, type ResourceSession } from "./useResources";
 import { documentNameFromPath } from "../utils/text";
+import { rebaseMarkdownReferences, toDisplayMarkdown } from "../utils/resourcePaths";
+import { base64ToBlob } from "../utils/base64";
 
 export type OpenDocument = {
     id: string;
     path: string | null;
     pathIdentity: string | null;
-    sourceKind: "mdx" | "markdown-import" | "untitled";
+    sourceKind: "mdx" | "markdown" | "markdown-import" | "untitled";
     importSourcePath: string | null;
     displayName: string;
     content: string;
@@ -95,6 +99,37 @@ export function sameResources(left: ResourceSaveData[], right: ResourceSaveData[
     );
 }
 
+function rewriteResourceMetadata(
+    meta: MdxMetadata | null,
+    rewrites: Record<string, string>,
+    format: DocumentFormat,
+) {
+    if (!meta || Object.keys(rewrites).length === 0) return meta;
+    const rewriteResources = (resources: MdxMetadata["assets"]) =>
+        Array.from(
+            new Map(
+                resources.map((resource) => {
+                    const reference = rewrites[resource.path];
+                    const path =
+                        reference !== undefined && format === "mdx"
+                            ? decodeURIComponent(reference.split(/[?#]/u, 1)[0])
+                            : reference;
+                    const rewritten =
+                        path === undefined
+                            ? resource
+                            : { ...resource, path, storedName: baseName(path) };
+                    return [rewritten.path, rewritten] as const;
+                }),
+            ).values(),
+        );
+    return {
+        ...meta,
+        cover: rewrites[meta.cover] ?? meta.cover,
+        assets: rewriteResources(meta.assets),
+        attachments: rewriteResources(meta.attachments),
+    };
+}
+
 function sameStrings(left: string[], right: string[]) {
     return (
         left.length === right.length &&
@@ -143,6 +178,7 @@ function isWorkspaceSessionSnapshot(value: unknown): value is WorkspaceSessionSn
             documentIds.has(document.id) ||
             !isNullableString(document.path) ||
             (document.sourceKind !== "mdx" &&
+                document.sourceKind !== "markdown" &&
                 document.sourceKind !== "markdown-import" &&
                 document.sourceKind !== "untitled") ||
             !isNullableString(document.importSourcePath) ||
@@ -238,6 +274,9 @@ export function useDocumentSession(desktop: boolean) {
                     newResources: resourceSnapshot.newResources,
                     removedResources: resourceSnapshot.removedResources,
                     updatedAt: new Date().toISOString(),
+                    baseDiskRevision: runtime.diskRevision
+                        ? { ...runtime.diskRevision }
+                        : null,
                 };
             },
         );
@@ -358,7 +397,7 @@ export function useDocumentSession(desktop: boolean) {
         return true;
     }
 
-    function newDocument() {
+    function newDocument(format: DocumentFormat = "mdx") {
         const number = nextUntitledNumber++;
         const id = `document-${nextDocumentId++}`;
         return addDocument(
@@ -366,7 +405,7 @@ export function useDocumentSession(desktop: boolean) {
                 id,
                 path: null,
                 pathIdentity: null,
-                sourceKind: "untitled",
+                sourceKind: format === "markdown" ? "markdown" : "untitled",
                 importSourcePath: null,
                 displayName: `未命名文档 ${number}`,
                 content: "",
@@ -414,34 +453,21 @@ export function useDocumentSession(desktop: boolean) {
             return existing;
         }
 
-        const imported = await invoke<ImportedMarkdown>("import_markdown", {
-            path: resolved.path,
-        });
+        const note = await invoke<MarkdownNote>("open_markdown", { path: resolved.path });
         const runtime = sessionDocument({
             id: `document-${nextDocumentId++}`,
-            path: null,
+            path: note.path ?? resolved.path,
             pathIdentity: resolved.identity,
-            sourceKind: "markdown-import",
-            importSourcePath: resolved.path,
-            displayName: baseName(resolved.path),
-            content: imported.content,
-            meta: null,
-            dirty: true,
-            diskRevision: null,
+            sourceKind: "markdown",
+            importSourcePath: null,
+            displayName: baseName(note.path ?? resolved.path),
+            content: note.content,
+            meta: note.meta,
+            dirty: false,
+            diskRevision: note.diskRevision ?? (await readRevision(resolved.path)),
             conflict: false,
             unavailable: !resolved.available,
         });
-        if (imported.frontMatter) {
-            const created = await invoke<MdxNote>("create_mdx");
-            runtime.meta = {
-                ...created.meta,
-                title: imported.title,
-                author: imported.frontMatter.author,
-                summary: imported.frontMatter.summary,
-                tags: imported.frontMatter.tags,
-                category: imported.frontMatter.categories[0] ?? "",
-            };
-        }
         return addDocument(runtime);
     }
 
@@ -526,6 +552,7 @@ export function useDocumentSession(desktop: boolean) {
         const runtime = document(id);
         if (!runtime.path) throw { code: "SAVE_AS_REQUIRED", documentId: id };
         if (!options.overwrite) {
+            if (runtime.conflict) throw { code: "EXTERNAL_CONFLICT", documentId: id };
             const currentRevision = await readRevision(runtime.path);
             if (!revisionsEqual(runtime.diskRevision, currentRevision)) {
                 runtime.conflict = true;
@@ -536,30 +563,125 @@ export function useDocumentSession(desktop: boolean) {
         if (options.expectedLiveRevision !== undefined) {
             assertLiveRevision(id, options.expectedLiveRevision);
         }
+        return writeDocument(
+            runtime,
+            runtime.path,
+            runtime.sourceKind === "markdown" ? "markdown" : "mdx",
+            false,
+            options,
+        );
+    }
+
+    async function saveAs(
+        id: string,
+        path: string,
+        format?: DocumentFormat,
+        prepared?: {
+            content: string;
+            resources: ResourceSaveData[];
+            resourceRewrites: Record<string, string>;
+            baseContent?: string;
+            resourceRevision?: number;
+        },
+    ) {
+        requireDesktop();
+        const runtime = document(id);
+        const targetFormat =
+            format ??
+            (/\.(?:md|markdown)$/iu.test(path)
+                ? "markdown"
+                : /\.mdx$/iu.test(path)
+                  ? "mdx"
+                  : runtime.sourceKind === "markdown"
+                    ? "markdown"
+                    : "mdx");
+        const targetPath =
+            targetFormat === "mdx"
+                ? mdxTargetPath(path)
+                : /\.(?:md|markdown)$/iu.test(path)
+                  ? path
+                  : path + ".md";
+        const resolved = await resolve(targetPath);
+        const owner = documents.value.find(
+            (item) => item.id !== id && item.pathIdentity === resolved.identity,
+        );
+        if (owner) throw { code: "TARGET_ALREADY_OPEN", documentId: owner.id };
+        if (
+            resolved.identity === runtime.pathIdentity &&
+            targetFormat === runtime.sourceKind &&
+            !prepared
+        ) {
+            return save(id);
+        }
+        return writeDocument(runtime, resolved.path, targetFormat, true, {}, prepared);
+    }
+
+    async function writeDocument(
+        runtime: SessionDocument,
+        targetPath: string,
+        format: DocumentFormat,
+        saveAs: boolean,
+        options: { overwrite?: boolean } = {},
+        prepared?: {
+            content: string;
+            resources: ResourceSaveData[];
+            resourceRewrites: Record<string, string>;
+            baseContent?: string;
+            resourceRevision?: number;
+        },
+    ) {
+        const sourcePath = runtime.path;
+        const sourceFormat = runtime.sourceKind === "markdown" ? "markdown" : "mdx";
         const storageKey =
-            draftKeys.get(runtime.id) ?? draftKey(runtime.path, runtime.id);
-        const title = documentNameFromPath(runtime.path);
-        const requestedContent = runtime.resources.persistedMarkdown(runtime.content);
+            draftKeys.get(runtime.id) ??
+            draftKey(runtime.path ?? runtime.importSourcePath, runtime.id);
+        const title =
+            format === "markdown"
+                ? baseName(targetPath).replace(/\.(?:md|markdown)$/iu, "")
+                : documentNameFromPath(targetPath);
+        const expectedRevision =
+            format === "markdown" && saveAs
+                ? await readRevision(targetPath)
+                : runtime.diskRevision;
+        const requestedContent =
+            prepared?.baseContent ?? runtime.resources.persistedMarkdown(runtime.content);
         const requestedResources = runtime.resources.newResources();
+        const requestedResourceRevision = prepared?.resourceRevision;
         const requestedRemovedResources = runtime.resources.removedResources();
         const requestedMetadata = JSON.stringify(runtime.meta);
-        const saved = await invoke<MdxNote>("save_mdx", {
-            request: {
-                path: runtime.path,
-                title,
-                content: requestedContent,
-                meta: runtime.meta ? { ...runtime.meta, title } : null,
-                newAssets: requestedResources,
-                removedResources: requestedRemovedResources,
+        const projectedMetadata = rewriteResourceMetadata(
+            runtime.meta,
+            prepared?.resourceRewrites ?? {},
+            format,
+        );
+        const saved = await invoke<MdxNote | MarkdownSaveResult>(
+            format === "markdown" ? "save_markdown" : saveAs ? "save_mdx_as" : "save_mdx",
+            {
+                request: {
+                    path:
+                        format === "mdx" && sourceFormat === "markdown"
+                            ? null
+                            : sourcePath,
+                    title,
+                    content: prepared?.content ?? requestedContent,
+                    meta: projectedMetadata ? { ...projectedMetadata, title } : null,
+                    newAssets: prepared?.resources ?? requestedResources,
+                    removedResources: requestedRemovedResources,
+                    ...(format === "markdown"
+                        ? {
+                              sourceFormat,
+                              expectedRevision,
+                              overwrite: options.overwrite ?? false,
+                          }
+                        : {}),
+                },
+                ...(saveAs || format === "markdown" ? { path: targetPath } : {}),
             },
-        });
-
-        runtime.path = saved.path ?? runtime.path;
-        runtime.displayName = saved.title;
-        runtime.diskRevision = await readRevision(runtime.path);
-        runtime.conflict = false;
-        runtime.unavailable = false;
-        draftKeys.set(runtime.id, draftKey(runtime.path, runtime.id));
+        );
+        const savedIdentity = saveAs ? await resolve(saved.path ?? targetPath) : null;
+        const savedPath = savedIdentity?.path ?? saved.path ?? targetPath;
+        const revision =
+            "diskRevision" in saved ? saved.diskRevision : await readRevision(savedPath);
         const metadataChanged = JSON.stringify(runtime.meta) !== requestedMetadata;
         const changedWhileSaving =
             runtime.resources.persistedMarkdown(runtime.content) !== requestedContent ||
@@ -568,9 +690,63 @@ export function useDocumentSession(desktop: boolean) {
                 runtime.resources.removedResources(),
                 requestedRemovedResources,
             ) ||
+            (requestedResourceRevision !== undefined &&
+                runtime.resources.resourceRevision() !== requestedResourceRevision) ||
             metadataChanged;
+        const rewrites = {
+            ...prepared?.resourceRewrites,
+            ...("resourceRewrites" in saved ? saved.resourceRewrites : {}),
+        };
+        let currentContent = runtime.resources.persistedMarkdown(runtime.content);
+        if (
+            changedWhileSaving &&
+            saveAs &&
+            sourcePath &&
+            sourceFormat === "markdown" &&
+            workspacePathKey(sourcePath) !== workspacePathKey(savedPath)
+        ) {
+            currentContent = rebaseMarkdownReferences(
+                currentContent,
+                sourcePath,
+                new Set([
+                    ...Object.keys(rewrites),
+                    ...runtime.resources.newResources().map((resource) => resource.name),
+                ]),
+            );
+        }
+        runtime.resources.rewritePaths(rewrites);
+        // Prepared conversion resources become visible only after the write succeeds.
+        for (const resource of prepared?.resources ?? []) {
+            if (
+                runtime.resources.resource(resource.name) ||
+                runtime.resources.removedResources().includes(resource.name)
+            )
+                continue;
+            runtime.resources.registerLoaded({
+                ...resource,
+                path: resource.name,
+                objectUrl: URL.createObjectURL(
+                    base64ToBlob(resource.base64, resource.mimeType),
+                ),
+                isNew: false,
+            });
+        }
+        runtime.path = savedPath;
+        if (savedIdentity) runtime.pathIdentity = savedIdentity.identity;
+        runtime.sourceKind = format;
+        runtime.importSourcePath = null;
+        runtime.displayName = format === "markdown" ? baseName(savedPath) : saved.title;
+        runtime.diskRevision = revision;
+        runtime.conflict = false;
+        runtime.unavailable = false;
+        draftKeys.set(runtime.id, draftKey(runtime.path, runtime.id));
         if (!metadataChanged) runtime.meta = saved.meta;
+        else runtime.meta = rewriteResourceMetadata(runtime.meta, rewrites, format);
         if (changedWhileSaving) {
+            runtime.content = toDisplayMarkdown(
+                currentContent,
+                new Map(Object.entries(rewrites)),
+            );
             runtime.dirty = true;
             runtime.draft.schedule();
         } else {
@@ -579,76 +755,11 @@ export function useDocumentSession(desktop: boolean) {
             runtime.resources.markSaved();
             await runtime.draft.remove(storageKey);
         }
+        if (runtime.content !== requestedContent) touchLiveRevision(runtime);
+        if ("warning" in saved && saved.warning)
+            warnings.value = [...warnings.value, saved.warning];
         documents.value = [...documents.value];
-        return runtime;
-    }
-
-    async function saveAs(id: string, path: string) {
-        requireDesktop();
-        const runtime = document(id);
-        const resolved = await resolve(mdxTargetPath(path));
-        const owner = documents.value.find(
-            (item) => item.id !== id && item.pathIdentity === resolved.identity,
-        );
-        if (owner) {
-            throw {
-                code: "TARGET_ALREADY_OPEN",
-                documentId: owner.id,
-            };
-        }
-
-        const previousDraftKey =
-            draftKeys.get(runtime.id) ??
-            draftKey(runtime.path ?? runtime.importSourcePath, runtime.id);
-        const title = documentNameFromPath(resolved.path);
-        const requestedContent = runtime.resources.persistedMarkdown(runtime.content);
-        const requestedResources = runtime.resources.newResources();
-        const requestedRemovedResources = runtime.resources.removedResources();
-        const requestedMetadata = JSON.stringify(runtime.meta);
-        const saved = await invoke<MdxNote>("save_mdx_as", {
-            request: {
-                path: runtime.path,
-                title,
-                content: requestedContent,
-                meta: runtime.meta ? { ...runtime.meta, title } : null,
-                newAssets: requestedResources,
-                removedResources: requestedRemovedResources,
-            },
-            path: resolved.path,
-        });
-
-        const savedIdentity = await resolve(saved.path ?? resolved.path);
-
-        runtime.path = savedIdentity.path;
-        runtime.pathIdentity = savedIdentity.identity;
-        runtime.sourceKind = "mdx";
-        runtime.importSourcePath = null;
-        runtime.displayName = saved.title;
-        runtime.diskRevision = await readRevision(runtime.path);
-        runtime.conflict = false;
-        runtime.unavailable = false;
-        draftKeys.set(runtime.id, draftKey(runtime.path, runtime.id));
-        const metadataChanged = JSON.stringify(runtime.meta) !== requestedMetadata;
-        const changedWhileSaving =
-            runtime.resources.persistedMarkdown(runtime.content) !== requestedContent ||
-            !sameResources(runtime.resources.newResources(), requestedResources) ||
-            !sameStrings(
-                runtime.resources.removedResources(),
-                requestedRemovedResources,
-            ) ||
-            metadataChanged;
-        if (!metadataChanged) runtime.meta = saved.meta;
-        if (changedWhileSaving) {
-            runtime.dirty = true;
-            runtime.draft.schedule();
-        } else {
-            runtime.content = runtime.resources.persistedMarkdown(saved.content);
-            runtime.dirty = false;
-            runtime.resources.markSaved();
-            await runtime.draft.remove(previousDraftKey);
-        }
-        documents.value = [...documents.value];
-        scheduleSessionWrite();
+        if (saveAs) scheduleSessionWrite();
         return runtime;
     }
 
@@ -777,7 +888,9 @@ export function useDocumentSession(desktop: boolean) {
         const restoredDocumentOwners = new Map<string, string>();
         const restoredIdAliases = new Map<string, string>();
         for (const saved of read.session.documents) {
-            let path = saved.path;
+            let path =
+                saved.path ??
+                (saved.sourceKind === "markdown-import" ? saved.importSourcePath : null);
             let pathIdentity: string | null = null;
             let displayName = saved.path
                 ? baseName(saved.path)
@@ -811,14 +924,16 @@ export function useDocumentSession(desktop: boolean) {
                         meta = note.meta;
                     } else if (
                         resolved.available &&
-                        saved.sourceKind === "markdown-import"
+                        (saved.sourceKind === "markdown-import" ||
+                            saved.sourceKind === "markdown")
                     ) {
-                        const imported = await invoke<ImportedMarkdown>(
-                            "import_markdown",
-                            { path: resolved.path },
-                        );
-                        displayName = baseName(resolved.path);
-                        content = imported.content;
+                        const note = await invoke<MarkdownNote>("open_markdown", {
+                            path: resolved.path,
+                        });
+                        path = note.path ?? resolved.path;
+                        displayName = baseName(note.path ?? resolved.path);
+                        content = note.content;
+                        meta = note.meta;
                     }
                 } else {
                     const untitledIdentity = `untitled:${saved.id}`;
@@ -839,12 +954,18 @@ export function useDocumentSession(desktop: boolean) {
                     id: saved.id,
                     path,
                     pathIdentity,
-                    sourceKind: saved.sourceKind,
-                    importSourcePath: saved.importSourcePath,
+                    sourceKind:
+                        saved.sourceKind === "markdown-import"
+                            ? "markdown"
+                            : saved.sourceKind,
+                    importSourcePath:
+                        saved.sourceKind === "markdown-import"
+                            ? null
+                            : saved.importSourcePath,
                     displayName,
                     content,
                     meta,
-                    dirty: saved.sourceKind !== "mdx",
+                    dirty: !path,
                     diskRevision: path && !unavailable ? await readRevision(path) : null,
                     conflict: false,
                     unavailable,
@@ -861,9 +982,32 @@ export function useDocumentSession(desktop: boolean) {
                     });
                     runtime.path = draft.path ?? runtime.path;
                     runtime.displayName = draft.title;
-                    runtime.content = runtime.resources.persistedMarkdown(draft.content);
+                    const originalHeader =
+                        saved.sourceKind === "markdown-import" &&
+                        !/^(?:\uFEFF)?---\r?\n/u.test(draft.content)
+                            ? (/^(?:\uFEFF)?---\r?\n[\s\S]*?\r?\n(?:---|\.\.\.)[^\S\r\n]*(?:\r?\n|$)/u.exec(
+                                  content,
+                              )?.[0] ?? "")
+                            : "";
+                    runtime.content =
+                        originalHeader +
+                        runtime.resources.persistedMarkdown(draft.content);
                     runtime.meta = draft.meta;
                     runtime.dirty = true;
+                    if (
+                        runtime.path &&
+                        (draft.baseDiskRevision !== undefined ||
+                            runtime.sourceKind === "markdown")
+                    ) {
+                        const currentRevision = runtime.diskRevision;
+                        // Keep the version the draft was edited against, never adopt newer disk data.
+                        runtime.diskRevision =
+                            draft.baseDiskRevision ??
+                            (runtime.content === content ? currentRevision : null);
+                        runtime.conflict =
+                            runtime.diskRevision === null ||
+                            !revisionsEqual(runtime.diskRevision, currentRevision);
+                    }
                 }
             } catch (error) {
                 warnings.value = [...warnings.value, String(error)];
@@ -928,13 +1072,17 @@ export function useDocumentSession(desktop: boolean) {
         if (!runtime.path) throw { code: "RELOAD_REQUIRES_PATH", documentId: id };
         const storageKey =
             draftKeys.get(runtime.id) ?? draftKey(runtime.path, runtime.id);
-        const note = await invoke<MdxNote>("open_mdx", { path: runtime.path });
+        const note = await invoke<MdxNote | MarkdownNote>(
+            runtime.sourceKind === "markdown" ? "open_markdown" : "open_mdx",
+            { path: runtime.path },
+        );
         const revision = await readRevision(runtime.path);
 
         await runtime.draft.remove(storageKey);
         runtime.resources.clear();
         runtime.path = note.path ?? runtime.path;
-        runtime.displayName = note.title;
+        runtime.displayName =
+            runtime.sourceKind === "markdown" ? baseName(runtime.path!) : note.title;
         runtime.content = note.content;
         runtime.meta = note.meta;
         runtime.dirty = false;
@@ -974,7 +1122,8 @@ export function useDocumentSession(desktop: boolean) {
             runtime.unavailable = false;
             if (revisionsEqual(runtime.diskRevision, result.revision)) continue;
             if (runtime.diskRevision === null) {
-                runtime.diskRevision = result.revision;
+                if (runtime.dirty) runtime.conflict = true;
+                else runtime.diskRevision = result.revision;
                 continue;
             }
             if (runtime.dirty) {
@@ -984,9 +1133,12 @@ export function useDocumentSession(desktop: boolean) {
 
             try {
                 const revisionBeforeReload = runtime.diskRevision;
-                const note = await invoke<MdxNote>("open_mdx", {
-                    path: runtime.path,
-                });
+                const note = await invoke<MdxNote | MarkdownNote>(
+                    runtime.sourceKind === "markdown" ? "open_markdown" : "open_mdx",
+                    {
+                        path: runtime.path,
+                    },
+                );
                 if (runtime.dirty) {
                     runtime.conflict = true;
                     continue;
@@ -998,7 +1150,10 @@ export function useDocumentSession(desktop: boolean) {
                 }
                 runtime.resources.clear();
                 runtime.path = note.path ?? runtime.path;
-                runtime.displayName = note.title;
+                runtime.displayName =
+                    runtime.sourceKind === "markdown"
+                        ? baseName(runtime.path!)
+                        : note.title;
                 runtime.content = note.content;
                 runtime.meta = note.meta;
                 runtime.diskRevision = result.revision;

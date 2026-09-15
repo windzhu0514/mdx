@@ -11,6 +11,7 @@ mod draft_store;
 mod export;
 pub mod file_watch;
 mod history;
+mod markdown_file;
 pub mod markdown_import;
 pub mod markdown_resources;
 mod note_index;
@@ -421,6 +422,9 @@ fn save_to_path_with_fingerprint(
         .lock()
         .map_err(|_| "文档保存锁不可用。".to_string())?;
     let target_path = ensure_mdx_extension(path);
+    if !target_path.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("mdx")) {
+        return Err("MDXNote 保存路径必须使用 .mdx 后缀；转换请使用另存为。".to_string());
+    }
     let source_path = request.path.as_deref().map(PathBuf::from);
     let removed_resources = validated_resource_paths(&request.removed_resources)?;
     let mut meta = request.meta.unwrap_or_default();
@@ -534,7 +538,7 @@ fn load_index_entry(path: &Path) -> Result<NoteIndexEntry, String> {
             source_revision: None,
         });
     }
-    if extension.eq_ignore_ascii_case("md") {
+    if extension.eq_ignore_ascii_case("md") || extension.eq_ignore_ascii_case("markdown") {
         let imported = markdown_import::import_markdown_file(path)?;
         let front_matter = imported.front_matter.unwrap_or_default();
         let modified = fs::metadata(path)
@@ -551,7 +555,7 @@ fn load_index_entry(path: &Path) -> Result<NoteIndexEntry, String> {
             source_revision: None,
         });
     }
-    Err("索引仅支持 .md 和 .mdx 文件。".to_string())
+    Err("索引仅支持 .md、.markdown 和 .mdx 文件。".to_string())
 }
 
 #[tauri::command]
@@ -573,17 +577,27 @@ fn import_resource(path: String) -> Result<ImportedResource, String> {
 fn prepare_markdown_resources_command(
     source_path: String,
     markdown: String,
+    new_assets: Option<Vec<ResourceData>>,
 ) -> Result<MarkdownResourcePlan, String> {
-    markdown_resources::prepare_markdown_resources(Path::new(&source_path), &markdown)
+    markdown_resources::prepare_markdown_resources_with_pending(Path::new(&source_path), &markdown, &new_assets.unwrap_or_default())
 }
 
 #[tauri::command]
-fn read_asset(path: String, asset_name: String) -> Result<String, String> {
-    validate_new_resource_name(&asset_name)?;
+fn read_asset(path: String, asset_name: String, markdown: Option<String>) -> Result<String, String> {
+    let destination = markdown_file::resource_reference_literal(Path::new(&path), &asset_name, markdown.as_deref());
+    let asset_name = archive_resource_name(&destination)?;
     let bytes = read_archive_resource_bytes(Path::new(&path), &asset_name)?;
 
     use base64::{engine::general_purpose, Engine as _};
     Ok(general_purpose::STANDARD.encode(&bytes))
+}
+
+fn archive_resource_name(reference: &str) -> Result<String, String> {
+    let relative = markdown_resources::local_reference_path(Path::new("content.md"), reference)?
+        .ok_or_else(|| "资源路径必须指向 MDX 内部资源。".to_string())?;
+    let name = relative.to_string_lossy().replace('\\', "/");
+    validate_new_resource_name(&name)?;
+    Ok(name)
 }
 
 fn validate_attachment_path(path: &str) -> Result<(), String> {
@@ -607,7 +621,6 @@ fn read_archive_resource_bytes(path: &Path, resource_path: &str) -> Result<Vec<u
 fn read_attachment_bytes(request: &AttachmentReadRequest) -> Result<Vec<u8>, String> {
     use base64::{engine::general_purpose, Engine as _};
 
-    validate_attachment_path(&request.resource_path)?;
     if let Some(encoded) = request.base64.as_deref() {
         let maximum_encoded_length = ((MAX_IMPORTED_RESOURCE_BYTES.saturating_add(2)) / 3) * 4 + 4;
         if encoded.len() as u64 > maximum_encoded_length {
@@ -622,12 +635,15 @@ fn read_attachment_bytes(request: &AttachmentReadRequest) -> Result<Vec<u8>, Str
         return Ok(bytes);
     }
 
+    // Attachment metadata contains an actual ZIP entry name, not a Markdown destination.
+    let resource_path = &request.resource_path;
+    validate_attachment_path(resource_path)?;
     let source_path = request
         .source_path
         .as_deref()
         .filter(|path| !path.trim().is_empty())
         .ok_or_else(|| "附件来源不可用，请先保存文档。".to_string())?;
-    read_archive_resource_bytes(Path::new(source_path), &request.resource_path)
+    read_archive_resource_bytes(Path::new(source_path), &resource_path)
 }
 
 fn attachment_cache_key(value: &str) -> String {
@@ -1233,6 +1249,9 @@ pub fn run() {
             agent_bridge::publish_agent_document_events,
             create_mdx,
             open_mdx,
+            markdown_file::open_markdown,
+            markdown_file::read_markdown_resource,
+            markdown_file::save_markdown,
             resolve_path,
             save_mdx,
             save_mdx_as,
@@ -1304,6 +1323,31 @@ mod tests {
         assert_eq!(meta.assets[0].path, "assets/a.png");
         assert_eq!(meta.assets[0].original_name, "a.png");
         assert!(meta.attachments.is_empty());
+    }
+
+    #[test]
+    fn archive_resource_reads_decode_entities_once_using_source_syntax() {
+        let root = tempfile::tempdir().unwrap(); let path = root.path().join("note.mdx");
+        let content = "![image](assets/literal&amp;copy;.png)\n\n<img src=\"assets/literal&amp;copy;.png\">\n";
+        let resource = ResourceData { name: "assets/literal&copy;.png".to_string(), original_name: "literal&copy;.png".to_string(), mime_type: "image/png".to_string(), size: 4, kind: ResourceKind::Asset, base64: "ZGF0YQ==".to_string() };
+        let bytes = build_mdx_archive(None, &MdxMetadata::default(), content, &[resource], &std::collections::BTreeSet::new()).unwrap(); fs::write(&path, bytes).unwrap();
+        assert_eq!(read_asset(path.to_string_lossy().to_string(), "assets/literal&amp;copy;.png".to_string(), None).unwrap(), "ZGF0YQ==");
+        assert_eq!(read_asset(path.to_string_lossy().to_string(), "assets/literal&copy;.png".to_string(), Some(String::new())).unwrap(), "ZGF0YQ==");
+    }
+
+    #[test]
+    fn archive_resource_reads_decode_destinations_without_allowing_traversal() {
+        let root = tempfile::tempdir().unwrap(); let path = root.path().join("note.mdx");
+        write_note_with_resources(&path, &[("assets/中文 image.png", b"image")]);
+        assert_eq!(read_asset(path.to_string_lossy().to_string(), "assets/%E4%B8%AD%E6%96%87%20image.png#view".to_string(), None).unwrap(), "aW1hZ2U=");
+        assert!(archive_resource_name("assets/%2e%2e/private.txt").is_err());
+    }
+    #[test]
+    fn mdx_save_rejects_markdown_destination_without_replacing_source() {
+        let root = tempfile::tempdir().unwrap(); let path = root.path().join("source.md"); fs::write(&path, "raw markdown").unwrap();
+        let request = MdxSaveRequest { path: None, title: "converted".to_string(), content: "changed".to_string(), meta: None, new_assets: Vec::new(), removed_resources: Vec::new() };
+        assert!(save_to_path(request, path.clone()).is_err());
+        assert_eq!(fs::read_to_string(path).unwrap(), "raw markdown");
     }
 
     #[test]
@@ -1588,7 +1632,7 @@ mod tests {
         for resource_path in ["attachments/../a.txt", "assets/a.png"] {
             let error = read_attachment_bytes(&attachment_request(
                 None,
-                Some("YQ=="),
+                None,
                 resource_path,
                 "a.txt",
             ))
@@ -1604,6 +1648,12 @@ mod tests {
         ))
         .unwrap_err();
         assert!(error.contains("来源"));
+    }
+
+    #[test]
+    fn markdown_attachment_bytes_allow_local_reference_without_reading_it() {
+        let request = attachment_request(None, Some("YQ=="), "../manual.pdf", "manual.pdf");
+        assert_eq!(read_attachment_bytes(&request).unwrap(), b"a");
     }
 
     #[test]
@@ -1785,6 +1835,14 @@ mod tests {
         assert_eq!(entry.summary, "本周目标");
         assert_eq!(entry.content, "正文内容");
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn index_loader_accepts_long_markdown_extension() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("note.MARKDOWN");
+        fs::write(&path, "# Indexed").unwrap();
+        assert_eq!(load_index_entry(&path).unwrap().content, "# Indexed");
     }
 
     #[test]

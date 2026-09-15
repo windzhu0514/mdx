@@ -265,7 +265,7 @@ summary:focus-visible,
 
 .toc-list li > button {
     width: 100%;
-    padding: 6px 12px;
+    padding: 3px 12px;
     border: 0;
     border-radius: 5px;
     background: transparent;
@@ -1406,27 +1406,6 @@ summary:focus-visible,
     margin: 2px 0 0;
     color: var(--color-text-muted);
     font-size: 11px;
-}
-
-.theme-picker-close {
-    display: grid;
-    width: 26px;
-    height: 26px;
-    flex: 0 0 26px;
-    place-items: center;
-    padding: 0;
-    border: 1px solid transparent;
-    border-radius: 6px;
-    background: transparent;
-    color: var(--color-text-muted);
-    font-size: 18px;
-    cursor: pointer;
-}
-
-.theme-picker-close:hover {
-    border-color: var(--color-border);
-    background: var(--color-bg-control-hover);
-    color: var(--color-text-main);
 }
 
 .theme-picker-track {

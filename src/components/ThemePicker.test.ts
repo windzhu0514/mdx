@@ -36,9 +36,8 @@ describe("ThemePicker", () => {
         expect(choices[2]?.getAttribute("aria-checked")).toBe("true");
     });
 
-    it("emits selection and closes from the upper-right button", async () => {
+    it("emits selection without a close button", async () => {
         const select = vi.fn();
-        const close = vi.fn();
         const host = document.createElement("div");
         document.body.append(host);
         const app = createApp({
@@ -46,19 +45,15 @@ describe("ThemePicker", () => {
                 h(ThemePicker, {
                     theme: "xuan-white",
                     onSelect: select,
-                    onClose: close,
                 }),
         });
         app.mount(host);
         cleanup = () => app.unmount();
 
         host.querySelector<HTMLButtonElement>('[data-theme-choice="wisteria"]')?.click();
-        host.querySelector<HTMLButtonElement>(
-            'button[aria-label="关闭主题选择"]',
-        )?.click();
+        expect(host.querySelector('[aria-label="关闭主题选择"]')).toBeNull();
         await nextTick();
 
         expect(select).toHaveBeenCalledWith("wisteria");
-        expect(close).toHaveBeenCalledOnce();
     });
 });

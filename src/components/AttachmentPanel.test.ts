@@ -31,7 +31,7 @@ function attachment(
     };
 }
 
-function mountPanel(items: AttachmentListItem[] = []) {
+function mountPanel(items: AttachmentListItem[] = [], format?: "markdown" | "mdx") {
     const host = document.createElement("div");
     document.body.append(host);
     const events = {
@@ -49,6 +49,7 @@ function mountPanel(items: AttachmentListItem[] = []) {
                 open: true,
                 documentName: "项目.mdx",
                 items,
+                format,
                 onClose: events.close,
                 onAdd: events.add,
                 onOpenAttachment: events.openAttachment,
@@ -161,6 +162,38 @@ describe("AttachmentPanel", () => {
 
         dialog.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
         expect(events.close).toHaveBeenCalledTimes(1);
+    });
+
+    it("explains external attachment storage for Markdown and keeps add available", () => {
+        const { host, events } = mountPanel([], "markdown");
+        expect(host.textContent).toContain("资源文件夹");
+        expect(host.textContent).not.toContain("封装");
+        button(host, "添加附件").click();
+        expect(events.add).toHaveBeenCalledTimes(1);
+    });
+
+    it("disables external Markdown rename and removal while preserving attachment access", async () => {
+        const path = "docs/shared.pdf";
+        const { host, events } = mountPanel([attachment(path, "shared.pdf")], "markdown");
+        const attachmentRow = row(host, path);
+        expect(host.textContent).toContain("外置资源请在文件夹中管理");
+        expect(button(attachmentRow, "重命名").disabled).toBe(true);
+        expect(button(attachmentRow, "删除").disabled).toBe(true);
+        button(attachmentRow, "重命名").click();
+        button(attachmentRow, "删除").click();
+        button(host, "添加附件").click();
+        button(attachmentRow, "插入引用").click();
+        button(attachmentRow, "打开").click();
+        button(attachmentRow, "另存为").click();
+        await nextTick();
+        expect(host.querySelector(".attachment-rename-input")).toBeNull();
+        expect(host.querySelector(".attachment-delete-confirm")).toBeNull();
+        expect(events.rename).not.toHaveBeenCalled();
+        expect(events.remove).not.toHaveBeenCalled();
+        expect(events.add).toHaveBeenCalledTimes(1);
+        expect(events.insertAttachment).toHaveBeenCalledWith(path);
+        expect(events.openAttachment).toHaveBeenCalledWith(path);
+        expect(events.saveAttachment).toHaveBeenCalledWith(path);
     });
 
     it("shows a useful empty state", () => {

@@ -683,7 +683,7 @@ describe("App 编辑器状态集成", () => {
                 path: "C:\\files\\late.pdf",
             }),
         );
-        findButton(host, "新建").click();
+        findButton(host, "新建 MDX").click();
         await vi.waitFor(() =>
             expect(host.querySelector(".menu-document-name")?.textContent).toContain(
                 "未命名文档 2",
@@ -721,7 +721,7 @@ describe("App 编辑器状态集成", () => {
         await nextTick();
         findButton(host, "添加附件").click();
         await vi.waitFor(() => expect(mocks.openDialog).toHaveBeenCalled());
-        findButton(host, "新建").click();
+        findButton(host, "新建 MDX").click();
         selection.resolve(["C:\\files\\late.pdf"]);
 
         await vi.waitFor(() => expect(host.textContent).toContain("附件添加已取消"));
@@ -950,7 +950,7 @@ describe("App 编辑器状态集成", () => {
 
         saveAttachmentButton.click();
         await vi.waitFor(() => expect(mocks.saveDialog).toHaveBeenCalled());
-        findButton(host, "新建").click();
+        findButton(host, "新建 MDX").click();
         destination.resolve("C:\\exports\\资料.zip");
 
         await vi.waitFor(() => expect(host.textContent).toContain("附件另存已取消"));
@@ -975,7 +975,7 @@ describe("App 编辑器状态集成", () => {
 
             mocks[editorKind]?.emitUpdate("A edit");
             await nextTick();
-            findButton(host, "新建").click();
+            findButton(host, "新建 MDX").click();
             await vi.waitFor(() =>
                 expect(openDocumentRow(host, "未命名文档 2")).not.toBeUndefined(),
             );
@@ -1041,7 +1041,7 @@ describe("App 编辑器状态集成", () => {
         mocks.milkdown?.emitUpdate(`![图](${displayUrl})`);
         await nextTick();
 
-        findButton(host, "新建").click();
+        findButton(host, "新建 MDX").click();
         await vi.waitFor(() =>
             expect(openDocumentRow(host, "未命名文档 2")).not.toBeUndefined(),
         );
@@ -1365,7 +1365,7 @@ describe("App 编辑器状态集成", () => {
                 path: "C:\\files\\late.png",
             }),
         );
-        findButton(host, "新建").click();
+        findButton(host, "新建 MDX").click();
         await vi.waitFor(() =>
             expect(host.querySelector(".menu-document-name")?.textContent).toContain(
                 "未命名文档 2",

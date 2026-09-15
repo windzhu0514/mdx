@@ -122,7 +122,7 @@ function frontendError(error: unknown, documentId?: string): AgentFrontendError 
         DOCUMENT_NOT_FOUND: "未找到指定文档。",
         DOCUMENT_NOT_OPEN: "指定文档当前未打开。",
         DOCUMENT_BUSY: "文档正在执行另一项保存操作。",
-        SAVE_AS_REQUIRED: "该文档必须先在 Mora 中另存为 .mdx。",
+        SAVE_AS_REQUIRED: "请先在 Mora 中保存文档并指定文件位置。",
         REVISION_CONFLICT: "文档已变化，请基于最新 liveRevision 重试。",
         DISK_CONFLICT: "磁盘文件已变化，请先在 Mora 中处理冲突。",
         INVALID_MDX: "文档不是有效的 MDXNote 文件。",

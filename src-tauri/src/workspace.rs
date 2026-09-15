@@ -254,7 +254,7 @@ fn should_skip(metadata: &fs::Metadata) -> bool {
 
 fn markdown_kind(extension: Option<&str>) -> Option<EntryKind> {
     match extension {
-        Some(value) if value.eq_ignore_ascii_case("md") => Some(EntryKind::Md),
+        Some(value) if value.eq_ignore_ascii_case("md") || value.eq_ignore_ascii_case("markdown") => Some(EntryKind::Md),
         Some(value) if value.eq_ignore_ascii_case("mdx") => Some(EntryKind::Mdx),
         _ => None,
     }
@@ -305,4 +305,18 @@ fn natural_compare(left: &str, right: &str) -> Ordering {
     }
 
     left.len().cmp(&right.len()).then_with(|| left.cmp(&right))
+}
+
+#[cfg(test)]
+mod markdown_extension_tests {
+    use super::*;
+    #[test]
+    fn folder_scan_includes_long_markdown_extension() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("note.MARKDOWN"), "body").unwrap();
+        let scanned = scan_folder(root.path(), 100).unwrap();
+        assert_eq!(scanned.entries.len(), 1);
+        assert_eq!(scanned.entries[0].kind, EntryKind::Md);
+        assert_eq!(markdown_file_paths(&scanned).len(), 1);
+    }
 }

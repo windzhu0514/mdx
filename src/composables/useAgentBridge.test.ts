@@ -103,6 +103,33 @@ describe("useAgentBridge", () => {
         vi.useRealTimers();
     });
 
+    it("asks for a save location without requiring an MDX conversion", async () => {
+        const session = useDocumentSession(false);
+        const runtime = session.newDocument();
+        const bridge = useAgentBridge({
+            desktop: true,
+            enabled: ref(true),
+            session,
+            saveDocument: vi.fn().mockRejectedValue({ code: "SAVE_AS_REQUIRED" }),
+            onMutation: vi.fn(),
+        });
+        await waitForBridge();
+        await request({
+            requestId: "req-location",
+            method: "saveDocument",
+            params: { documentId: runtime.id, baseLiveRevision: runtime.liveRevision },
+        });
+        expect(completeResponses()).toContainEqual(
+            expect.objectContaining({
+                error: expect.objectContaining({
+                    code: "SAVE_AS_REQUIRED",
+                    message: "请先在 Mora 中保存文档并指定文件位置。",
+                }),
+            }),
+        );
+        bridge.dispose();
+    });
+
     it("reads the current unsaved canonical document content", async () => {
         const session = useDocumentSession(false);
         const runtime = session.newDocument();

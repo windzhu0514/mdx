@@ -105,6 +105,21 @@ export function createResourceSession() {
         return loadGeneration;
     }
 
+    function rewritePaths(rewrites: Record<string, string>) {
+        if (Object.keys(rewrites).length === 0) return;
+        loadGeneration += 1;
+        const rewritten = Array.from(resources, ([path, resource]) => {
+            const target = rewrites[path] ?? path;
+            return [target, { ...resource, path: target }] as const;
+        });
+        resources.clear();
+        for (const [path, resource] of rewritten) resources.set(path, resource);
+        const deleted = Array.from(removed, (path) => rewrites[path] ?? path);
+        removed.clear();
+        for (const path of deleted) removed.add(path);
+        revision.value += 1;
+    }
+
     function markSaved() {
         for (const resource of resources.values()) {
             resource.isNew = false;
@@ -163,6 +178,7 @@ export function createResourceSession() {
         resourceRevision,
         generation,
         markSaved,
+        rewritePaths,
         snapshot,
         restore,
         clear,

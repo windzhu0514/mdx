@@ -67,7 +67,7 @@ export type WorkspaceFolder = FolderScan & {
 export type WorkspaceSessionDocument = {
     id: string;
     path: string | null;
-    sourceKind: "mdx" | "markdown-import" | "untitled";
+    sourceKind: "mdx" | "markdown" | "markdown-import" | "untitled";
     importSourcePath: string | null;
     draftKey: string;
 };
@@ -105,6 +105,7 @@ export type MarkdownResourceItem = {
 };
 
 export type MarkdownResourcePlan = {
+    resourceRewrites?: Record<string, string>;
     rewrittenContent: string;
     resources: ResourceSaveData[];
     items: MarkdownResourceItem[];

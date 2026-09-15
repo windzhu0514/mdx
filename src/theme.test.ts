@@ -46,7 +46,7 @@ describe("theme interaction variables", () => {
     it("maps workspace and search states through theme variables", () => {
         expect(styleCss).not.toMatch(/rgba\(59,\s*130,\s*246/iu);
         expect(styleCss).toMatch(
-            /\.workspace-tree-item\.active\s*\{[^}]*background:\s*var\(--color-primary-soft\)/su,
+            /\.workspace-tree-row\[aria-current="page"\]\s*\{[^}]*background:\s*var\(--color-primary-soft\)/su,
         );
         expect(styleCss).toMatch(
             /\.find-input:focus\s*\{[^}]*border-color:\s*var\(--color-focus-border\)[^}]*box-shadow:\s*0 0 0 3px var\(--color-focus-shadow\)/su,
