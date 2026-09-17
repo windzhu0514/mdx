@@ -8,7 +8,7 @@ MPL-2.0 source packages are available at the exact-version Source archive URLs l
 Standard-license supplements are identified separately from upstream license files.
 package-lock.json SHA-256: 41790b636f28b2bffce3b1c5a85bf6ee77e9c677fb2e0c23b570370d5e5bd07e
 Cargo.lock SHA-256: 82e6f2006c72edd2a3d58a4140c64dcbc2c6588c48a8a3e06b4e0a1d53bdfeda
-Supplement index SHA-256: e38719dbd9c75d6e1fd473452acf35724e637d8215c441ce9622a3d398375339
+Supplement index SHA-256: 6ea5bbefb244a3520383244127b2186b57c4326726515df543c375c39619a8f2
 
 font: Bundled public/fonts
 Declared license: OFL-1.1
