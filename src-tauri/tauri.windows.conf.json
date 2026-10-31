@@ -1,0 +1,14 @@
+{
+    "bundle": {
+        "fileAssociations": [],
+        "windows": {
+            "nsis": {
+                "installerHooks": "installer/file-open-choices.nsh"
+            },
+            "wix": {
+                "fragmentPaths": ["installer/file-open-choices.wxs"],
+                "componentRefs": ["MoraFileOpenChoices"]
+            }
+        }
+    }
+}

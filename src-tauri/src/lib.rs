@@ -15,12 +15,14 @@ mod markdown_file;
 pub mod markdown_import;
 pub mod markdown_resources;
 mod note_index;
+mod open_requests;
 mod path_identity;
 mod recent_files;
 mod resource_import;
 mod system_fonts;
 mod window_state;
 pub mod workspace;
+mod workspace_ops;
 mod workspace_session;
 
 use ai::AiRequestState;
@@ -422,7 +424,10 @@ fn save_to_path_with_fingerprint(
         .lock()
         .map_err(|_| "文档保存锁不可用。".to_string())?;
     let target_path = ensure_mdx_extension(path);
-    if !target_path.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("mdx")) {
+    if !target_path
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("mdx"))
+    {
         return Err("MDXNote 保存路径必须使用 .mdx 后缀；转换请使用另存为。".to_string());
     }
     let source_path = request.path.as_deref().map(PathBuf::from);
@@ -579,12 +584,24 @@ fn prepare_markdown_resources_command(
     markdown: String,
     new_assets: Option<Vec<ResourceData>>,
 ) -> Result<MarkdownResourcePlan, String> {
-    markdown_resources::prepare_markdown_resources_with_pending(Path::new(&source_path), &markdown, &new_assets.unwrap_or_default())
+    markdown_resources::prepare_markdown_resources_with_pending(
+        Path::new(&source_path),
+        &markdown,
+        &new_assets.unwrap_or_default(),
+    )
 }
 
 #[tauri::command]
-fn read_asset(path: String, asset_name: String, markdown: Option<String>) -> Result<String, String> {
-    let destination = markdown_file::resource_reference_literal(Path::new(&path), &asset_name, markdown.as_deref());
+fn read_asset(
+    path: String,
+    asset_name: String,
+    markdown: Option<String>,
+) -> Result<String, String> {
+    let destination = markdown_file::resource_reference_literal(
+        Path::new(&path),
+        &asset_name,
+        markdown.as_deref(),
+    );
     let asset_name = archive_resource_name(&destination)?;
     let bytes = read_archive_resource_bytes(Path::new(&path), &asset_name)?;
 
@@ -1204,6 +1221,14 @@ fn new_resource_id() -> String {
 pub fn run() {
     let window_state_flags = window_state::tracked_state_flags();
     tauri::Builder::default()
+        .manage(open_requests::OpenRequests::default())
+        .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
+            open_requests::enqueue(app, args.into_iter().skip(1).collect(), Path::new(&cwd));
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        }))
         .manage(AiRequestState::default())
         .manage(agent_bridge::AgentBridgeState::default())
         .plugin(
@@ -1233,11 +1258,18 @@ pub fn run() {
             }
         })
         .setup(|app| {
+            open_requests::enqueue(
+                app.handle(),
+                std::env::args().skip(1).collect(),
+                &std::env::current_dir()?,
+            );
             app.manage(file_watch::DocumentWatchState::new(app.handle().clone()));
             let _ = window_state::restore_main_window_state(app);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            workspace_ops::workspace_operation,
+            open_requests::take_open_requests,
             ai::save_ai_api_key,
             ai::delete_ai_api_key,
             ai::has_ai_api_key,
@@ -1284,8 +1316,21 @@ pub fn run() {
             set_watched_document_paths,
             system_fonts::list_system_font_families
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running MDXNote application");
+        .build(tauri::generate_context!())
+        .expect("error while building Mora")
+        .run(|_app, _event| {
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Opened { urls } = _event {
+                open_requests::enqueue(
+                    _app,
+                    urls.into_iter()
+                        .filter_map(|url| url.to_file_path().ok())
+                        .map(|path| path.to_string_lossy().to_string())
+                        .collect(),
+                    Path::new("/"),
+                );
+            }
+        });
 }
 
 #[cfg(test)]
@@ -1327,25 +1372,75 @@ mod tests {
 
     #[test]
     fn archive_resource_reads_decode_entities_once_using_source_syntax() {
-        let root = tempfile::tempdir().unwrap(); let path = root.path().join("note.mdx");
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("note.mdx");
         let content = "![image](assets/literal&amp;copy;.png)\n\n<img src=\"assets/literal&amp;copy;.png\">\n";
-        let resource = ResourceData { name: "assets/literal&copy;.png".to_string(), original_name: "literal&copy;.png".to_string(), mime_type: "image/png".to_string(), size: 4, kind: ResourceKind::Asset, base64: "ZGF0YQ==".to_string() };
-        let bytes = build_mdx_archive(None, &MdxMetadata::default(), content, &[resource], &std::collections::BTreeSet::new()).unwrap(); fs::write(&path, bytes).unwrap();
-        assert_eq!(read_asset(path.to_string_lossy().to_string(), "assets/literal&amp;copy;.png".to_string(), None).unwrap(), "ZGF0YQ==");
-        assert_eq!(read_asset(path.to_string_lossy().to_string(), "assets/literal&copy;.png".to_string(), Some(String::new())).unwrap(), "ZGF0YQ==");
+        let resource = ResourceData {
+            name: "assets/literal&copy;.png".to_string(),
+            original_name: "literal&copy;.png".to_string(),
+            mime_type: "image/png".to_string(),
+            size: 4,
+            kind: ResourceKind::Asset,
+            base64: "ZGF0YQ==".to_string(),
+        };
+        let bytes = build_mdx_archive(
+            None,
+            &MdxMetadata::default(),
+            content,
+            &[resource],
+            &std::collections::BTreeSet::new(),
+        )
+        .unwrap();
+        fs::write(&path, bytes).unwrap();
+        assert_eq!(
+            read_asset(
+                path.to_string_lossy().to_string(),
+                "assets/literal&amp;copy;.png".to_string(),
+                None
+            )
+            .unwrap(),
+            "ZGF0YQ=="
+        );
+        assert_eq!(
+            read_asset(
+                path.to_string_lossy().to_string(),
+                "assets/literal&copy;.png".to_string(),
+                Some(String::new())
+            )
+            .unwrap(),
+            "ZGF0YQ=="
+        );
     }
 
     #[test]
     fn archive_resource_reads_decode_destinations_without_allowing_traversal() {
-        let root = tempfile::tempdir().unwrap(); let path = root.path().join("note.mdx");
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("note.mdx");
         write_note_with_resources(&path, &[("assets/中文 image.png", b"image")]);
-        assert_eq!(read_asset(path.to_string_lossy().to_string(), "assets/%E4%B8%AD%E6%96%87%20image.png#view".to_string(), None).unwrap(), "aW1hZ2U=");
+        assert_eq!(
+            read_asset(
+                path.to_string_lossy().to_string(),
+                "assets/%E4%B8%AD%E6%96%87%20image.png#view".to_string(),
+                None
+            )
+            .unwrap(),
+            "aW1hZ2U="
+        );
         assert!(archive_resource_name("assets/%2e%2e/private.txt").is_err());
     }
     #[test]
     fn mdx_save_rejects_markdown_destination_without_replacing_source() {
-        let root = tempfile::tempdir().unwrap(); let path = root.path().join("source.md"); fs::write(&path, "raw markdown").unwrap();
-        let request = MdxSaveRequest { path: None, title: "converted".to_string(), content: "changed".to_string(), meta: None, new_assets: Vec::new(), removed_resources: Vec::new() };
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("source.md");
+        fs::write(&path, "raw markdown").unwrap();
+        let request = MdxSaveRequest {
+            path: None,
+            title: "converted".to_string(),
+            content: "changed".to_string(),
+            meta: None,
+            new_assets: Vec::new(),
+            removed_resources: Vec::new(),
+        };
         assert!(save_to_path(request, path.clone()).is_err());
         assert_eq!(fs::read_to_string(path).unwrap(), "raw markdown");
     }
@@ -1630,13 +1725,9 @@ mod tests {
     #[test]
     fn attachment_bytes_reject_unsafe_non_attachment_and_missing_sources() {
         for resource_path in ["attachments/../a.txt", "assets/a.png"] {
-            let error = read_attachment_bytes(&attachment_request(
-                None,
-                None,
-                resource_path,
-                "a.txt",
-            ))
-            .unwrap_err();
+            let error =
+                read_attachment_bytes(&attachment_request(None, None, resource_path, "a.txt"))
+                    .unwrap_err();
             assert!(error.contains("附件路径"));
         }
 

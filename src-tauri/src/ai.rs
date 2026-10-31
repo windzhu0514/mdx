@@ -74,7 +74,7 @@ struct ChatMessage {
 }
 
 fn build_chat_request(request: &AiRequest) -> ChatRequest {
-    const SYSTEM_MESSAGE: &str = "你是 Mora 墨笺的 Markdown 写作助手。只返回要插入或替换的 Markdown，\n不要解释，不要用代码围栏包裹整个答案。";
+    const SYSTEM_MESSAGE: &str = "你是 Mora的 Markdown 写作助手。只返回要插入或替换的 Markdown，\n不要解释，不要用代码围栏包裹整个答案。";
     let selection = if request.selection.is_empty() {
         "无选区，请生成可插入光标位置的内容"
     } else {
@@ -539,7 +539,7 @@ mod tests {
         assert_eq!(body["messages"][0]["role"], "system");
         assert_eq!(
             body["messages"][0]["content"],
-            "你是 Mora 墨笺的 Markdown 写作助手。只返回要插入或替换的 Markdown，\n不要解释，不要用代码围栏包裹整个答案。"
+            "你是 Mora的 Markdown 写作助手。只返回要插入或替换的 Markdown，\n不要解释，不要用代码围栏包裹整个答案。"
         );
         assert_eq!(body["messages"][1]["role"], "user");
         assert_eq!(

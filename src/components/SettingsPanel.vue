@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { appName, t, type LanguagePreference } from "../i18n";
+
 import { computed, nextTick, ref, watch } from "vue";
 import type {
     CodeFontPreference,
@@ -47,27 +49,59 @@ const categories: Array<{
 }> = [
     {
         id: "appearance",
-        label: "外观",
-        eyebrow: "阅读与外观",
-        description: "调整主题、正文字体和代码字体，并立即查看排版效果。",
+        get label() {
+            return t("外观", "Appearance");
+        },
+        get eyebrow() {
+            return t("阅读与外观", "Reading and appearance");
+        },
+        get description() {
+            return t(
+                "调整主题、正文字体和代码字体，并立即查看排版效果。",
+                "Adjust the theme, body and code fonts with a live preview.",
+            );
+        },
     },
     {
         id: "editor",
-        label: "编辑器",
-        eyebrow: "编辑体验",
-        description: "设置正文阅读宽度和文档目录的默认显示方式。",
+        get label() {
+            return t("编辑器", "Editor");
+        },
+        get eyebrow() {
+            return t("编辑体验", "Editing experience");
+        },
+        get description() {
+            return t(
+                "设置正文阅读宽度和文档目录的默认显示方式。",
+                "Set the reading width and default outline visibility.",
+            );
+        },
     },
     {
         id: "ai",
         label: "AI",
-        eyebrow: "智能写作",
-        description: "配置用于所见即所得编辑器的 OpenAI-compatible 服务。",
+        get eyebrow() {
+            return t("智能写作", "AI writing");
+        },
+        get description() {
+            return t(
+                "配置用于所见即所得编辑器的 OpenAI-compatible 服务。",
+                "Configure an OpenAI-compatible service for the visual editor.",
+            );
+        },
     },
     {
         id: "agent",
         label: "Agent",
-        eyebrow: "本地自动化",
-        description: "显式授权同一用户下的本地工具访问当前打开的文档。",
+        get eyebrow() {
+            return t("本地自动化", "Local automation");
+        },
+        get description() {
+            return t(
+                "显式授权同一用户下的本地工具访问当前打开的文档。",
+                "Allow local tools running as the same user to access open documents.",
+            );
+        },
     },
 ];
 
@@ -86,9 +120,13 @@ const installedFontFamilySet = computed(() => {
     );
 });
 const agentStatusText = computed(() => {
-    if (!props.agentStatus.enabled) return "已关闭（默认关闭）";
-    if (!props.agentStatus.listening) return "正在启动本地 endpoint";
-    return `正在监听 · ${props.agentStatus.connectedClients} 个连接 · ${props.agentStatus.watcherClients} 个订阅`;
+    if (!props.agentStatus.enabled) return t("已关闭（默认关闭）", "Disabled (default)");
+    if (!props.agentStatus.listening)
+        return t("正在启动本地 endpoint", "Starting local endpoint");
+    return t(
+        `正在监听 · ${props.agentStatus.connectedClients} 个连接 · ${props.agentStatus.watcherClients} 个订阅`,
+        `Listening · ${props.agentStatus.connectedClients} connections · ${props.agentStatus.watcherClients} subscriptions`,
+    );
 });
 
 watch(
@@ -121,7 +159,9 @@ function isFontAvailable(font: FontOption | CodeFontOption) {
 }
 
 function fontLabel(font: FontOption | CodeFontOption) {
-    return isFontAvailable(font) ? font.label : `${font.label}（未安装）`;
+    return isFontAvailable(font)
+        ? font.label
+        : t(`${font.label}（未安装）`, `${font.label} (not installed)`);
 }
 </script>
 
@@ -139,18 +179,47 @@ function fontLabel(font: FontOption | CodeFontOption) {
                 <button
                     type="button"
                     class="settings-back"
-                    aria-label="返回编辑器"
+                    :aria-label="t('返回编辑器', 'Back to editor')"
                     @click="emit('close')"
                 >
-                    返回编辑器
+                    {{ t("返回编辑器", "Back to editor") }}
                 </button>
                 <div>
-                    <span class="settings-product-name">Mora 墨笺</span>
-                    <h1 id="settings-title">偏好设置</h1>
+                    <span class="settings-product-name">{{ appName }}</span>
+                    <h1 id="settings-title">{{ t("偏好设置", "Preferences") }}</h1>
                 </div>
             </header>
 
-            <nav class="settings-nav" aria-label="偏好设置分类">
+            <label class="setting-field settings-language">
+                {{ t("界面语言", "Interface language") }}
+                <select
+                    data-testid="language-select"
+                    :aria-label="t('界面语言', 'Interface language')"
+                    :value="preferences.language"
+                    @change="
+                        emit('update', {
+                            language: ($event.target as HTMLSelectElement)
+                                .value as LanguagePreference,
+                        })
+                    "
+                >
+                    <option value="system">{{ t("跟随系统", "Follow system") }}</option>
+                    <option value="zh-CN">简体中文</option>
+                    <option value="en">English</option>
+                </select>
+            </label>
+            <p class="settings-language-hint">
+                {{
+                    t(
+                        "界面语言立即生效。部分编辑器 AI 提示需重启应用后更新。",
+                        "The interface updates immediately. Some editor AI labels update after restarting the app.",
+                    )
+                }}
+            </p>
+            <nav
+                class="settings-nav"
+                :aria-label="t('偏好设置分类', 'Preferences categories')"
+            >
                 <button
                     v-for="category in categories"
                     :key="category.id"
@@ -177,7 +246,7 @@ function fontLabel(font: FontOption | CodeFontOption) {
             >
                 <div class="settings-card settings-control-list">
                     <label class="setting-field">
-                        <span>主题</span>
+                        <span>{{ t("主题", "Theme") }}</span>
                         <select
                             :value="preferences.theme"
                             @change="
@@ -187,7 +256,9 @@ function fontLabel(font: FontOption | CodeFontOption) {
                                 })
                             "
                         >
-                            <option value="system">跟随系统</option>
+                            <option value="system">
+                                {{ t("跟随系统", "Follow system") }}
+                            </option>
                             <option
                                 v-for="theme in THEME_OPTIONS"
                                 :key="theme.id"
@@ -199,7 +270,7 @@ function fontLabel(font: FontOption | CodeFontOption) {
                     </label>
 
                     <label class="setting-field">
-                        <span>字体</span>
+                        <span>{{ t("字体", "Font") }}</span>
                         <select
                             :value="preferences.fontFamily"
                             @change="
@@ -237,7 +308,7 @@ function fontLabel(font: FontOption | CodeFontOption) {
                     </label>
 
                     <label class="setting-field">
-                        <span>代码字体</span>
+                        <span>{{ t("代码字体", "Code font") }}</span>
                         <select
                             :value="preferences.codeFontFamily"
                             @change="
@@ -260,7 +331,10 @@ function fontLabel(font: FontOption | CodeFontOption) {
                     </label>
 
                     <label class="setting-field range-field">
-                        <span>字号 {{ preferences.fontSize }} px</span>
+                        <span
+                            >{{ t("字号", "Font size") }}
+                            {{ preferences.fontSize }} px</span
+                        >
                         <input
                             type="range"
                             min="14"
@@ -272,7 +346,10 @@ function fontLabel(font: FontOption | CodeFontOption) {
                     </label>
 
                     <label class="setting-field range-field">
-                        <span>行高 {{ preferences.lineHeight.toFixed(2) }}</span>
+                        <span
+                            >{{ t("行高", "Line height") }}
+                            {{ preferences.lineHeight.toFixed(2) }}</span
+                        >
                         <input
                             type="range"
                             min="1.4"
@@ -284,35 +361,68 @@ function fontLabel(font: FontOption | CodeFontOption) {
                     </label>
                 </div>
 
-                <aside class="settings-preview-panel" aria-label="字体实时预览">
+                <aside
+                    class="settings-preview-panel"
+                    :aria-label="t('字体实时预览', 'Live font preview')"
+                >
                     <div class="settings-preview-heading">
                         <div>
-                            <p class="panel-eyebrow">实时预览</p>
-                            <h3>正文与代码</h3>
+                            <p class="panel-eyebrow">
+                                {{ t("实时预览", "Live preview") }}
+                            </p>
+                            <h3>{{ t("正文与代码", "Body and code") }}</h3>
                         </div>
-                        <span>更改后立即生效</span>
+                        <span>{{
+                            t("更改后立即生效", "Changes take effect immediately")
+                        }}</span>
                     </div>
                     <article class="settings-live-preview">
-                        <p class="settings-preview-kicker">Mora 字体预览</p>
-                        <h3>让文字保持清晰，也保留一点呼吸感</h3>
+                        <p class="settings-preview-kicker">
+                            {{ t("墨笺 字体预览", "Mora font preview") }}
+                        </p>
+                        <h3>
+                            {{
+                                t(
+                                    "让文字保持清晰，也保留一点呼吸感",
+                                    "Keep text clear, with room to breathe",
+                                )
+                            }}
+                        </h3>
                         <p>
-                            这是一段中英文混排示例。Mora helps ideas stay focused, and The
-                            quick brown fox jumps over the lazy dog.
+                            {{
+                                t(
+                                    "这是一段中英文混排示例。墨笺 helps ideas stay focused, and The quick brown fox jumps over the lazy dog.",
+                                    "Mora helps ideas stay focused. The quick brown fox jumps over the lazy dog.",
+                                )
+                            }}
                         </p>
                         <p>
-                            这里包含<strong>加粗文字</strong>、<em>斜体文字</em>、
-                            <a href="#" @click.prevent>链接文字</a>和
-                            <code>const note = "墨笺"</code> 行内代码。
+                            {{ t("这里包含", "This includes")
+                            }}<strong>{{ t("加粗文字", "Bold text") }}</strong
+                            >、<em>{{ t("斜体文字", "Italic text") }}</em
+                            >、
+                            <a href="#" @click.prevent>{{ t("链接文字", "Link text") }}</a
+                            >{{ t("和", "and") }} <code>const note = "墨笺"</code>
+                            {{ t("行内代码。", "inline code.") }}
                         </p>
                         <blockquote>
-                            好的排版不会打断阅读，而是在需要时给内容恰当的强调。
+                            {{
+                                t(
+                                    "好的排版不会打断阅读，而是在需要时给内容恰当的强调。",
+                                    "Good typography supports reading and adds emphasis where it matters.",
+                                )
+                            }}
                         </blockquote>
                         <pre><code>function greet(name: string) {
     return `Hello, ${name}`;
 }</code></pre>
                         <p>
-                            长段落用于观察字号、行高与中英文标点的整体节奏。调整左侧选项时，
-                            此区域会沿用编辑器当前的正文与代码字体设置，方便在回到文档前完成比较。
+                            {{
+                                t(
+                                    "长段落用于观察字号、行高与中英文标点的整体节奏。调整左侧选项时， 此区域会沿用编辑器当前的正文与代码字体设置，方便在回到文档前完成比较。",
+                                    "Use this paragraph to compare font size, line spacing and punctuation. Changes on the left use the same body and code fonts as the editor.",
+                                )
+                            }}
                         </p>
                     </article>
                 </aside>
@@ -322,8 +432,34 @@ function fontLabel(font: FontOption | CodeFontOption) {
                 v-else-if="activeCategory === 'editor'"
                 class="settings-card settings-control-list"
             >
+                <label class="setting-check">
+                    <input
+                        type="checkbox"
+                        :aria-label="t('自动保存原文件', 'Auto-save original files')"
+                        :checked="preferences.autoSave"
+                        @change="
+                            emit('update', {
+                                autoSave: ($event.target as HTMLInputElement).checked,
+                            })
+                        "
+                    />
+                    <span>
+                        <strong>{{
+                            t("自动保存原文件", "Auto-save original files")
+                        }}</strong>
+                        <small>{{
+                            t(
+                                "默认关闭。停笔 5 秒后保存已有路径的文档；未命名或冲突文档不自动保存。保存失败后暂停，请手动保存或重新开关。",
+                                "Off by default. Saves documents with a file path after 5 seconds of inactivity. Untitled or conflicted documents are skipped. After a failure, save manually or toggle this option to resume.",
+                            )
+                        }}</small>
+                    </span>
+                </label>
                 <label class="setting-field range-field">
-                    <span>阅读宽度 {{ preferences.contentWidth }} px</span>
+                    <span
+                        >{{ t("阅读宽度", "Reading width") }}
+                        {{ preferences.contentWidth }} px</span
+                    >
                     <input
                         type="range"
                         min="620"
@@ -345,8 +481,15 @@ function fontLabel(font: FontOption | CodeFontOption) {
                         "
                     />
                     <span>
-                        <strong>默认显示文档目录</strong>
-                        <small>打开包含标题的文档时显示右侧目录。</small>
+                        <strong>{{
+                            t("默认显示文档目录", "Show document outline by default")
+                        }}</strong>
+                        <small>{{
+                            t(
+                                "打开包含标题的文档时显示右侧目录。",
+                                "Show the outline on the right for documents with headings.",
+                            )
+                        }}</small>
                     </span>
                 </label>
             </div>
@@ -354,7 +497,9 @@ function fontLabel(font: FontOption | CodeFontOption) {
             <div v-else-if="activeCategory === 'ai'" class="settings-card ai-settings">
                 <div>
                     <p class="panel-eyebrow">AI</p>
-                    <h3>OpenAI-compatible 服务</h3>
+                    <h3>
+                        {{ t("OpenAI-compatible 服务", "OpenAI-compatible service") }}
+                    </h3>
                 </div>
 
                 <label class="setting-field">
@@ -373,9 +518,9 @@ function fontLabel(font: FontOption | CodeFontOption) {
                 </label>
 
                 <label class="setting-field">
-                    <span>模型</span>
+                    <span>{{ t("模型", "Model") }}</span>
                     <input
-                        aria-label="AI 模型"
+                        :aria-label="t('AI 模型', 'AI model')"
                         type="text"
                         autocomplete="off"
                         :value="preferences.aiModel"
@@ -400,21 +545,25 @@ function fontLabel(font: FontOption | CodeFontOption) {
 
                 <div class="setting-actions">
                     <span class="key-status">
-                        {{ aiKeyConfigured ? "已配置" : "未配置" }}
+                        {{
+                            aiKeyConfigured
+                                ? t("已配置", "Configured")
+                                : t("未配置", "Not configured")
+                        }}
                     </span>
                     <button
                         type="button"
                         :disabled="aiKeySaving || !apiKey"
                         @click="saveAiKey"
                     >
-                        保存/替换 API Key
+                        {{ t("保存/替换 API Key", "Save/replace API key") }}
                     </button>
                     <button
                         type="button"
                         :disabled="aiKeySaving || !aiKeyConfigured"
                         @click="emit('delete-ai-key')"
                     >
-                        删除 API Key
+                        {{ t("删除 API Key", "Delete API key") }}
                     </button>
                 </div>
             </div>
@@ -423,7 +572,7 @@ function fontLabel(font: FontOption | CodeFontOption) {
                 <label class="setting-check agent-access-toggle">
                     <input
                         type="checkbox"
-                        aria-label="本地 Agent 接入"
+                        :aria-label="t('本地 Agent 接入', 'Local Agent access')"
                         :checked="preferences.agentAccessEnabled"
                         @change="
                             emit('update', {
@@ -433,36 +582,58 @@ function fontLabel(font: FontOption | CodeFontOption) {
                         "
                     />
                     <span>
-                        <strong>本地 Agent 接入</strong>
-                        <small>默认关闭；仅在你明确开启后运行本地 endpoint。</small>
+                        <strong>{{ t("本地 Agent 接入", "Local Agent access") }}</strong>
+                        <small>{{
+                            t(
+                                "默认关闭；仅在你明确开启后运行本地 endpoint。",
+                                "Disabled by default. The local endpoint runs only when enabled.",
+                            )
+                        }}</small>
                     </span>
                 </label>
 
                 <div class="agent-security-note" role="note">
-                    <strong>访问范围</strong>
+                    <strong>{{ t("访问范围", "Access scope") }}</strong>
                     <p>
-                        开启后，同一系统用户下的程序可以读取和修改 Mora
-                        当前打开的文档，包括未保存内容。请只连接你信任的本地工具。
+                        {{
+                            t(
+                                "开启后，同一系统用户下的程序可以读取和修改 墨笺 当前打开的文档，包括未保存内容。请只连接你信任的本地工具。",
+                                "When enabled, programs running as the same user can read and modify open documents in Mora, including unsaved changes. Connect only trusted local tools.",
+                            )
+                        }}
                     </p>
                 </div>
 
                 <dl class="agent-status-list">
                     <div>
-                        <dt>运行状态</dt>
+                        <dt>{{ t("运行状态", "Status") }}</dt>
                         <dd>{{ agentStatusText }}</dd>
                     </div>
                     <div>
                         <dt>Endpoint</dt>
-                        <dd>当前用户专属的本地 IPC；关闭接入后立即移除。</dd>
+                        <dd>
+                            {{
+                                t(
+                                    "当前用户专属的本地 IPC；关闭接入后立即移除。",
+                                    "Local IPC for the current user; removed when access is disabled.",
+                                )
+                            }}
+                        </dd>
                     </div>
                     <div>
                         <dt>CLI</dt>
                         <dd class="agent-path">
-                            {{ agentStatus.cliPath ?? "当前安装未提供 mora-agent CLI" }}
+                            {{
+                                agentStatus.cliPath ??
+                                t(
+                                    "当前安装未提供 mora-agent CLI",
+                                    "This installation does not include the mora-agent CLI",
+                                )
+                            }}
                         </dd>
                     </div>
                     <div v-if="agentStatus.lastError" class="agent-status-error">
-                        <dt>最近错误</dt>
+                        <dt>{{ t("最近错误", "Last error") }}</dt>
                         <dd>{{ agentStatus.lastError }}</dd>
                     </div>
                 </dl>
@@ -473,7 +644,7 @@ function fontLabel(font: FontOption | CodeFontOption) {
                         :disabled="!agentStatus.cliPath"
                         @click="emit('copy-agent-config')"
                     >
-                        复制 MCP 配置
+                        {{ t("复制 MCP 配置", "Copy MCP configuration") }}
                     </button>
                 </div>
             </div>

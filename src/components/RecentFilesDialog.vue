@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { locale, t } from "../i18n";
+
 import { computed, nextTick, ref, watch } from "vue";
 
 import type { RecentFileEntry } from "../types/workspace";
@@ -27,7 +29,7 @@ const visibleEntries = computed(() => {
 
 function formatTime(value: string) {
     const date = new Date(value);
-    return Number.isNaN(date.valueOf()) ? value : date.toLocaleString();
+    return Number.isNaN(date.valueOf()) ? value : date.toLocaleString(locale.value);
 }
 
 watch(
@@ -60,13 +62,15 @@ function handleCancel(event: Event) {
         <template v-if="open">
             <header class="workspace-dialog-header">
                 <div>
-                    <p class="panel-eyebrow">工作区</p>
-                    <h2 id="recent-files-dialog-title">最近打开</h2>
+                    <p class="panel-eyebrow">{{ t("工作区", "Workspace") }}</p>
+                    <h2 id="recent-files-dialog-title">
+                        {{ t("最近打开", "Recent files") }}
+                    </h2>
                 </div>
                 <button
                     type="button"
                     class="icon-button recent-files-close"
-                    aria-label="关闭最近打开"
+                    :aria-label="t('关闭最近打开', 'Close recent files')"
                     @click="emit('close')"
                 >
                     ×
@@ -74,17 +78,20 @@ function handleCancel(event: Event) {
             </header>
 
             <label class="recent-files-search">
-                <span>搜索最近打开的文件</span>
+                <span>{{ t("搜索最近打开的文件", "Search recent files") }}</span>
                 <input
                     v-model="query"
                     type="search"
-                    aria-label="搜索最近打开的文件"
-                    placeholder="搜索标题或完整路径"
+                    :aria-label="t('搜索最近打开的文件', 'Search recent files')"
+                    :placeholder="t('搜索标题或完整路径', 'Search title or full path')"
                     autofocus
                 />
             </label>
 
-            <ul class="recent-files-list" aria-label="最近打开的文件">
+            <ul
+                class="recent-files-list"
+                :aria-label="t('最近打开的文件', 'Recent files')"
+            >
                 <li
                     v-for="entry in visibleEntries"
                     :key="entry.path"
@@ -98,44 +105,58 @@ function handleCancel(event: Event) {
                         @click="emit('open-file', entry.path)"
                     >
                         <span class="recent-file-heading">
-                            <strong>{{ entry.title.trim() || "未命名笔记" }}</strong>
+                            <strong>{{
+                                entry.title.trim() || t("未命名笔记", "Untitled note")
+                            }}</strong>
                             <span
                                 v-if="!entry.available"
                                 class="resource-status is-danger"
                             >
-                                不可用
+                                {{ t("不可用", "Unavailable") }}
                             </span>
                         </span>
                         <span class="recent-file-path">{{ entry.path }}</span>
                         <time :datetime="entry.lastOpenedAt">
-                            最近打开：{{ formatTime(entry.lastOpenedAt) }}
+                            {{ t("最近打开：", "Recent files:")
+                            }}{{ formatTime(entry.lastOpenedAt) }}
                         </time>
                     </button>
                     <button
                         type="button"
                         class="recent-file-remove"
-                        :aria-label="`从最近打开中移除 ${entry.title || entry.path}`"
+                        :aria-label="
+                            t(
+                                `从最近打开中移除 ${entry.title || entry.path}`,
+                                `Remove ${entry.title || entry.path} from recent files`,
+                            )
+                        "
                         @click="emit('remove-file', entry.path)"
                     >
-                        移除
+                        {{ t("移除", "Remove") }}
                     </button>
                 </li>
             </ul>
             <p v-if="!visibleEntries.length" class="panel-empty">
-                {{ query.trim() ? "没有匹配的最近文件。" : "暂无最近打开的文件。" }}
+                {{
+                    query.trim()
+                        ? t("没有匹配的最近文件。", "No matching recent files.")
+                        : t("暂无最近打开的文件。", "No recent files yet.")
+                }}
             </p>
 
             <footer class="workspace-dialog-actions recent-files-actions">
-                <span>最多显示 50 条记录</span>
+                <span>{{ t("最多显示 50 条记录", "Up to 50 entries") }}</span>
                 <button
                     type="button"
                     class="danger recent-files-clear"
                     :disabled="!entries.length"
                     @click="emit('clear')"
                 >
-                    清空全部
+                    {{ t("清空全部", "Clear all") }}
                 </button>
-                <button type="button" @click="emit('close')">关闭</button>
+                <button type="button" @click="emit('close')">
+                    {{ t("关闭", "Close") }}
+                </button>
             </footer>
         </template>
     </dialog>

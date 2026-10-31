@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { t } from "../i18n";
+
 import { computed, nextTick, ref, watch } from "vue";
 
 import type { AppUpdatePhase } from "../composables/useAppUpdater";
@@ -73,17 +75,19 @@ function formatBytes(bytes: number) {
         <template v-if="open">
             <header class="update-dialog-header">
                 <div>
-                    <p class="panel-eyebrow">Mora 更新</p>
+                    <p class="panel-eyebrow">{{ t("墨笺 更新", "Mora updates") }}</p>
                     <h2 id="update-dialog-title">
                         {{
-                            phase === "error" && !version ? "检查更新失败" : "发现新版本"
+                            phase === "error" && !version
+                                ? t("检查更新失败", "Failed to check for updates")
+                                : t("发现新版本", "New version available")
                         }}
                     </h2>
                 </div>
                 <button
                     type="button"
                     class="update-dialog-close"
-                    aria-label="关闭更新窗口"
+                    :aria-label="t('关闭更新窗口', 'Close update dialog')"
                     :disabled="blocksClose"
                     @click="requestClose"
                 >
@@ -92,7 +96,7 @@ function formatBytes(bytes: number) {
             </header>
 
             <div v-if="version" class="update-version-row">
-                <strong>版本 {{ version }}</strong>
+                <strong>{{ t("版本", "Version") }} {{ version }}</strong>
                 <time v-if="date" :datetime="date">{{ date.slice(0, 10) }}</time>
             </div>
 
@@ -100,13 +104,13 @@ function formatBytes(bytes: number) {
 
             <section v-if="phase === 'downloading'" class="update-progress">
                 <div class="update-progress-label">
-                    <span>正在下载更新…</span>
+                    <span>{{ t("正在下载更新…", "Downloading update…") }}</span>
                     <span>{{ progressText }}</span>
                 </div>
                 <div
                     class="update-progress-track"
                     role="progressbar"
-                    aria-label="更新下载进度"
+                    :aria-label="t('更新下载进度', 'Update download progress')"
                     aria-valuemin="0"
                     :aria-valuenow="totalBytes ? downloadedBytes : undefined"
                     :aria-valuemax="totalBytes ?? undefined"
@@ -119,43 +123,57 @@ function formatBytes(bytes: number) {
                 </div>
             </section>
 
-            <p v-else-if="phase === 'installing'" class="update-status">正在安装更新…</p>
+            <p v-else-if="phase === 'installing'" class="update-status">
+                {{ t("正在安装更新…", "Installing update…") }}
+            </p>
             <p v-else-if="phase === 'error'" class="update-error" role="alert">
-                {{ error || "无法检查更新，请稍后重试。" }}
+                {{
+                    error ||
+                    t(
+                        "无法检查更新，请稍后重试。",
+                        "Unable to check for updates. Try again later.",
+                    )
+                }}
             </p>
 
             <div class="workspace-dialog-actions update-dialog-actions">
                 <template v-if="phase === 'available'">
-                    <button type="button" @click="emit('close')">稍后</button>
+                    <button type="button" @click="emit('close')">
+                        {{ t("稍后", "Later") }}
+                    </button>
                     <button
                         type="button"
                         class="update-primary"
                         autofocus
                         @click="emit('download')"
                     >
-                        下载更新
+                        {{ t("下载更新", "Download update") }}
                     </button>
                 </template>
                 <template v-else-if="phase === 'downloaded'">
-                    <button type="button" @click="emit('close')">稍后</button>
+                    <button type="button" @click="emit('close')">
+                        {{ t("稍后", "Later") }}
+                    </button>
                     <button
                         type="button"
                         class="update-primary"
                         autofocus
                         @click="emit('install')"
                     >
-                        安装并重启
+                        {{ t("安装并重启", "Install and restart") }}
                     </button>
                 </template>
                 <template v-else-if="phase === 'error'">
-                    <button type="button" @click="emit('close')">关闭</button>
+                    <button type="button" @click="emit('close')">
+                        {{ t("关闭", "Close") }}
+                    </button>
                     <button
                         type="button"
                         class="update-primary"
                         autofocus
                         @click="emit('retry')"
                     >
-                        重试检查
+                        {{ t("重试检查", "Check again") }}
                     </button>
                 </template>
             </div>

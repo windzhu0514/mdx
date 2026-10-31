@@ -145,9 +145,6 @@ fn scan_directory(
             *truncated = true;
             break;
         }
-        if !has_visible_markdown_descendant(&candidate.path)? {
-            continue;
-        }
 
         *remaining -= 1;
         entries.push(WorkspaceTreeEntry {
@@ -174,21 +171,6 @@ fn scan_directory(
     }
 
     Ok(entries)
-}
-
-fn has_visible_markdown_descendant(directory: &Path) -> Result<bool, String> {
-    let (directories, files) = candidates_in(directory)?;
-    if !files.is_empty() {
-        return Ok(true);
-    }
-
-    for candidate in directories {
-        if has_visible_markdown_descendant(&candidate.path)? {
-            return Ok(true);
-        }
-    }
-
-    Ok(false)
 }
 
 fn candidates_in(directory: &Path) -> Result<(Vec<Candidate>, Vec<Candidate>), String> {
@@ -254,7 +236,11 @@ fn should_skip(metadata: &fs::Metadata) -> bool {
 
 fn markdown_kind(extension: Option<&str>) -> Option<EntryKind> {
     match extension {
-        Some(value) if value.eq_ignore_ascii_case("md") || value.eq_ignore_ascii_case("markdown") => Some(EntryKind::Md),
+        Some(value)
+            if value.eq_ignore_ascii_case("md") || value.eq_ignore_ascii_case("markdown") =>
+        {
+            Some(EntryKind::Md)
+        }
         Some(value) if value.eq_ignore_ascii_case("mdx") => Some(EntryKind::Mdx),
         _ => None,
     }
@@ -318,5 +304,15 @@ mod markdown_extension_tests {
         assert_eq!(scanned.entries.len(), 1);
         assert_eq!(scanned.entries[0].kind, EntryKind::Md);
         assert_eq!(markdown_file_paths(&scanned).len(), 1);
+    }
+
+    #[test]
+    fn new_empty_directory_is_visible_for_file_management() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("新建文件夹")).unwrap();
+        let scan = scan_folder(root.path(), 100).unwrap();
+        assert_eq!(scan.entries.len(), 1);
+        assert_eq!(scan.entries[0].name, "新建文件夹");
+        assert_eq!(scan.entries[0].kind, EntryKind::Directory);
     }
 }

@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MoraAIProvider } from "../../ai/openAICompatible";
 import type { MoraEditorHandle } from "./editorTypes";
 import type { MermaidViewerRequest } from "./mermaidPreview";
+import { locale } from "../../i18n";
+import { placeholderConfig } from "@milkdown/crepe/feature/placeholder";
 import MilkdownEditor from "./MilkdownEditor.vue";
 
 const mocks = vi.hoisted(() => {
@@ -79,6 +81,7 @@ const mocks = vi.hoisted(() => {
     }> = [];
 
     return {
+        localeConfigs: new Map<unknown, unknown>(),
         commands,
         createEditor,
         destroyEditor,
@@ -112,9 +115,16 @@ vi.mock("@milkdown/crepe", () => {
         readonly destroy = vi.fn(() => mocks.destroyEditor());
         readonly setReadonly = vi.fn(() => this);
         readonly editor = {
+            config: vi.fn(),
             action: vi.fn((action: unknown) =>
                 typeof action === "function"
                     ? action({
+                          update: (
+                              key: unknown,
+                              apply: (previous: object) => unknown,
+                          ) => {
+                              mocks.localeConfigs.set(key, apply({}));
+                          },
                           get: (key: string) =>
                               key === "editor-view"
                                   ? mocks.editorView
@@ -981,4 +991,28 @@ describe("MilkdownEditor", () => {
         expect(editor.updates).toEqual([]);
         expect(editor.markdown.value).toBe("# 保持原值");
     });
+});
+
+it("切换编辑器语言通过公开配置更新占位文案，并保留编辑器实例与正文", async () => {
+    locale.value = "zh-CN";
+    const mounted = mountEditor("# 保留正文\noriginal content");
+    await flushPromises();
+    const instance = mocks.instances[mocks.instances.length - 1]!;
+    const state = mocks.editorView.state;
+    const count = mocks.instances.length;
+    try {
+        locale.value = "en";
+        await nextTick();
+        expect(mocks.localeConfigs.get(placeholderConfig.key)).toMatchObject({
+            text: "Start writing…",
+        });
+        expect(mocks.instances.length).toBe(count);
+        expect(mocks.editorView.state).toBe(state);
+        expect(instance.destroy).not.toHaveBeenCalled();
+        expect(mounted.markdown.value).toBe("# 保留正文\noriginal content");
+        expect(mounted.updates).toEqual([]);
+    } finally {
+        mounted.unmount();
+        locale.value = "zh-CN";
+    }
 });

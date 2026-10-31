@@ -68,7 +68,7 @@ pub(crate) struct MarkdownSaveResult {
     note: MarkdownNote,
     resource_rewrites: BTreeMap<String, String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    warning: Option<String>,
+    pub(crate) warning: Option<String>,
 }
 
 pub(crate) fn is_markdown_path(path: &Path) -> bool {
@@ -409,7 +409,7 @@ pub(crate) fn checked_resource_total(total: u64, additional: u64) -> Result<u64,
         .ok_or_else(|| "RESOURCE_LIMIT：资源总大小超过 2 GiB 限制。".to_string())
 }
 
-fn save_markdown_file(
+pub(crate) fn save_markdown_file(
     request: MarkdownSaveRequest,
     path: &Path,
 ) -> Result<MarkdownSaveResult, String> {

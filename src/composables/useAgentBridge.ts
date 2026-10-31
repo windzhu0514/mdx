@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { readonly, ref, watch, type Ref } from "vue";
@@ -90,7 +91,10 @@ function bridgeErrorMessage(error: unknown): string {
     const record = errorRecord(error);
     return typeof record?.message === "string"
         ? record.message
-        : "本地 Agent bridge 无法启动。请关闭接入后重试。";
+        : t(
+              "本地 Agent bridge 无法启动。请关闭接入后重试。",
+              "Cannot start local Agent bridge. Disable access and retry.",
+          );
 }
 
 function frontendError(error: unknown, documentId?: string): AgentFrontendError {
@@ -115,21 +119,57 @@ function frontendError(error: unknown, documentId?: string): AgentFrontendError 
         detail.currentDiskRevision = record.currentDiskRevision;
     }
     const messages: Record<AgentErrorCode, string> = {
-        AGENT_ACCESS_DISABLED: "本地 Agent 接入已关闭。",
-        MORA_NOT_RUNNING: "Mora 未运行。",
-        BRIDGE_UNAVAILABLE: "Mora 无法完成此 Agent 请求。",
-        BRIDGE_ALREADY_RUNNING: "本地 Agent bridge 已在运行。",
-        DOCUMENT_NOT_FOUND: "未找到指定文档。",
-        DOCUMENT_NOT_OPEN: "指定文档当前未打开。",
-        DOCUMENT_BUSY: "文档正在执行另一项保存操作。",
-        SAVE_AS_REQUIRED: "请先在 Mora 中保存文档并指定文件位置。",
-        REVISION_CONFLICT: "文档已变化，请基于最新 liveRevision 重试。",
-        DISK_CONFLICT: "磁盘文件已变化，请先在 Mora 中处理冲突。",
-        INVALID_MDX: "文档不是有效的 MDXNote 文件。",
-        REQUEST_TOO_LARGE: "Agent 请求超过大小限制。",
-        PERMISSION_DENIED: "Agent 请求没有访问权限。",
-        TIMEOUT: "Agent 请求处理超时。",
-        PROTOCOL_MISMATCH: "Agent 请求协议不受支持。",
+        AGENT_ACCESS_DISABLED: t(
+            "本地 Agent 接入已关闭。",
+            "Local Agent access is disabled.",
+        ),
+        MORA_NOT_RUNNING: t("墨笺 未运行。", "Mora is not running."),
+        BRIDGE_UNAVAILABLE: t(
+            "墨笺 无法完成此 Agent 请求。",
+            "Mora could not complete this Agent request.",
+        ),
+        BRIDGE_ALREADY_RUNNING: t(
+            "本地 Agent bridge 已在运行。",
+            "Local Agent bridge is already running.",
+        ),
+        DOCUMENT_NOT_FOUND: t("未找到指定文档。", "Specified document not found."),
+        DOCUMENT_NOT_OPEN: t(
+            "指定文档当前未打开。",
+            "The specified document is not open.",
+        ),
+        DOCUMENT_BUSY: t(
+            "文档正在执行另一项保存操作。",
+            "Another save operation is in progress.",
+        ),
+        SAVE_AS_REQUIRED: t(
+            "请先在 墨笺 中保存文档并指定文件位置。",
+            "Save the document in Mora and choose a file location first.",
+        ),
+        REVISION_CONFLICT: t(
+            "文档已变化，请基于最新 liveRevision 重试。",
+            "Document changed; retry with the latest liveRevision.",
+        ),
+        DISK_CONFLICT: t(
+            "磁盘文件已变化，请先在 墨笺 中处理冲突。",
+            "The file changed on disk. Resolve the conflict in Mora first.",
+        ),
+        INVALID_MDX: t(
+            "文档不是有效的 MDXNote 文件。",
+            "Document is not a valid MDXNote file.",
+        ),
+        REQUEST_TOO_LARGE: t(
+            "Agent 请求超过大小限制。",
+            "Agent request exceeds the size limit.",
+        ),
+        PERMISSION_DENIED: t(
+            "Agent 请求没有访问权限。",
+            "Agent request is not authorized.",
+        ),
+        TIMEOUT: t("Agent 请求处理超时。", "Agent request timed out."),
+        PROTOCOL_MISMATCH: t(
+            "Agent 请求协议不受支持。",
+            "Unsupported Agent request protocol.",
+        ),
     };
     return {
         code,
@@ -335,7 +375,13 @@ export function useAgentBridge(options: AgentBridgeOptions) {
 
     async function stopForDispose() {
         try {
-            await bounded(operationTail, "等待 Agent bridge 操作完成超时。");
+            await bounded(
+                operationTail,
+                t(
+                    "等待 Agent bridge 操作完成超时。",
+                    "Waiting for Agent bridge operation timed out.",
+                ),
+            );
         } catch {
             lifecycle = "unknown";
         }
@@ -345,7 +391,7 @@ export function useAgentBridge(options: AgentBridgeOptions) {
                 invoke<AgentBridgeStatus>("set_agent_access_enabled", {
                     enabled: false,
                 }),
-                "停止 Agent bridge 超时。",
+                t("停止 Agent bridge 超时。", "Stopping Agent bridge timed out."),
             );
             acceptStatus(stopped);
         } catch {
@@ -353,7 +399,10 @@ export function useAgentBridge(options: AgentBridgeOptions) {
             try {
                 const actual = await bounded(
                     invoke<AgentBridgeStatus>("get_agent_bridge_status"),
-                    "查询 Agent bridge 状态超时。",
+                    t(
+                        "查询 Agent bridge 状态超时。",
+                        "Querying Agent bridge status timed out.",
+                    ),
                 );
                 acceptStatus(actual);
             } catch {
@@ -365,7 +414,7 @@ export function useAgentBridge(options: AgentBridgeOptions) {
                         invoke<AgentBridgeStatus>("set_agent_access_enabled", {
                             enabled: false,
                         }),
-                        "补停 Agent bridge 超时。",
+                        t("补停 Agent bridge 超时。", "Agent bridge cleanup timed out."),
                     );
                     acceptStatus(stopped);
                 } catch {

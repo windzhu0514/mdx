@@ -1,5 +1,5 @@
 ---
-# MDXNote 笔记软件需求总结
+# Mora 笔记软件需求总结
 
 ## 一、软件目标
 
@@ -447,7 +447,7 @@ Rust / Tauri commands：
 目标项目目录：
 
 ```/dev/null/project-path.txt#L1-1
-E:\WorkspaceGo\mdx
+E:\WorkspaceIdea\mora
 ```
 
 使用技术栈：
@@ -466,13 +466,13 @@ Rust
 下一步需要直接创建或修改项目文件：
 
 ```/dev/null/files-to-create.txt#L1-8
-E:\WorkspaceGo\mdx\package.json
-E:\WorkspaceGo\mdx\src\App.vue
-E:\WorkspaceGo\mdx\src\main.ts
-E:\WorkspaceGo\mdx\src\style.css
-E:\WorkspaceGo\mdx\src-tauri\Cargo.toml
-E:\WorkspaceGo\mdx\src-tauri\src\lib.rs
-E:\WorkspaceGo\mdx\src-tauri\tauri.conf.json
+E:\WorkspaceIdea\mora\package.json
+E:\WorkspaceIdea\mora\src\App.vue
+E:\WorkspaceIdea\mora\src\main.ts
+E:\WorkspaceIdea\mora\src\style.css
+E:\WorkspaceIdea\mora\src-tauri\Cargo.toml
+E:\WorkspaceIdea\mora\src-tauri\src\lib.rs
+E:\WorkspaceIdea\mora\src-tauri\tauri.conf.json
 ```
 
 ---
@@ -502,7 +502,7 @@ E:\WorkspaceGo\mdx\src-tauri\tauri.conf.json
 
 如果会话断了，你重新打开后可以直接发我：
 
-> 继续开发 MDXNote。项目在 `E:\WorkspaceGo\mdx`。  
+> 继续开发 Mora。项目在 `E:\WorkspaceIdea\mora`。
 > 需求是：Tauri + Vue + TypeScript + Rust，本地桌面笔记软件。  
 > `.mdx` 是 ZIP 包，内部包含 `manifest.json`、`meta.json`、`content.md`、`assets/`、`attachments/`、`thumbnails/`。  
 > 第一版实现新建、打开、保存、编辑标题、编辑正文、安全保存。  

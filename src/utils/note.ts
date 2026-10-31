@@ -1,6 +1,9 @@
+import { t } from "../i18n";
 import type { MdxMetadata } from "../types/mdx";
 
-export function createEmptyMetadata(title = "无标题笔记"): MdxMetadata {
+export function createEmptyMetadata(
+    title = t("无标题笔记", "Untitled note"),
+): MdxMetadata {
     const now = new Date().toISOString();
 
     return {

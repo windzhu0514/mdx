@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { t } from "../i18n";
+
 import { onBeforeUnmount, onMounted, ref } from "vue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
@@ -14,7 +16,7 @@ async function runWindowCommand(command: () => Promise<void>) {
     try {
         await command();
     } catch (error) {
-        console.error("窗口命令执行失败", error);
+        console.error(t("窗口命令执行失败", "Window command failed"), error);
     }
 }
 
@@ -28,7 +30,7 @@ onMounted(async () => {
     try {
         unlistenResize = await appWindow.onResized(() => runWindowCommand(syncMaximized));
     } catch (error) {
-        console.error("窗口状态监听失败", error);
+        console.error(t("窗口状态监听失败", "Failed to watch window state"), error);
     }
 });
 
@@ -36,12 +38,12 @@ onBeforeUnmount(() => unlistenResize?.());
 </script>
 
 <template>
-    <div class="window-controls" aria-label="窗口控制">
+    <div class="window-controls" :aria-label="t('窗口控制', 'Window controls')">
         <button
             type="button"
             class="window-control window-control-minimize"
-            aria-label="最小化窗口"
-            title="最小化窗口"
+            :aria-label="t('最小化窗口', 'Minimize window')"
+            :title="t('最小化窗口', 'Minimize window')"
             @click="runWindowCommand(() => appWindow.minimize())"
         >
             <svg viewBox="0 0 12 12" aria-hidden="true">
@@ -51,8 +53,16 @@ onBeforeUnmount(() => unlistenResize?.());
         <button
             type="button"
             class="window-control window-control-maximize"
-            :aria-label="maximized ? '还原窗口' : '最大化窗口'"
-            :title="maximized ? '还原窗口' : '最大化窗口'"
+            :aria-label="
+                maximized
+                    ? t('还原窗口', 'Restore window')
+                    : t('最大化窗口', 'Maximize window')
+            "
+            :title="
+                maximized
+                    ? t('还原窗口', 'Restore window')
+                    : t('最大化窗口', 'Maximize window')
+            "
             @click="toggleMaximize"
         >
             <svg v-if="maximized" viewBox="0 0 12 12" aria-hidden="true">
@@ -65,8 +75,8 @@ onBeforeUnmount(() => unlistenResize?.());
         <button
             type="button"
             class="window-control window-control-close"
-            aria-label="关闭窗口"
-            title="关闭窗口"
+            :aria-label="t('关闭窗口', 'Close window')"
+            :title="t('关闭窗口', 'Close window')"
             @click="runWindowCommand(() => appWindow.close())"
         >
             <svg viewBox="0 0 12 12" aria-hidden="true">

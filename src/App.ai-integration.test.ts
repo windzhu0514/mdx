@@ -1,3 +1,4 @@
+vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
 /** @vitest-environment jsdom */
 
 import type { AIPromptContext } from "@milkdown/crepe/feature/ai";
@@ -221,6 +222,7 @@ beforeEach(() => {
         }),
     );
     mocks.invoke.mockImplementation(async (command: string, args?: unknown) => {
+        if (command === "take_open_requests") return [];
         if (command === "has_ai_api_key") return true;
         if (command === "get_recent_files") return [];
         if (command === "read_latest_draft") return null;

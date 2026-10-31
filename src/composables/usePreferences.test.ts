@@ -29,6 +29,13 @@ function memoryStorage(initial: string | null = null): PreferenceStorage & {
 }
 
 describe("editor preferences", () => {
+    it("自动保存兼容旧设置，非法值默认关闭并保存开关", () => {
+        expect(normalizePreferences({}).autoSave).toBe(false);
+        expect(normalizePreferences({ autoSave: "true" }).autoSave).toBe(false);
+        const storage = memoryStorage(null);
+        savePreferences(storage, { ...DEFAULT_PREFERENCES, autoSave: true });
+        expect(loadPreferences(storage).autoSave).toBe(true);
+    });
     it("clamps numeric values and rejects unknown choices", () => {
         expect(
             normalizePreferences({

@@ -13,7 +13,7 @@
         "windows": [
             {
                 "label": "main",
-                "title": "Mora 墨笺",
+                "title": "Mora",
                 "width": 1040,
                 "height": 760,
                 "minWidth": 760,
@@ -54,7 +54,21 @@
         },
         "macOS": {
             "signingIdentity": "-"
-        }
+        },
+        "fileAssociations": [
+            {
+                "ext": ["mdx"],
+                "name": "MDXNote",
+                "description": "Mora MDXNote",
+                "role": "Editor"
+            },
+            {
+                "ext": ["md", "markdown"],
+                "name": "Markdown",
+                "description": "Markdown",
+                "role": "Editor"
+            }
+        ]
     },
     "plugins": {
         "updater": {

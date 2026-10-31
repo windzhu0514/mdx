@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { t } from "../../i18n";
+
 import { computed, nextTick, ref, watch } from "vue";
 import type { MermaidDiagramSnapshot, MermaidViewerRequest } from "./mermaidPreview";
 
@@ -150,15 +152,18 @@ watch(
                     </span>
                     <div>
                         <h2 id="mermaid-viewer-title">{{ activeDiagram.label }}</h2>
-                        <p>{{ documentName || "未命名笔记" }}</p>
+                        <p>{{ documentName || t("未命名笔记", "Untitled note") }}</p>
                     </div>
                 </div>
 
-                <nav class="mermaid-viewer-navigation" aria-label="图表导航">
+                <nav
+                    class="mermaid-viewer-navigation"
+                    :aria-label="t('图表导航', 'Diagram navigation')"
+                >
                     <button
                         type="button"
-                        aria-label="上一张图"
-                        title="上一张图"
+                        :aria-label="t('上一张图', 'Previous diagram')"
+                        :title="t('上一张图', 'Previous diagram')"
                         :disabled="activeIndex === 0"
                         @click="selectDiagram(activeIndex - 1)"
                     >
@@ -167,8 +172,8 @@ watch(
                     <span>{{ activeIndex + 1 }} / {{ diagrams.length }}</span>
                     <button
                         type="button"
-                        aria-label="下一张图"
-                        title="下一张图"
+                        :aria-label="t('下一张图', 'Next diagram')"
+                        :title="t('下一张图', 'Next diagram')"
                         :disabled="activeIndex === diagrams.length - 1"
                         @click="selectDiagram(activeIndex + 1)"
                     >
@@ -177,11 +182,14 @@ watch(
                 </nav>
 
                 <div class="mermaid-viewer-actions">
-                    <div class="mermaid-viewer-zoom" aria-label="缩放控制">
+                    <div
+                        class="mermaid-viewer-zoom"
+                        :aria-label="t('缩放控制', 'Zoom controls')"
+                    >
                         <button
                             type="button"
-                            aria-label="缩小"
-                            title="缩小"
+                            :aria-label="t('缩小', 'Zoom out')"
+                            :title="t('缩小', 'Zoom out')"
                             :disabled="!canZoomOut"
                             @click="stepZoom(-1)"
                         >
@@ -189,8 +197,8 @@ watch(
                         </button>
                         <select
                             :value="zoom"
-                            aria-label="缩放比例"
-                            title="缩放比例"
+                            :aria-label="t('缩放比例', 'Zoom level')"
+                            :title="t('缩放比例', 'Zoom level')"
                             @change="
                                 setZoom(
                                     Number(($event.target as HTMLSelectElement).value),
@@ -207,8 +215,8 @@ watch(
                         </select>
                         <button
                             type="button"
-                            aria-label="放大"
-                            title="放大"
+                            :aria-label="t('放大', 'Zoom in')"
+                            :title="t('放大', 'Zoom in')"
                             :disabled="!canZoomIn"
                             @click="stepZoom(1)"
                         >
@@ -217,8 +225,8 @@ watch(
                     </div>
                     <button
                         type="button"
-                        aria-label="适应视图"
-                        title="适应视图"
+                        :aria-label="t('适应视图', 'Fit to view')"
+                        :title="t('适应视图', 'Fit to view')"
                         @click="resetView"
                     >
                         <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -227,8 +235,16 @@ watch(
                     </button>
                     <button
                         type="button"
-                        :aria-label="fullscreen ? '退出全屏' : '全屏查看'"
-                        :title="fullscreen ? '退出全屏' : '全屏查看'"
+                        :aria-label="
+                            fullscreen
+                                ? t('退出全屏', 'Exit fullscreen')
+                                : t('全屏查看', 'View fullscreen')
+                        "
+                        :title="
+                            fullscreen
+                                ? t('退出全屏', 'Exit fullscreen')
+                                : t('全屏查看', 'View fullscreen')
+                        "
                         :aria-pressed="fullscreen"
                         @click="fullscreen = !fullscreen"
                     >
@@ -238,8 +254,8 @@ watch(
                     </button>
                     <button
                         type="button"
-                        aria-label="导出 PNG"
-                        title="导出 PNG"
+                        :aria-label="t('导出 PNG', 'Export PNG')"
+                        :title="t('导出 PNG', 'Export PNG')"
                         :disabled="exporting"
                         @click="exportActive"
                     >
@@ -250,8 +266,8 @@ watch(
                     <span class="mermaid-viewer-divider" aria-hidden="true"></span>
                     <button
                         type="button"
-                        aria-label="关闭查看器"
-                        title="关闭查看器"
+                        :aria-label="t('关闭查看器', 'Close viewer')"
+                        :title="t('关闭查看器', 'Close viewer')"
                         @click="emit('close')"
                     >
                         <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -281,7 +297,7 @@ watch(
                 <aside
                     v-if="zoom > 1"
                     class="mermaid-viewer-minimap"
-                    aria-label="图表缩略图"
+                    :aria-label="t('图表缩略图', 'Diagram thumbnail')"
                 >
                     <div
                         class="mermaid-viewer-minimap-image"
@@ -297,7 +313,9 @@ watch(
                     ></span>
                 </aside>
                 <!-- eslint-enable vue/no-v-html -->
-                <div class="mermaid-viewer-hint">滚轮缩放 · 拖动查看</div>
+                <div class="mermaid-viewer-hint">
+                    {{ t("滚轮缩放 · 拖动查看", "Scroll to zoom · Drag to pan") }}
+                </div>
                 <p v-if="exportError" class="mermaid-viewer-error" role="alert">
                     {{ exportError }}
                 </p>

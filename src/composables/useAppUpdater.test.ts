@@ -212,7 +212,7 @@ describe("app updater download and install", () => {
 
         await expect(updater.installUpdate()).resolves.toBe(false);
         expect(updater.phase.value).toBe("error");
-        expect(updater.error.value).toBe("更新已安装，请手动重启 Mora");
+        expect(updater.error.value).toBe("更新已安装，请手动重启 墨笺");
     });
 
     it("skips a second install while the first is active", async () => {

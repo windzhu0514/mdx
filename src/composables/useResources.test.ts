@@ -253,3 +253,10 @@ describe("resource session", () => {
         expect(restored.removedResources()).toEqual([]);
     });
 });
+
+it("历史恢复引用会撤销尚未保存的资源删除", () => {
+    const resources = createResourceSession();
+    resources.remove("assets/old.png");
+    resources.restoreReferences(["assets/old.png"]);
+    expect(resources.removedResources()).toEqual([]);
+});

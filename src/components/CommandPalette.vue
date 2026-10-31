@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { t } from "../i18n";
+
 import { computed, nextTick, ref, watch, type ComponentPublicInstance } from "vue";
 
 export type CommandPaletteCommand = {
@@ -149,12 +151,12 @@ function handleDialogKeydown(event: KeyboardEvent): void {
             @keydown="handleDialogKeydown"
         >
             <header>
-                <h2 id="command-palette-title">命令面板</h2>
+                <h2 id="command-palette-title">{{ t("命令面板", "Command palette") }}</h2>
                 <button
                     ref="closeButton"
                     type="button"
                     class="icon-button"
-                    aria-label="关闭命令面板"
+                    :aria-label="t('关闭命令面板', 'Close command palette')"
                     @click="requestClose"
                 >
                     ×
@@ -163,7 +165,7 @@ function handleDialogKeydown(event: KeyboardEvent): void {
             <input
                 ref="input"
                 v-model="query"
-                aria-label="搜索命令"
+                :aria-label="t('搜索命令', 'Search commands')"
                 aria-controls="command-palette-list"
                 :aria-activedescendant="
                     filteredCommands.length > 0

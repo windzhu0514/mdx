@@ -123,7 +123,7 @@ describe("useAgentBridge", () => {
             expect.objectContaining({
                 error: expect.objectContaining({
                     code: "SAVE_AS_REQUIRED",
-                    message: "请先在 Mora 中保存文档并指定文件位置。",
+                    message: "请先在 墨笺 中保存文档并指定文件位置。",
                 }),
             }),
         );

@@ -121,6 +121,7 @@ const mocks = vi.hoisted(() => ({
         close: mocks.windowClose,
     })),
     invoke: vi.fn(async (command: string, args?: unknown) => {
+        if (command === "take_open_requests") return [];
         if (command === "get_agent_bridge_status") {
             return {
                 enabled: false,
@@ -980,6 +981,60 @@ afterEach(() => {
     cleanup = undefined;
     document.body.innerHTML = "";
     vi.clearAllMocks();
+});
+
+describe("App 自动保存原文件", () => {
+    for (const changedOnDisk of [false, true]) {
+        it(
+            changedOnDisk
+                ? "外部修改后不自动覆盖或弹出冲突框"
+                : "启用后写回当前原文件，不调用另存为",
+            async () => {
+                mocks.isTauri.mockReturnValue(true);
+                localStorage.setItem(
+                    "mora.preferences.v1",
+                    JSON.stringify({ autoSave: true }),
+                );
+                const path = "C:\\notes\\autosave.mdx";
+                mocks.openDialog.mockResolvedValue([path]);
+                const host = await mountApp();
+                findButton(host, "打开文件")!.click();
+                await vi.waitFor(() =>
+                    expect(mocks.getMoraEditorMarkdown).toBeTypeOf("function"),
+                );
+                await vi.waitFor(() =>
+                    expect(openDocumentRow(host, "autosave")).toBeDefined(),
+                );
+                vi.useFakeTimers();
+                try {
+                    mocks.editorUpdate!("# 自动保存正文");
+                    await nextTick();
+                    if (changedOnDisk)
+                        mocks.diskRevisions.set(
+                            path.toLowerCase(),
+                            (mocks.diskRevisions.get(path.toLowerCase()) ?? 1) + 1,
+                        );
+                    await vi.advanceTimersByTimeAsync(5000);
+                    const writes = mocks.invoke.mock.calls.filter(
+                        ([command]) => command === "save_mdx",
+                    );
+                    expect(writes).toHaveLength(changedOnDisk ? 0 : 1);
+                    expect(mocks.saveDialog).not.toHaveBeenCalled();
+                    expect(
+                        host.querySelector(
+                            '[aria-labelledby="external-conflict-dialog-title"][open]',
+                        ),
+                    ).toBeNull();
+                    if (!changedOnDisk)
+                        expect(writes[0][1]).toMatchObject({
+                            request: { path, content: "# 自动保存正文" },
+                        });
+                } finally {
+                    vi.useRealTimers();
+                }
+            },
+        );
+    }
 });
 
 describe("App Web 预览启动", () => {
@@ -2232,7 +2287,7 @@ describe("App 多文档工作区", () => {
             multiple: true,
             filters: [
                 {
-                    name: "Mora 与 Markdown 文档",
+                    name: "墨笺 与 Markdown 文档",
                     extensions: ["mdx", "md", "markdown"],
                 },
             ],
@@ -2269,7 +2324,7 @@ describe("App 多文档工作区", () => {
             multiple: true,
             filters: [
                 {
-                    name: "Mora 与 Markdown 文档",
+                    name: "墨笺 与 Markdown 文档",
                     extensions: ["mdx", "md", "markdown"],
                 },
             ],
@@ -3251,7 +3306,7 @@ describe("App 多文档工作区", () => {
         );
         expect(mocks.saveDialog).toHaveBeenCalledWith({
             defaultPath: "C:\\notes\\source.mdx",
-            filters: [{ name: "Mora 墨笺笔记", extensions: ["mdx"] }],
+            filters: [{ name: "墨笺 笔记", extensions: ["mdx"] }],
         });
         expect(mocks.invoke).toHaveBeenCalledWith("prepare_markdown_resources", {
             sourcePath,
@@ -3816,13 +3871,17 @@ describe("App 桌面关闭", () => {
         findButton(host, "偏好设置")?.click();
         await vi.waitFor(() => {
             expect(mocks.invoke).toHaveBeenCalledWith("list_system_font_families");
-            const bodyFontSelect = host.querySelectorAll<HTMLSelectElement>("select")[1];
+            const bodyFontSelect = host.querySelectorAll<HTMLSelectElement>(
+                "select:not([data-testid=language-select])",
+            )[1];
             expect(
                 bodyFontSelect?.querySelector<HTMLOptionElement>('option[value="inter"]')
                     ?.disabled,
             ).toBe(true);
         });
-        const bodyFontSelect = host.querySelectorAll<HTMLSelectElement>("select")[1];
+        const bodyFontSelect = host.querySelectorAll<HTMLSelectElement>(
+            "select:not([data-testid=language-select])",
+        )[1];
         const inter = bodyFontSelect?.querySelector<HTMLOptionElement>(
             'option[value="inter"]',
         );
@@ -3832,5 +3891,178 @@ describe("App 桌面关闭", () => {
 
         expect(inter?.textContent?.trim()).toBe("Inter（未安装）");
         expect(segoe?.disabled).toBe(false);
+    });
+});
+
+describe("界面语言切换", () => {
+    it("英文系统首次显示英文，设置切换中文后更新菜单、品牌与 lang，保留正文", async () => {
+        Object.defineProperty(navigator, "language", {
+            configurable: true,
+            value: "en-US",
+        });
+        const host = await mountApp();
+        try {
+            expect(document.documentElement.lang).toBe("en");
+            expect(document.title).toBe("Mora");
+            expect(host.querySelector("summary")?.textContent).toBe("File");
+            const create = Array.from(host.querySelectorAll("button")).find(
+                (b) => b.textContent?.trim() === "New document",
+            );
+            create!.click();
+            await nextTick();
+            mocks.editorUpdate?.("# 原有中文正文\nDo not translate this.");
+            await nextTick();
+            const initialTitle = document.title;
+            const settings = Array.from(host.querySelectorAll("button")).find((b) =>
+                b.textContent?.includes("Preferences"),
+            );
+            settings!.click();
+            await nextTick();
+            const select = host.querySelector<HTMLSelectElement>(
+                '[data-testid="language-select"]',
+            )!;
+            select.value = "zh-CN";
+            select.dispatchEvent(new Event("change"));
+            await nextTick();
+            await nextTick();
+            expect(document.documentElement.lang).toBe("zh-CN");
+            expect(document.title).toBe(initialTitle.replace(/Mora$/, "墨笺"));
+            expect(host.querySelector("summary")?.textContent).toBe("文件");
+            expect(host.textContent).toContain("偏好设置");
+            expect(mocks.getMoraEditorMarkdown?.()).toBe(
+                "# 原有中文正文\nDo not translate this.",
+            );
+            expect(
+                JSON.parse(localStorage.getItem("mora.preferences.v1")!).language,
+            ).toBe("zh-CN");
+        } finally {
+            Object.defineProperty(navigator, "language", {
+                configurable: true,
+                value: "zh-CN",
+            });
+        }
+    });
+});
+
+describe("工作区文件管理操作链路", () => {
+    it("侧栏新建文件夹提交受工作区约束的 Rust 请求", async () => {
+        const { host } = await mountDirtyMdxInFolder();
+        host.querySelector<HTMLButtonElement>('[aria-label="管理 notes"]')!.click();
+        await nextTick();
+        const input = host.querySelector<HTMLInputElement>(
+            '[aria-label="文件管理"] input',
+        )!;
+        input.value = "资料";
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        await nextTick();
+        findButton(host, "新建文件夹")!.click();
+        await vi.waitFor(() =>
+            expect(mocks.invoke).toHaveBeenCalledWith("workspace_operation", {
+                request: expect.objectContaining({
+                    root: "C:\\notes",
+                    path: "C:\\notes/资料",
+                    action: "create-directory",
+                }),
+            }),
+        );
+    });
+    it("取消未保存文档的重命名时不操作磁盘", async () => {
+        const { host } = await mountDirtyMdxInFolder();
+        host.querySelector<HTMLButtonElement>('[aria-label="管理 a.mdx"]')!.click();
+        await nextTick();
+        const input = host.querySelector<HTMLInputElement>(
+            '[aria-label="文件管理"] input',
+        )!;
+        input.value = "renamed.mdx";
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        await nextTick();
+        findButton(host, "重命名")!.click();
+        await vi.waitFor(() =>
+            expect(
+                host.querySelector('[aria-labelledby="leave-dialog-title"]'),
+            ).not.toBeNull(),
+        );
+        findButton(host, "取消")!.click();
+        await nextTick();
+        expect(
+            mocks.invoke.mock.calls.filter(
+                ([command]) => command === "workspace_operation",
+            ),
+        ).toHaveLength(0);
+        expect(mocks.getMoraEditorMarkdown?.()).toBe("dirty a");
+    });
+});
+
+describe("放弃编辑后的文件移动", () => {
+    it("移动失败仍保留未保存编辑", async () => {
+        const { host } = await mountDirtyMdxInFolder();
+        const original = mocks.invoke.getMockImplementation()!;
+        mocks.invoke.mockImplementation(async (command: string, args?: unknown) => {
+            if (command === "workspace_operation") throw Error("move failed");
+            return original(command, args);
+        });
+        host.querySelector<HTMLButtonElement>('[aria-label="管理 a.mdx"]')!.click();
+        await nextTick();
+        const input = host.querySelector<HTMLInputElement>(
+            '[aria-label="文件管理"] input',
+        )!;
+        input.value = "renamed.mdx";
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        await nextTick();
+        findButton(host, "重命名")!.click();
+        await vi.waitFor(() =>
+            expect(
+                host.querySelector('[aria-labelledby="leave-dialog-title"]'),
+            ).not.toBeNull(),
+        );
+        findButton(host, "放弃修改")!.click();
+        await vi.waitFor(() =>
+            expect(
+                mocks.invoke.mock.calls.filter(
+                    ([command]) => command === "workspace_operation",
+                ),
+            ).toHaveLength(1),
+        );
+        expect(mocks.getMoraEditorMarkdown?.()).toBe("dirty a");
+    });
+});
+
+describe("文件操作期间的保存保护", () => {
+    it("阻止快捷键在文件移动事务期间并发保存", async () => {
+        const { host } = await mountDirtyMdxInFolder();
+        let finish!: () => void;
+        const pending = new Promise<void>((resolve) => {
+            finish = resolve;
+        });
+        const original = mocks.invoke.getMockImplementation()!;
+        mocks.invoke.mockImplementation(async (command: string, args?: unknown) =>
+            command === "workspace_operation" ? pending : original(command, args),
+        );
+        host.querySelector<HTMLButtonElement>('[aria-label="管理 notes"]')!.click();
+        await nextTick();
+        const input = host.querySelector<HTMLInputElement>(
+            '[aria-label="文件管理"] input',
+        )!;
+        input.value = "new";
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        await nextTick();
+        findButton(host, "新建文件夹")!.click();
+        await vi.waitFor(() =>
+            expect(
+                mocks.invoke.mock.calls.some(
+                    ([command]) => command === "workspace_operation",
+                ),
+            ).toBe(true),
+        );
+        window.dispatchEvent(
+            new KeyboardEvent("keydown", { key: "s", ctrlKey: true, bubbles: true }),
+        );
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        const saves = mocks.invoke.mock.calls.filter(
+            ([command]) => command === "save_mdx",
+        ).length;
+        finish();
+        await nextTick();
+        expect(saves).toBe(0);
     });
 });

@@ -8,18 +8,26 @@
 </template>
 
 <script setup lang="ts">
+import { textMatches, visibleSearchOccurrence } from "../../utils/reviewText";
+import { locale, t } from "../../i18n";
+
 import {
     LanguageDescription,
     LanguageSupport,
     StreamLanguage,
 } from "@codemirror/language";
 import { languages as codeLanguages } from "@codemirror/language-data";
+import {
+    aiLanguageConfig,
+    applyEditorLanguage,
+    editorLanguageConfig,
+} from "./editorLocale";
 import { Crepe } from "@milkdown/crepe";
 import type { AIProvider } from "@milkdown/crepe/feature/ai";
 import mermaid from "mermaid";
 import "@milkdown/crepe/theme/common/style.css";
 import "@milkdown/crepe/theme/frame.css";
-import { commandsCtx, editorViewCtx, parserCtx } from "@milkdown/kit/core";
+import { commandsCtx, editorViewCtx, parserCtx, remarkCtx } from "@milkdown/kit/core";
 import type { Ctx } from "@milkdown/kit/ctx";
 import {
     createCodeBlockCommand,
@@ -109,7 +117,7 @@ const states = new Map<
 let pendingReleasedDocumentId: string | null = null;
 
 function reportLifecycleError(operation: string, error: unknown): void {
-    console.error(`Crepe ${operation}失败`, error);
+    console.error(t(`Crepe ${operation}失败`, `Crepe ${operation} failed`), error);
 }
 
 function cancelAi(): void {
@@ -199,24 +207,30 @@ onMounted(() => {
     const features = {
         [Crepe.Feature.AI]: props.aiProvider ? true : false,
     };
+    const languageConfig = editorLanguageConfig();
     const featureConfigs = {
+        ...languageConfig,
         [Crepe.Feature.Placeholder]: {
-            text: "开始写作…",
+            text: t("开始写作…", "Start writing…"),
         },
         [Crepe.Feature.CodeMirror]: {
+            ...languageConfig[Crepe.Feature.CodeMirror],
             languages: codeBlockLanguages,
             renderPreview: renderMermaidPreview,
             previewOnlyByDefault: true,
         },
         [Crepe.Feature.ImageBlock]: {
+            ...languageConfig[Crepe.Feature.ImageBlock],
             onUpload: async (file: File) => {
-                if (!props.uploadImage) throw new Error("图片上传不可用");
+                if (!props.uploadImage)
+                    throw new Error(t("图片上传不可用", "Image upload unavailable"));
                 return props.uploadImage(file);
             },
         },
         ...(props.aiProvider
             ? {
                   [Crepe.Feature.AI]: {
+                      ...aiLanguageConfig(),
                       provider: props.aiProvider,
                       diffReviewOnEnd: true,
                       onError: (error: Error) => emit("ai-error", error.message),
@@ -231,6 +245,7 @@ onMounted(() => {
         features,
         featureConfigs,
     });
+    instance.editor.config(applyEditorLanguage);
     crepe = instance;
     disposed = false;
     ready = false;
@@ -271,6 +286,15 @@ watch(
         crepe.setReadonly(Boolean(readonly));
     },
 );
+
+watch(locale, () => {
+    if (!crepe || !ready || disposed) return;
+    crepe.editor.action((ctx) => {
+        applyEditorLanguage(ctx);
+        const view = ctx.get(editorViewCtx);
+        view.updateState(view.state);
+    });
+});
 
 onBeforeUnmount(() => {
     renderMermaidPreview.dispose();
@@ -327,6 +351,49 @@ function moveCursor(position: "start" | "end"): void {
                 ? Selection.atStart(view.state.doc)
                 : Selection.atEnd(view.state.doc);
         view.dispatch(view.state.tr.setSelection(selection));
+    });
+}
+
+function findText(query: string, occurrence = 0): boolean {
+    if (!crepe || !ready || disposed) return false;
+    return crepe.editor.action((ctx) => {
+        const view = ctx.get(editorViewCtx);
+        const visibleOccurrence = visibleSearchOccurrence(
+            props.modelValue,
+            query,
+            occurrence,
+            ctx.get(remarkCtx).parse(props.modelValue),
+        );
+        if (visibleOccurrence === null) return false;
+        const ranges: { from: number; to: number }[] = [];
+        view.state.doc.descendants((node, pos) => {
+            if (!node.isTextblock) return;
+            let text = "";
+            const positions: number[] = [];
+            node.descendants((child, offset) => {
+                if (child.isText) {
+                    const value = child.text ?? "";
+                    for (let i = 0; i < value.length; i++)
+                        positions.push(pos + 1 + offset + i);
+                    text += value;
+                } else if (child.isLeaf) {
+                    text += "\n";
+                    positions.push(pos + 1 + offset);
+                }
+            });
+            for (const m of textMatches(text, query))
+                ranges.push({ from: positions[m.from]!, to: positions[m.to - 1]! + 1 });
+            return false;
+        });
+        const match = ranges[visibleOccurrence];
+        if (!match) return false;
+        view.dispatch(
+            view.state.tr
+                .setSelection(TextSelection.create(view.state.doc, match.from, match.to))
+                .scrollIntoView(),
+        );
+        view.focus();
+        return true;
     });
 }
 
@@ -504,6 +571,7 @@ defineExpose<MoraEditorHandle>({
     moveCursor,
     execute,
     scrollToHeading,
+    findText,
     whenReady,
     whenSettled,
     captureMermaidSources,

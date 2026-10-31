@@ -53,13 +53,26 @@ pub(crate) fn safe_write_bytes_exclusive(target_path: &Path, bytes: &[u8]) -> Re
     safe_write_bytes_exclusive_with_rename(target_path, bytes, |from, to| fs::rename(from, to))
 }
 
-pub(crate) fn safe_write_bytes_exclusive_with_rename<F>(target_path: &Path, bytes: &[u8], rename: F) -> Result<(), String>
-where F: FnMut(&Path, &Path) -> io::Result<()> {
+pub(crate) fn safe_write_bytes_exclusive_with_rename<F>(
+    target_path: &Path,
+    bytes: &[u8],
+    rename: F,
+) -> Result<(), String>
+where
+    F: FnMut(&Path, &Path) -> io::Result<()>,
+{
     safe_write_bytes_using(target_path, bytes, rename, true)
 }
 
-fn safe_write_bytes_using<F>(target_path: &Path, bytes: &[u8], mut rename: F, exclusive: bool) -> Result<(), String>
-where F: FnMut(&Path, &Path) -> io::Result<()> {
+fn safe_write_bytes_using<F>(
+    target_path: &Path,
+    bytes: &[u8],
+    mut rename: F,
+    exclusive: bool,
+) -> Result<(), String>
+where
+    F: FnMut(&Path, &Path) -> io::Result<()>,
+{
     validate_destination(target_path)?;
     let temporary_path = companion_path(target_path, ".tmp");
     let backup_path = companion_path(target_path, ".bak");
@@ -69,21 +82,39 @@ where F: FnMut(&Path, &Path) -> io::Result<()> {
             return Err("目标旁存在备份文件，已保留该文件；请选择其他保存位置。".to_string());
         }
         // A failed exclusive create never gives us ownership, so never clean that path on error.
-        let mut temporary = fs::OpenOptions::new().write(true).create_new(true).open(&temporary_path)
+        let mut temporary = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary_path)
             .map_err(|error| format!("无法独占创建临时文件，已保留现有文件：{error}"))?;
-        if let Err(error) = temporary.write_all(bytes).and_then(|_| temporary.sync_all()) {
+        if let Err(error) = temporary
+            .write_all(bytes)
+            .and_then(|_| temporary.sync_all())
+        {
             drop(temporary);
-            return Err(cleanup_temporary_error("写入临时文件失败", error, &temporary_path));
+            return Err(cleanup_temporary_error(
+                "写入临时文件失败",
+                error,
+                &temporary_path,
+            ));
         }
         drop(temporary);
         if fs::symlink_metadata(&backup_path).is_ok() {
-            return Err(cleanup_temporary_error("保存期间出现其他备份，已停止替换", io::Error::other("备份已存在"), &temporary_path));
+            return Err(cleanup_temporary_error(
+                "保存期间出现其他备份，已停止替换",
+                io::Error::other("备份已存在"),
+                &temporary_path,
+            ));
         }
     } else {
         remove_existing_temporary(&temporary_path)?;
         recover_interrupted_write(target_path, &backup_path, &mut rename)?;
         if let Err(error) = write_temporary(&temporary_path, bytes) {
-            return Err(cleanup_temporary_error("写入导出临时文件失败", error, &temporary_path));
+            return Err(cleanup_temporary_error(
+                "写入导出临时文件失败",
+                error,
+                &temporary_path,
+            ));
         }
     }
 

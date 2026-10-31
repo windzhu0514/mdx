@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { t } from "../i18n";
+
 import { nextTick, ref } from "vue";
 
 defineProps<{
@@ -51,16 +53,16 @@ defineExpose({ focusFind, focusReplace });
                 v-model="query"
                 class="find-input"
                 type="text"
-                placeholder="查找"
-                aria-label="查找内容"
+                :placeholder="t('查找', 'Find')"
+                :aria-label="t('查找内容', 'Find text')"
                 @keydown.enter.prevent="navigateFromEnter($event.shiftKey)"
             />
-            <span class="find-meta">{{ matchCount }} 处匹配</span>
+            <span class="find-meta">{{ matchCount }} {{ t("处匹配", "matches") }}</span>
             <button type="button" class="find-button" @click="emit('previous')">
-                上一处
+                {{ t("上一处", "Previous match") }}
             </button>
             <button type="button" class="find-button" @click="emit('next')">
-                下一处
+                {{ t("下一处", "Next match") }}
             </button>
             <button
                 v-if="!replaceOpen"
@@ -68,10 +70,10 @@ defineExpose({ focusFind, focusReplace });
                 class="find-button secondary"
                 @click="emit('expand')"
             >
-                替换
+                {{ t("替换", "Replace") }}
             </button>
             <button type="button" class="find-button secondary" @click="emit('close')">
-                关闭
+                {{ t("关闭", "Close") }}
             </button>
         </div>
         <div v-if="replaceOpen" class="find-row find-row-secondary">
@@ -80,15 +82,15 @@ defineExpose({ focusFind, focusReplace });
                 v-model="replacement"
                 class="find-input"
                 type="text"
-                placeholder="替换为"
-                aria-label="替换内容"
+                :placeholder="t('替换为', 'Replace with')"
+                :aria-label="t('替换内容', 'Replacement text')"
                 @keydown.enter.prevent="emit('replaceCurrent')"
             />
             <button type="button" class="find-button" @click="emit('replaceCurrent')">
-                替换当前
+                {{ t("替换当前", "Replace current") }}
             </button>
             <button type="button" class="find-button" @click="emit('replaceAll')">
-                全部替换
+                {{ t("全部替换", "Replace all") }}
             </button>
         </div>
     </div>

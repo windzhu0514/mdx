@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type DownloadEvent, type Update } from "@tauri-apps/plugin-updater";
 import { computed, readonly, ref, shallowRef } from "vue";
@@ -131,7 +132,10 @@ export function useAppUpdater(enabled: boolean) {
         } catch {
             recoveryPhase.value = "idle";
             phase.value = "error";
-            error.value = "更新已安装，请手动重启 Mora";
+            error.value = t(
+                "更新已安装，请手动重启 墨笺",
+                "Update installed. Please restart Mora",
+            );
             return false;
         }
     }

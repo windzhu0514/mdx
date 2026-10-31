@@ -308,3 +308,24 @@ it("does not scroll to an ATX-looking line inside a fenced code block", async ()
     expect(editor.handle.value?.scrollToHeading("伪标题")).toBe(false);
     expect(editor.handle.value?.scrollToHeading("外部")).toBe(true);
 });
+
+describe("搜索定位", () => {
+    it("选中重复中文第二处且保留正文", async () => {
+        const editor = mountEditor("😀墨笺，墨笺");
+        cleanup = editor.unmount;
+        await editor.handle.value?.whenReady();
+        expect(editor.handle.value?.findText("墨笺", 1)).toBe(true);
+        expect(editor.handle.value?.getSelectedText()).toBe("墨笺");
+        editor.handle.value?.replaceSelection("目标");
+        expect(editor.markdown.value).toBe("😀墨笺，目标");
+    });
+});
+
+describe("过期搜索命中", () => {
+    it("重复命中消失后不错误选中第一处", async () => {
+        const editor = mountEditor("墨笺");
+        cleanup = editor.unmount;
+        await editor.handle.value?.whenReady();
+        expect(editor.handle.value?.findText("墨笺", 1)).toBe(false);
+    });
+});

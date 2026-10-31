@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { t } from "../i18n";
+
 import { THEME_OPTIONS, type ThemeId } from "../composables/usePreferences";
 
 defineProps<{
@@ -14,12 +16,23 @@ const emit = defineEmits<{
     <section class="theme-picker" aria-labelledby="theme-picker-title">
         <header class="theme-picker-header">
             <div>
-                <h2 id="theme-picker-title">选择主题</h2>
-                <p>横向滚动浏览，点击后立即切换</p>
+                <h2 id="theme-picker-title">{{ t("选择主题", "Choose theme") }}</h2>
+                <p>
+                    {{
+                        t(
+                            "横向滚动浏览，点击后立即切换",
+                            "Scroll horizontally and click to switch",
+                        )
+                    }}
+                </p>
             </div>
         </header>
 
-        <div class="theme-picker-track" role="radiogroup" aria-label="界面主题">
+        <div
+            class="theme-picker-track"
+            role="radiogroup"
+            :aria-label="t('界面主题', 'Interface theme')"
+        >
             <button
                 v-for="option in THEME_OPTIONS"
                 :key="option.id"

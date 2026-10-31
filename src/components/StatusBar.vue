@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { t } from "../i18n";
+
 import { computed, ref } from "vue";
 
 const props = defineProps<{
@@ -41,7 +43,11 @@ defineExpose({ isDetailsOpen: () => messageDialog.value?.open ?? false });
             type="button"
             class="status-sidebar-toggle workspace-toggle"
             :class="{ active: workspaceVisible }"
-            :aria-label="workspaceVisible ? '隐藏工作区' : '显示工作区'"
+            :aria-label="
+                workspaceVisible
+                    ? t('隐藏工作区', 'Hide workspace')
+                    : t('显示工作区', 'Show workspace')
+            "
             :aria-pressed="workspaceVisible"
             @click="emit('toggle-workspace')"
         >
@@ -64,15 +70,15 @@ defineExpose({ isDetailsOpen: () => messageDialog.value?.open ?? false });
                     <button
                         type="button"
                         class="status-message-action"
-                        aria-label="查看提示详情"
+                        :aria-label="t('查看提示详情', 'Show message details')"
                         @click="showDetails"
                     >
-                        详情
+                        {{ t("详情", "Details") }}
                     </button>
                     <button
                         type="button"
                         class="status-message-action"
-                        aria-label="关闭提示"
+                        :aria-label="t('关闭提示', 'Dismiss message')"
                         @click="emit('dismiss-message')"
                     >
                         ×
@@ -81,7 +87,7 @@ defineExpose({ isDetailsOpen: () => messageDialog.value?.open ?? false });
             </div>
         </div>
         <div class="status-right">
-            <div class="status-cell">{{ wordCount }} 字</div>
+            <div class="status-cell">{{ wordCount }} {{ t("字", "characters") }}</div>
         </div>
         <button
             type="button"
@@ -90,10 +96,10 @@ defineExpose({ isDetailsOpen: () => messageDialog.value?.open ?? false });
             :disabled="!outlineAvailable"
             :aria-label="
                 !outlineAvailable
-                    ? '当前文档没有目录'
+                    ? t('当前文档没有目录', 'This document has no outline')
                     : outlineVisible
-                      ? '隐藏目录'
-                      : '显示目录'
+                      ? t('隐藏目录', 'Hide outline')
+                      : t('显示目录', 'Show outline')
             "
             :aria-pressed="outlineVisible"
             @click="emit('toggle-outline')"
@@ -110,16 +116,16 @@ defineExpose({ isDetailsOpen: () => messageDialog.value?.open ?? false });
         aria-labelledby="status-message-title"
         @close="detailsText = ''"
     >
-        <h2 id="status-message-title">提示详情</h2>
+        <h2 id="status-message-title">{{ t("提示详情", "Message details") }}</h2>
         <p>{{ detailsText }}</p>
         <button
             type="button"
             class="status-message-action"
-            aria-label="关闭详情"
+            :aria-label="t('关闭详情', 'Close details')"
             autofocus
             @click="messageDialog?.close()"
         >
-            关闭
+            {{ t("关闭", "Close") }}
         </button>
     </dialog>
 </template>

@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import type { AIPromptContext } from "@milkdown/crepe/feature/ai";
 import { Channel, invoke } from "@tauri-apps/api/core";
 
@@ -21,7 +22,7 @@ type AiRequest = AiConfig & AIPromptContext;
 function commandErrorMessage(error: unknown) {
     if (error instanceof Error) return error.message;
     if (typeof error === "string") return error;
-    return "AI 命令执行失败";
+    return t("AI 命令执行失败", "AI command failed");
 }
 
 function createEventQueue() {
@@ -69,8 +70,10 @@ export function createOpenAICompatibleProvider(
         const configured = getConfig();
         const baseUrl = configured.baseUrl.trim();
         const model = configured.model.trim();
-        if (!baseUrl) throw new Error("请先配置 AI Base URL");
-        if (!model) throw new Error("请先配置 AI 模型");
+        if (!baseUrl)
+            throw new Error(t("请先配置 AI Base URL", "Configure the AI Base URL first"));
+        if (!model)
+            throw new Error(t("请先配置 AI 模型", "Configure the AI model first"));
 
         if (signal.aborted) return;
 

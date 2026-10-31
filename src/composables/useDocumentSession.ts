@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import { invoke } from "@tauri-apps/api/core";
 import { computed, ref, shallowRef } from "vue";
 
@@ -407,7 +408,7 @@ export function useDocumentSession(desktop: boolean) {
                 pathIdentity: null,
                 sourceKind: format === "markdown" ? "markdown" : "untitled",
                 importSourcePath: null,
-                displayName: `未命名文档 ${number}`,
+                displayName: t(`未命名文档 ${number}`, `Untitled document ${number}`),
                 content: "",
                 meta: null,
                 dirty: false,
@@ -864,7 +865,13 @@ export function useDocumentSession(desktop: boolean) {
         if (!desktop) return;
         const readValue = await invoke<unknown>("read_workspace_session");
         if (!isWorkspaceSessionRead(readValue)) {
-            warnings.value = [...warnings.value, "工作区会话数据无效，已保留当前会话。"];
+            warnings.value = [
+                ...warnings.value,
+                t(
+                    "工作区会话数据无效，已保留当前会话。",
+                    "Invalid workspace session data. The current session was kept.",
+                ),
+            ];
             return;
         }
 
@@ -896,7 +903,7 @@ export function useDocumentSession(desktop: boolean) {
                 ? baseName(saved.path)
                 : saved.importSourcePath
                   ? baseName(saved.importSourcePath)
-                  : `未命名文档 ${nextUntitledNumber++}`;
+                  : `${t("未命名文档", "Untitled document")} ${nextUntitledNumber++}`;
             let content = "";
             let meta: MdxMetadata | null = null;
             let unavailable = false;
@@ -1026,7 +1033,10 @@ export function useDocumentSession(desktop: boolean) {
                 resolved = await resolve(folderPath);
                 if (restoredFolderIdentities.has(resolved.identity)) continue;
                 restoredFolderIdentities.add(resolved.identity);
-                if (!resolved.available) throw new Error("文件夹暂时不可用");
+                if (!resolved.available)
+                    throw new Error(
+                        t("文件夹暂时不可用", "Folder temporarily unavailable"),
+                    );
                 const folder = await loadFolder(resolved);
                 folders.value = [...folders.value, folder];
             } catch (error) {
@@ -1064,6 +1074,47 @@ export function useDocumentSession(desktop: boolean) {
 
     function revisionsEqual(left: DiskRevision | null, right: DiskRevision | null) {
         return left?.modifiedAtMs === right?.modifiedAtMs && left?.size === right?.size;
+    }
+
+    async function relocatePaths(source: string, target: string) {
+        const key = workspacePathKey(source);
+        const remap = (path: string) =>
+            workspacePathKey(path) === key ||
+            workspacePathKey(path).startsWith(key + "\\")
+                ? target + path.slice(source.length)
+                : path;
+        for (const runtime of documents.value) {
+            if (!runtime.path || remap(runtime.path) === runtime.path) continue;
+            const oldKey =
+                draftKeys.get(runtime.id) ?? draftKey(runtime.path, runtime.id);
+            const resolved = await resolve(remap(runtime.path));
+            runtime.path = resolved.path;
+            runtime.pathIdentity = resolved.identity;
+            draftKeys.set(runtime.id, draftKey(runtime.path, runtime.id));
+            await runtime.draft.remove(oldKey);
+            await reloadFromDisk(runtime.id);
+        }
+        for (const folder of [...folders.value]) {
+            const nextPath = remap(folder.path);
+            if (nextPath === folder.path) continue;
+            const resolved = await resolve(nextPath);
+            folderIdentities.delete(folder.path);
+            folderIdentities.set(resolved.path, resolved.identity);
+            folders.value = folders.value.map((current) =>
+                current.path === folder.path
+                    ? {
+                          ...folder,
+                          path: resolved.path,
+                          name: baseName(resolved.path),
+                          entries: [],
+                          entryCount: 0,
+                      }
+                    : current,
+            );
+            await refreshFolder(resolved.path);
+        }
+        expandedPaths.value = expandedPaths.value.map(remap);
+        await persist();
     }
 
     async function reloadFromDisk(id: string) {
@@ -1179,7 +1230,8 @@ export function useDocumentSession(desktop: boolean) {
         const current = folders.value[currentIndex];
         try {
             const resolved = await resolve(current.path);
-            if (!resolved.available) throw new Error("文件夹暂时不可用");
+            if (!resolved.available)
+                throw new Error(t("文件夹暂时不可用", "Folder temporarily unavailable"));
             const folder = await loadFolder(resolved);
             folderIdentities.delete(current.path);
             folderIdentities.set(folder.path, resolved.identity);
@@ -1212,7 +1264,10 @@ export function useDocumentSession(desktop: boolean) {
         for (const current of folders.value) {
             try {
                 const resolved = await resolve(current.path);
-                if (!resolved.available) throw new Error("文件夹暂时不可用");
+                if (!resolved.available)
+                    throw new Error(
+                        t("文件夹暂时不可用", "Folder temporarily unavailable"),
+                    );
                 const folder = await loadFolder(resolved);
                 folderIdentities.delete(current.path);
                 folderIdentities.set(folder.path, resolved.identity);
@@ -1299,6 +1354,7 @@ export function useDocumentSession(desktop: boolean) {
         restore,
         persist,
         reloadFromDisk,
+        relocatePaths,
         refreshFolder,
         refreshFolders,
         refreshDiskState,

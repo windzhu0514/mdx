@@ -372,6 +372,7 @@ beforeEach(() => {
         mocks.updaterState.error.value = "";
     }
     mocks.invoke.mockImplementation(async (command: string, args?: unknown) => {
+        if (command === "take_open_requests") return [];
         if (
             command === "get_agent_bridge_status" ||
             command === "set_agent_access_enabled"
@@ -1164,7 +1165,7 @@ describe("App 编辑器状态集成", () => {
             );
         });
 
-        expect(document.title).toBe("项目计划 - Mora");
+        expect(document.title).toBe("项目计划 - 墨笺");
         expect(mocks.invoke).toHaveBeenCalledWith("push_recent_file", {
             path: "C:\\notes\\项目计划.MDX",
             title: "项目计划",
@@ -1767,7 +1768,7 @@ describe("App PDF 打印视图", () => {
         expect(mocks.printTitles).toEqual(["项目计划"]);
         expect(mocks.printSnapshots[0]).not.toContain("title-row");
         await nextTick();
-        expect(document.title).toBe("项目计划 - Mora");
+        expect(document.title).toBe("项目计划 - 墨笺");
     });
 
     it("prevents concurrent exports, recovers from rejected readiness, and releases the print guard", async () => {
@@ -1941,7 +1942,7 @@ describe("App 历史版本文档作用域", () => {
         await nextTick();
         findButton(host, "历史版本").click();
         await vi.waitFor(() => expect(host.textContent).toContain("A 的历史"));
-        findButton(host, "恢复此版本").click();
+        findButton(host, "预览与对比").click();
         await vi.waitFor(() =>
             expect(mocks.invoke).toHaveBeenCalledWith("read_history", {
                 path: pathA,
@@ -2011,7 +2012,14 @@ describe("App 历史版本文档作用域", () => {
         );
         findButton(host, "历史版本").click();
         await vi.waitFor(() => expect(host.textContent).toContain("元数据历史"));
-        findButton(host, "恢复此版本").click();
+        findButton(host, "预览与对比").click();
+        await vi.waitFor(() => expect(host.textContent).toContain("确认恢复此版本"));
+        expect(
+            host.querySelector(
+                '[role="treeitem"][aria-current="page"] .workspace-status',
+            ),
+        ).toBeNull();
+        findButton(host, "确认恢复此版本").click();
 
         await vi.waitFor(() =>
             expect(

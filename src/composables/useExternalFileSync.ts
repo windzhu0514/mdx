@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { ref, watch } from "vue";
@@ -45,7 +46,10 @@ export function useExternalFileSync(options: ExternalFileSyncOptions) {
         listenerFailure = true;
         status.value = {
             state: "error",
-            message: "外部文件同步监听失败；请重新打开窗口后重试。",
+            message: t(
+                "外部文件同步监听失败；请重新打开窗口后重试。",
+                "External file watcher failed; reopen the window to retry.",
+            ),
         };
     }
 
@@ -61,7 +65,10 @@ export function useExternalFileSync(options: ExternalFileSyncOptions) {
                 if (!disposed) {
                     status.value = {
                         state: "error",
-                        message: "外部文件监视配置失败；切换或重新打开文档可重试。",
+                        message: t(
+                            "外部文件监视配置失败；切换或重新打开文档可重试。",
+                            "Failed to configure file watching; switch or reopen the document to retry.",
+                        ),
                     };
                 }
             });
@@ -98,7 +105,10 @@ export function useExternalFileSync(options: ExternalFileSyncOptions) {
             eventFailure = true;
             status.value = {
                 state: "degraded",
-                message: "外部文件变更同步失败；正在执行一次有界全量复查。",
+                message: t(
+                    "外部文件变更同步失败；正在执行一次有界全量复查。",
+                    "External sync failed; performing a bounded full rescan.",
+                ),
             };
             try {
                 await handleExternalChange();
@@ -106,8 +116,10 @@ export function useExternalFileSync(options: ExternalFileSyncOptions) {
                 if (!disposed) {
                     status.value = {
                         state: "error",
-                        message:
+                        message: t(
                             "外部文件变更同步和全量复查均失败；后续事件仍会继续处理。",
+                            "External sync and full rescan failed; subsequent events will still be processed.",
+                        ),
                     };
                 }
             }

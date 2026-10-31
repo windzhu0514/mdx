@@ -26,6 +26,8 @@ export function owningRoot(path: string, roots: string[]) {
 </script>
 
 <script setup lang="ts">
+import { t } from "../i18n";
+
 import { computed, nextTick, ref, type ComponentPublicInstance } from "vue";
 
 import { useScrollActivity } from "../composables/useScrollActivity";
@@ -59,6 +61,7 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
+    manage: [path: string, root: string, directory: boolean];
     activate: [id: string];
     "open-path": [path: string];
     "open-file": [];
@@ -84,16 +87,16 @@ function clampWidth(value: number) {
 
 function documentStatuses(document: OpenDocument) {
     const statuses: string[] = [];
-    if (document.dirty) statuses.push("未保存");
-    if (document.conflict) statuses.push("外部更改");
-    if (document.unavailable) statuses.push("不可用");
+    if (document.dirty) statuses.push(t("未保存", "Unsaved"));
+    if (document.conflict) statuses.push(t("外部更改", "External changes"));
+    if (document.unavailable) statuses.push(t("不可用", "Unavailable"));
     return statuses;
 }
 
 function folderStatuses(folder: WorkspaceFolder) {
     const statuses: string[] = [];
-    if (folder.truncated) statuses.push("扫描已截断");
-    if (folder.unavailable) statuses.push("不可用");
+    if (folder.truncated) statuses.push(t("扫描已截断", "Scan truncated"));
+    if (folder.unavailable) statuses.push(t("不可用", "Unavailable"));
     if (folder.error) statuses.push(folder.error);
     return statuses;
 }
@@ -191,8 +194,8 @@ const documentRows = computed<TreeRow[]>(() =>
 
 const rows = computed(() => [...documentRows.value, ...folderRows.value]);
 const workspaceSections = computed(() => [
-    { id: "open-documents", title: "文件", rows: documentRows.value },
-    { id: "workspace-folders", title: "文件夹", rows: folderRows.value },
+    { id: "open-documents", title: t("文件", "File"), rows: documentRows.value },
+    { id: "workspace-folders", title: t("文件夹", "Folder"), rows: folderRows.value },
 ]);
 const nonEmptyWorkspaceSections = computed(() =>
     workspaceSections.value.filter((section) => section.rows.length > 0),
@@ -377,10 +380,10 @@ function onPointerUp(event: PointerEvent) {
         class="workspace-sidebar"
         :class="{ 'is-compact': props.compact }"
         :style="{ width: `${clampWidth(props.width)}px` }"
-        aria-label="工作区侧栏"
+        :aria-label="t('工作区侧栏', 'Workspace sidebar')"
     >
         <header class="workspace-sidebar-header">
-            <span>工作区</span>
+            <span>{{ t("工作区", "Workspace") }}</span>
         </header>
         <div ref="workspaceScrollElement" class="workspace-tree">
             <section
@@ -388,14 +391,14 @@ function onPointerUp(event: PointerEvent) {
                 class="workspace-section"
                 aria-labelledby="open-documents-heading"
             >
-                <h2 id="open-documents-heading">文件</h2>
+                <h2 id="open-documents-heading">{{ t("文件", "File") }}</h2>
                 <div class="workspace-empty">
                     <button
                         type="button"
-                        aria-label="打开文件"
+                        :aria-label="t('打开文件', 'Open file')"
                         @click="emit('open-file')"
                     >
-                        打开文件
+                        {{ t("打开文件", "Open file") }}
                     </button>
                 </div>
             </section>
@@ -403,7 +406,7 @@ function onPointerUp(event: PointerEvent) {
                 v-if="rows.length"
                 class="workspace-tree-composite"
                 role="tree"
-                aria-label="工作区文件"
+                :aria-label="t('工作区文件', 'Workspace files')"
                 @keydown="onTreeKeydown"
             >
                 <section
@@ -432,6 +435,24 @@ function onPointerUp(event: PointerEvent) {
                             @click="selectRow(row)"
                             @focus="rovingKey = row.key"
                         >
+                            <button
+                                v-if="owningRoot(row.path, roots)"
+                                type="button"
+                                class="workspace-row-action"
+                                :aria-label="
+                                    t(`管理 ${row.label}`, `Manage ${row.label}`)
+                                "
+                                @click.stop="
+                                    emit(
+                                        'manage',
+                                        row.path,
+                                        owningRoot(row.path, roots)!,
+                                        row.kind === 'folder' || row.kind === 'directory',
+                                    )
+                                "
+                            >
+                                ⋯
+                            </button>
                             <div
                                 class="workspace-tree-item"
                                 :class="{ active: row.active }"
@@ -461,8 +482,10 @@ function onPointerUp(event: PointerEvent) {
                                 <button
                                     type="button"
                                     class="workspace-row-action"
-                                    :aria-label="`关闭 ${row.label}`"
-                                    title="关闭文档"
+                                    :aria-label="
+                                        t(`关闭 ${row.label}`, `Close ${row.label}`)
+                                    "
+                                    :title="t('关闭文档', 'Close document')"
                                     @click.stop="closeDocument(row.documentId)"
                                 >
                                     ×
@@ -475,8 +498,10 @@ function onPointerUp(event: PointerEvent) {
                                 <button
                                     type="button"
                                     class="workspace-row-action"
-                                    :aria-label="`刷新 ${row.label}`"
-                                    title="刷新文件夹"
+                                    :aria-label="
+                                        t(`刷新 ${row.label}`, `Refresh ${row.label}`)
+                                    "
+                                    :title="t('刷新文件夹', 'Refresh folder')"
                                     @click.stop="refreshFolder(row.folderPath)"
                                 >
                                     ↻
@@ -484,8 +509,13 @@ function onPointerUp(event: PointerEvent) {
                                 <button
                                     type="button"
                                     class="workspace-row-action"
-                                    :aria-label="`关闭文件夹 ${row.label}`"
-                                    title="关闭文件夹"
+                                    :aria-label="
+                                        t(
+                                            `关闭文件夹 ${row.label}`,
+                                            `Close folder ${row.label}`,
+                                        )
+                                    "
+                                    :title="t('关闭文件夹', 'Close folder')"
                                     @click.stop="closeFolder(row.folderPath)"
                                 >
                                     ×
@@ -500,15 +530,15 @@ function onPointerUp(event: PointerEvent) {
                 class="workspace-section"
                 aria-labelledby="workspace-folders-heading"
             >
-                <h2 id="workspace-folders-heading">文件夹</h2>
+                <h2 id="workspace-folders-heading">{{ t("文件夹", "Folder") }}</h2>
                 <div class="workspace-empty">
                     <button
                         :ref="setOpenFolderButton"
                         type="button"
-                        aria-label="打开文件夹"
+                        :aria-label="t('打开文件夹', 'Open folder')"
                         @click="emit('open-folder')"
                     >
-                        打开文件夹
+                        {{ t("打开文件夹", "Open folder") }}
                     </button>
                 </div>
             </section>
@@ -517,7 +547,7 @@ function onPointerUp(event: PointerEvent) {
             class="workspace-resize-handle"
             role="separator"
             aria-orientation="vertical"
-            aria-label="调整工作区侧栏宽度"
+            :aria-label="t('调整工作区侧栏宽度', 'Resize workspace sidebar')"
             @pointerdown="onPointerDown"
             @pointermove="onPointerMove"
             @pointerup="onPointerUp"

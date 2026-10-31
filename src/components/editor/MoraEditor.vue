@@ -39,6 +39,7 @@
 <script setup lang="ts">
 import type { AIProvider } from "@milkdown/crepe/feature/ai";
 import { computed, ref, watch } from "vue";
+import { textMatches } from "../../utils/reviewText";
 import { splitMarkdownPrefix } from "../../utils/markdownFrontMatter";
 import type {
     EditorCommand,
@@ -115,6 +116,21 @@ function execute(command: EditorCommand): void {
     editableEditor()?.execute(command);
 }
 
+function findText(query: string, occurrence = 0): boolean {
+    const selected = textMatches(props.modelValue, query)[occurrence];
+    if (!selected) return false;
+    const { prefix, body } = canonicalMarkdown.value;
+    const bodyOccurrence = textMatches(body, query).findIndex(
+        (hit) => hit.from === selected.from - prefix.length,
+    );
+    if (props.mode === "wysiwyg")
+        return bodyOccurrence < 0
+            ? false
+            : (milkdownEditor.value?.findText(query, bodyOccurrence) ?? false);
+    if (bodyOccurrence >= 0) previewEditor.value?.findText(query, bodyOccurrence);
+    return sourceEditor.value?.findText(query, occurrence) ?? false;
+}
+
 function scrollToHeading(text: string): boolean {
     if (props.mode === "wysiwyg") {
         return milkdownEditor.value?.scrollToHeading(text) ?? false;
@@ -171,6 +187,7 @@ defineExpose<MoraEditorHandle>({
     moveCursor,
     execute,
     scrollToHeading,
+    findText,
     whenReady,
     whenSettled,
     captureMermaidSources,

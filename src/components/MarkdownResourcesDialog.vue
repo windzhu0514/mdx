@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { t } from "../i18n";
+
 import { computed, nextTick, ref, watch } from "vue";
 
 import type { MarkdownResourceItem, MarkdownResourcePlan } from "../types/workspace";
@@ -14,10 +16,10 @@ const emit = defineEmits<{
 
 const dialog = ref<HTMLDialogElement | null>(null);
 const statusLabels: Record<MarkdownResourceItem["status"], string> = {
-    ready: "可导入",
-    missing: "缺失",
-    unreadable: "无法读取",
-    oversized: "超限",
+    ready: t("可导入", "Ready to import"),
+    missing: t("缺失", "Missing"),
+    unreadable: t("无法读取", "Unreadable"),
+    oversized: t("超限", "Over limit"),
 };
 const hasUnresolved = computed(() =>
     props.plan.items.some((item) => item.status !== "ready"),
@@ -52,12 +54,26 @@ function handleCancel(event: Event) {
         @cancel="handleCancel"
     >
         <template v-if="open">
-            <p class="panel-eyebrow">Markdown 资源检查</p>
-            <h2 id="markdown-resources-dialog-title">导入“{{ documentName }}”</h2>
+            <p class="panel-eyebrow">
+                {{ t("Markdown 资源检查", "Markdown resource check") }}
+            </p>
+            <h2 id="markdown-resources-dialog-title">
+                {{ t("导入“", "Import “") }}{{ documentName }}”
+            </h2>
             <p id="markdown-resources-dialog-description">
-                请在继续前确认图片和附件的处理结果。
+                {{
+                    t(
+                        "请在继续前确认图片和附件的处理结果。",
+                        "Review image and attachment handling before continuing.",
+                    )
+                }}
                 <strong v-if="hasUnresolved">
-                    继续后，未解决的链接将保持原样，目标笔记中可能无法打开这些资源。
+                    {{
+                        t(
+                            "继续后，未解决的链接将保持原样，目标笔记中可能无法打开这些资源。",
+                            "Unresolved links will remain unchanged, and these resources may be unavailable in the destination note.",
+                        )
+                    }}
                 </strong>
             </p>
 
@@ -80,19 +96,31 @@ function handleCancel(event: Event) {
                 </li>
             </ul>
             <p v-if="!plan.items.length" class="panel-empty">
-                未发现外部资源，可以继续导入。
+                {{
+                    t(
+                        "未发现外部资源，可以继续导入。",
+                        "No external resources found. You can continue importing.",
+                    )
+                }}
             </p>
 
             <div class="workspace-dialog-actions">
                 <button type="button" autofocus @click="emit('decide', 'cancel')">
-                    取消
+                    {{ t("取消", "Cancel") }}
                 </button>
                 <button
                     type="button"
                     :class="{ 'danger-filled': hasUnresolved }"
                     @click="emit('decide', 'continue')"
                 >
-                    {{ hasUnresolved ? "继续导入（保留未解决链接）" : "继续导入" }}
+                    {{
+                        hasUnresolved
+                            ? t(
+                                  "继续导入（保留未解决链接）",
+                                  "Continue importing (keep unresolved links)",
+                              )
+                            : t("继续导入", "Continue importing")
+                    }}
                 </button>
             </div>
         </template>

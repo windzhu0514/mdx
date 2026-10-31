@@ -31,6 +31,7 @@ export default defineConfig({
         },
     },
     test: {
+        setupFiles: ["./src/testSetup.ts"],
         exclude: [...configDefaults.exclude, "scripts/**/*.test.mjs"],
     },
 });

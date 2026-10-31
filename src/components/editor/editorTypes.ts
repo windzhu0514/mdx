@@ -23,6 +23,7 @@ export type EditorCommand =
       };
 
 export type MoraEditorHandle = {
+    findText(query: string, occurrence?: number): boolean;
     focus(): void;
     getSelectedText(): string;
     replaceSelection(text: string): void;

@@ -1,0 +1,29 @@
+.history-review {
+    max-height: 50vh;
+    overflow: auto;
+    padding: 12px;
+}
+.history-review pre {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font-size: 12px;
+}
+.diff-added {
+    background: #22883322;
+}
+.diff-removed {
+    background: #cc333322;
+}
+.result-snippet .search-hit {
+    display: block;
+    margin-block: 6px;
+}
+.workspace-operations {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+    padding: 8px;
+}
+.workspace-operations button {
+    font-size: 11px;
+}

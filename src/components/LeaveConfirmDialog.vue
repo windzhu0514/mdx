@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { t } from "../i18n";
+
 import { nextTick, ref, watch } from "vue";
 
 import type { LeaveDecision } from "../utils/leaveGuard";
@@ -8,7 +10,7 @@ const props = withDefaults(
         open: boolean;
         documentName?: string;
     }>(),
-    { documentName: "当前笔记" },
+    { documentName: t("当前笔记", "Current note") },
 );
 const emit = defineEmits<{ decide: [decision: LeaveDecision] }>();
 
@@ -42,12 +44,23 @@ function handleCancel(event: Event) {
         @cancel="handleCancel"
     >
         <template v-if="open">
-            <h2 id="leave-dialog-title">保存“{{ documentName }}”？</h2>
-            <p>当前内容尚未保存。你可以保存后继续、放弃修改，或取消当前操作。</p>
+            <h2 id="leave-dialog-title">
+                {{ t(`保存“${documentName}”？`, `Save “${documentName}”?`) }}
+            </h2>
+            <p>
+                {{
+                    t(
+                        "当前内容尚未保存。你可以保存后继续、放弃修改，或取消当前操作。",
+                        "You have unsaved changes. Save and continue, discard changes, or cancel this action.",
+                    )
+                }}
+            </p>
             <div class="leave-dialog-actions">
-                <button type="button" @click="emit('decide', 'cancel')">取消</button>
+                <button type="button" @click="emit('decide', 'cancel')">
+                    {{ t("取消", "Cancel") }}
+                </button>
                 <button type="button" class="danger" @click="emit('decide', 'discard')">
-                    放弃修改
+                    {{ t("放弃修改", "Discard changes") }}
                 </button>
                 <button
                     type="button"
@@ -55,7 +68,7 @@ function handleCancel(event: Event) {
                     autofocus
                     @click="emit('decide', 'save')"
                 >
-                    保存并继续
+                    {{ t("保存并继续", "Save and continue") }}
                 </button>
             </div>
         </template>

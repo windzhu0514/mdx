@@ -7,7 +7,7 @@ Mora's MIT license does not replace any third-party component or font license.
 MPL-2.0 source packages are available at the exact-version Source archive URLs listed below.
 Standard-license supplements are identified separately from upstream license files.
 package-lock.json SHA-256: 41790b636f28b2bffce3b1c5a85bf6ee77e9c677fb2e0c23b570370d5e5bd07e
-Cargo.lock SHA-256: 82e6f2006c72edd2a3d58a4140c64dcbc2c6588c48a8a3e06b4e0a1d53bdfeda
+Cargo.lock SHA-256: 0d1eb90930b190d5ab8f51306fde7892fecb64f8e6e469366e86f844c230e456
 Supplement index SHA-256: 6ea5bbefb244a3520383244127b2186b57c4326726515df543c375c39619a8f2
 
 font: Bundled public/fonts
@@ -6544,6 +6544,21 @@ Package authors (metadata): Tauri Programme within The Commons Conservancy
   Source: https://crates.io/crates/tauri-plugin-process/2.3.1
   Full text: SHA-256 89ff9689dcf9dd53968785d05a26f7898bb169dbfcada8d032b3e68cf0d55607
 
+rust: tauri-plugin-single-instance@2.4.5
+Declared license: Apache-2.0 OR MIT
+Package source: https://crates.io/crates/tauri-plugin-single-instance/2.4.5
+Source archive: https://crates.io/api/v1/crates/tauri-plugin-single-instance/2.4.5/download
+Package authors (metadata): Tauri Programme within The Commons Conservancy
+  bundled-package-file: LICENSE.spdx
+  Source: https://crates.io/crates/tauri-plugin-single-instance/2.4.5
+  Full text: SHA-256 eb8a6c84630461b352badcab1dbe5d0168c56d377358b2b8c86b51003272d5ef
+  bundled-package-file: LICENSE_APACHE-2.0
+  Source: https://crates.io/crates/tauri-plugin-single-instance/2.4.5
+  Full text: SHA-256 0cec06e0e55fbc3dc5cee4fca9b607f66cb8f4e4dbcf3b3c013594dd156732e9
+  bundled-package-file: LICENSE_MIT
+  Source: https://crates.io/crates/tauri-plugin-single-instance/2.4.5
+  Full text: SHA-256 b7f455413bfe5f9d7da501a4468d4c5f866a432c325947e98cc9535e8b26cd6d
+
 rust: tauri-plugin-updater@2.10.1
 Declared license: Apache-2.0 OR MIT
 Package source: https://crates.io/crates/tauri-plugin-updater/2.10.1
@@ -6991,6 +7006,15 @@ Package authors (metadata): Eliza Weisman <eliza@buoyant.io>; Tokio Contributors
   bundled-package-file: LICENSE
   Source: https://crates.io/crates/tracing/0.1.44
   Full text: SHA-256 898b1ae9821e98daf8964c8d6c7f61641f5f5aa78ad500020771c0939ee0dea1
+
+rust: trash@5.2.9
+Declared license: MIT
+Package source: https://crates.io/crates/trash/5.2.9
+Source archive: https://crates.io/api/v1/crates/trash/5.2.9/download
+Package authors (metadata): Artur Kovacs <kovacs.artur.barnabas@gmail.com>
+  bundled-package-file: LICENSE.txt
+  Source: https://crates.io/crates/trash/5.2.9
+  Full text: SHA-256 1ea4646aa1951cfea62ddd5aaac4dc3dbb84fa31feb66a8b3a51fc0cd395d0e9
 
 rust: tray-icon@0.23.1
 Declared license: MIT OR Apache-2.0
@@ -7919,6 +7943,17 @@ Source archive: https://crates.io/api/v1/crates/windows-collections/0.2.0/downlo
   Source: https://crates.io/crates/windows-collections/0.2.0
   Full text: SHA-256 c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383
 
+rust: windows-collections@0.3.2
+Declared license: MIT OR Apache-2.0
+Package source: https://crates.io/crates/windows-collections/0.3.2
+Source archive: https://crates.io/api/v1/crates/windows-collections/0.3.2/download
+  bundled-package-file: license-apache-2.0
+  Source: https://crates.io/crates/windows-collections/0.3.2
+  Full text: SHA-256 c16f8dcf1a368b83be78d826ea23de4079fe1b4469a0ab9ee20563f37ff3d44b
+  bundled-package-file: license-mit
+  Source: https://crates.io/crates/windows-collections/0.3.2
+  Full text: SHA-256 c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383
+
 rust: windows-core@0.61.2
 Declared license: MIT OR Apache-2.0
 Package source: https://crates.io/crates/windows-core/0.61.2
@@ -7931,6 +7966,17 @@ Package authors (metadata): Microsoft
   Source: https://crates.io/crates/windows-core/0.61.2
   Full text: SHA-256 c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383
 
+rust: windows-core@0.62.2
+Declared license: MIT OR Apache-2.0
+Package source: https://crates.io/crates/windows-core/0.62.2
+Source archive: https://crates.io/api/v1/crates/windows-core/0.62.2/download
+  bundled-package-file: license-apache-2.0
+  Source: https://crates.io/crates/windows-core/0.62.2
+  Full text: SHA-256 c16f8dcf1a368b83be78d826ea23de4079fe1b4469a0ab9ee20563f37ff3d44b
+  bundled-package-file: license-mit
+  Source: https://crates.io/crates/windows-core/0.62.2
+  Full text: SHA-256 c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383
+
 rust: windows-future@0.2.1
 Declared license: MIT OR Apache-2.0
 Package source: https://crates.io/crates/windows-future/0.2.1
@@ -7940,6 +7986,17 @@ Source archive: https://crates.io/api/v1/crates/windows-future/0.2.1/download
   Full text: SHA-256 c16f8dcf1a368b83be78d826ea23de4079fe1b4469a0ab9ee20563f37ff3d44b
   bundled-package-file: license-mit
   Source: https://crates.io/crates/windows-future/0.2.1
+  Full text: SHA-256 c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383
+
+rust: windows-future@0.3.2
+Declared license: MIT OR Apache-2.0
+Package source: https://crates.io/crates/windows-future/0.3.2
+Source archive: https://crates.io/api/v1/crates/windows-future/0.3.2/download
+  bundled-package-file: license-apache-2.0
+  Source: https://crates.io/crates/windows-future/0.3.2
+  Full text: SHA-256 c16f8dcf1a368b83be78d826ea23de4079fe1b4469a0ab9ee20563f37ff3d44b
+  bundled-package-file: license-mit
+  Source: https://crates.io/crates/windows-future/0.3.2
   Full text: SHA-256 c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383
 
 rust: windows-implement@0.60.2
@@ -8008,6 +8065,17 @@ Source archive: https://crates.io/api/v1/crates/windows-numerics/0.2.0/download
   Full text: SHA-256 c16f8dcf1a368b83be78d826ea23de4079fe1b4469a0ab9ee20563f37ff3d44b
   bundled-package-file: license-mit
   Source: https://crates.io/crates/windows-numerics/0.2.0
+  Full text: SHA-256 c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383
+
+rust: windows-numerics@0.3.1
+Declared license: MIT OR Apache-2.0
+Package source: https://crates.io/crates/windows-numerics/0.3.1
+Source archive: https://crates.io/api/v1/crates/windows-numerics/0.3.1/download
+  bundled-package-file: license-apache-2.0
+  Source: https://crates.io/crates/windows-numerics/0.3.1
+  Full text: SHA-256 c16f8dcf1a368b83be78d826ea23de4079fe1b4469a0ab9ee20563f37ff3d44b
+  bundled-package-file: license-mit
+  Source: https://crates.io/crates/windows-numerics/0.3.1
   Full text: SHA-256 c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383
 
 rust: windows-registry@0.6.1
@@ -8137,6 +8205,17 @@ Package authors (metadata): Microsoft
   Source: https://crates.io/crates/windows-threading/0.1.0
   Full text: SHA-256 c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383
 
+rust: windows-threading@0.2.1
+Declared license: MIT OR Apache-2.0
+Package source: https://crates.io/crates/windows-threading/0.2.1
+Source archive: https://crates.io/api/v1/crates/windows-threading/0.2.1/download
+  bundled-package-file: license-apache-2.0
+  Source: https://crates.io/crates/windows-threading/0.2.1
+  Full text: SHA-256 c16f8dcf1a368b83be78d826ea23de4079fe1b4469a0ab9ee20563f37ff3d44b
+  bundled-package-file: license-mit
+  Source: https://crates.io/crates/windows-threading/0.2.1
+  Full text: SHA-256 c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383
+
 rust: windows-version@0.1.7
 Declared license: MIT OR Apache-2.0
 Package source: https://crates.io/crates/windows-version/0.1.7
@@ -8158,6 +8237,17 @@ Package authors (metadata): Microsoft
   Full text: SHA-256 c16f8dcf1a368b83be78d826ea23de4079fe1b4469a0ab9ee20563f37ff3d44b
   bundled-package-file: license-mit
   Source: https://crates.io/crates/windows/0.61.3
+  Full text: SHA-256 c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383
+
+rust: windows@0.62.2
+Declared license: MIT OR Apache-2.0
+Package source: https://crates.io/crates/windows/0.62.2
+Source archive: https://crates.io/api/v1/crates/windows/0.62.2/download
+  bundled-package-file: license-apache-2.0
+  Source: https://crates.io/crates/windows/0.62.2
+  Full text: SHA-256 c16f8dcf1a368b83be78d826ea23de4079fe1b4469a0ab9ee20563f37ff3d44b
+  bundled-package-file: license-mit
+  Source: https://crates.io/crates/windows/0.62.2
   Full text: SHA-256 c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383
 
 rust: winnow@0.5.40
@@ -12083,6 +12173,25 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+
+========== SHA-256 1ea4646aa1951cfea62ddd5aaac4dc3dbb84fa31feb66a8b3a51fc0cd395d0e9 ==========
+Copyright 2019 Artúr Barnabás Kovács
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
+associated documentation files (the "Software"), to deal in the Software without restriction,
+including without limitation the rights to use, copy, modify, merge, publish, distribute,
+sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or
+substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT
+NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
+OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 
 ========== SHA-256 1f256ecad192880510e84ad60474eab7589218784b9a50bc7ceee34c2b91f1d5 ==========
@@ -31185,6 +31294,29 @@ http://scripts.sil.org/OFL
 Original license URL (name ID 14):
 http://scripts.sil.org/OFL
 
+
+========== SHA-256 b7f455413bfe5f9d7da501a4468d4c5f866a432c325947e98cc9535e8b26cd6d ==========
+MIT License
+
+Copyright (c) 2017 - Present The Tauri Programme in the Commons Conservancy
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 
 ========== SHA-256 b8265327ab678f554800e71188b1cc6b1ff57522e292d2b1c0be66f27cf328b6 ==========
 Copyright 2015-2016 Mike Bostock

@@ -39,6 +39,7 @@ pub struct NoteSearchResult {
     pub summary: String,
     pub updated_at: String,
     pub snippet: String,
+    pub content: String,
     pub score: usize,
 }
 
@@ -306,6 +307,7 @@ pub fn search_index_entries(
                 tags: entry.tags,
                 summary: entry.summary,
                 updated_at: entry.updated_at,
+                content: entry.content,
                 snippet: String::new(),
                 score: 0,
             })
@@ -330,6 +332,7 @@ pub fn search_index_entries(
             summary: entry.summary,
             updated_at: entry.updated_at,
             snippet: snippet(&entry.content, &query),
+            content: entry.content,
             score,
         });
     }

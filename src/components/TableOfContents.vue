@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { t } from "../i18n";
+
 import { ref } from "vue";
 
 import { useScrollActivity } from "../composables/useScrollActivity";
@@ -26,9 +28,11 @@ useScrollActivity(outlineScrollElement);
         ref="outlineScrollElement"
         class="toc-sidebar"
         :class="{ 'is-compact': props.compact }"
-        aria-label="本文目录"
+        :aria-label="t('本文目录', 'Document outline')"
     >
-        <div class="toc-header"><span>目录</span></div>
+        <div class="toc-header">
+            <span>{{ t("目录", "Outline") }}</span>
+        </div>
         <ul class="toc-list">
             <li
                 v-for="item in props.items"

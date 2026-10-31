@@ -27,6 +27,7 @@ type ChildHandle = MoraEditorHandle & {
         moveCursor: Array<"start" | "end">;
         replaceSelection: string[];
         releaseDocument: string[];
+        findText: () => true;
         scrollToHeading: string[];
         captureMermaidSources: number;
         getMermaidDiagrams: number;
@@ -54,6 +55,7 @@ function createChildHandle(
         moveCursor: [],
         replaceSelection: [],
         releaseDocument: [],
+        findText: () => true,
         scrollToHeading: [],
         captureMermaidSources: 0,
         getMermaidDiagrams: 0,
@@ -80,6 +82,7 @@ function createChildHandle(
         moveCursor: (position) => calls.moveCursor.push(position),
         replaceSelection: (text) => calls.replaceSelection.push(text),
         releaseDocument: (documentId) => calls.releaseDocument.push(documentId),
+        findText: () => true,
         scrollToHeading: (text) => {
             calls.scrollToHeading.push(text);
             return text === "目标标题";

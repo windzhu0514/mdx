@@ -1,3 +1,11 @@
+import {
+    t,
+    locale,
+    normalizeLanguage,
+    resolveLanguage,
+    type LanguagePreference,
+} from "../i18n";
+
 import { ref, watch } from "vue";
 
 export type ThemeId =
@@ -69,9 +77,24 @@ export const LOCAL_FONT_FAMILIES: Readonly<
 };
 
 export const FONT_GROUPS: ReadonlyArray<Readonly<{ id: FontGroupId; label: string }>> = [
-    { id: "monospace", label: "等宽" },
-    { id: "sans-serif", label: "无衬线" },
-    { id: "serif", label: "衬线" },
+    {
+        id: "monospace",
+        get label() {
+            return t("等宽", "Monospace");
+        },
+    },
+    {
+        id: "sans-serif",
+        get label() {
+            return t("无衬线", "Sans serif");
+        },
+    },
+    {
+        id: "serif",
+        get label() {
+            return t("衬线", "Serif");
+        },
+    },
 ];
 
 const bundledCodeFont = '"Maple Mono CN Bundled"';
@@ -79,7 +102,9 @@ const bundledCodeFont = '"Maple Mono CN Bundled"';
 export const FONT_OPTIONS: ReadonlyArray<FontOption> = [
     {
         id: "system-default",
-        label: "系统默认",
+        get label() {
+            return t("系统默认", "System default");
+        },
         group: null,
         fontFamily:
             'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif',
@@ -127,7 +152,9 @@ export const FONT_OPTIONS: ReadonlyArray<FontOption> = [
     },
     {
         id: "sarasa-mono-sc",
-        label: "等距更纱黑体",
+        get label() {
+            return t("等距更纱黑体", "Sarasa Mono SC");
+        },
         group: "monospace",
         fontFamily:
             '"Sarasa Mono SC", "Cascadia Code", "JetBrains Mono", Consolas, "Microsoft YaHei", monospace',
@@ -146,19 +173,25 @@ export const FONT_OPTIONS: ReadonlyArray<FontOption> = [
     },
     {
         id: "pingfang-sc",
-        label: "苹方",
+        get label() {
+            return t("苹方", "PingFang SC");
+        },
         group: "sans-serif",
         fontFamily: '"PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif',
     },
     {
         id: "source-han-sans-sc",
-        label: "思源黑体",
+        get label() {
+            return t("思源黑体", "Source Han Sans SC");
+        },
         group: "sans-serif",
         fontFamily: '"Source Han Sans SC", "Microsoft YaHei", "Segoe UI", sans-serif',
     },
     {
         id: "microsoft-yahei",
-        label: "微软雅黑",
+        get label() {
+            return t("微软雅黑", "Microsoft YaHei");
+        },
         group: "sans-serif",
         fontFamily: '"Microsoft YaHei", "Segoe UI", sans-serif',
     },
@@ -178,26 +211,34 @@ export const FONT_OPTIONS: ReadonlyArray<FontOption> = [
     },
     {
         id: "kaiti",
-        label: "楷体",
+        get label() {
+            return t("楷体", "KaiTi");
+        },
         group: "serif",
         fontFamily:
             'KaiTi, "LXGW WenKai", "Source Han Serif SC", "Songti SC", SimSun, serif',
     },
     {
         id: "source-han-serif-sc",
-        label: "思源宋体",
+        get label() {
+            return t("思源宋体", "Source Han Serif SC");
+        },
         group: "serif",
         fontFamily: '"Source Han Serif SC", "LXGW WenKai", "Songti SC", SimSun, serif',
     },
     {
         id: "simsun",
-        label: "宋体",
+        get label() {
+            return t("宋体", "SimSun");
+        },
         group: "serif",
         fontFamily: 'SimSun, "Source Han Serif SC", "LXGW WenKai", "Songti SC", serif',
     },
     {
         id: "lxgw-wenkai",
-        label: "霞鹜文楷",
+        get label() {
+            return t("霞鹜文楷", "LXGW WenKai");
+        },
         group: "serif",
         fontFamily: '"LXGW WenKai", "Source Han Serif SC", "Songti SC", SimSun, serif',
     },
@@ -236,21 +277,55 @@ export const CODE_FONT_OPTIONS: ReadonlyArray<CodeFontOption> = [
     },
     {
         id: "sarasa-mono-sc",
-        label: "等距更纱黑体",
+        get label() {
+            return t("等距更纱黑体", "Sarasa Mono SC");
+        },
         fontFamily: `"Sarasa Mono SC", ${bundledCodeFont}, monospace`,
     },
 ];
 
 export const THEME_OPTIONS: ReadonlyArray<{ id: ThemeId; label: string }> = [
-    { id: "xuan-white", label: "宣白" },
-    { id: "ink-black", label: "墨黑" },
-    { id: "dai-blue", label: "黛蓝" },
-    { id: "pine-green", label: "松青" },
-    { id: "crimson", label: "绛红" },
-    { id: "wisteria", label: "藤紫" },
+    {
+        id: "xuan-white",
+        get label() {
+            return t("宣白", "Paper white");
+        },
+    },
+    {
+        id: "ink-black",
+        get label() {
+            return t("墨黑", "Ink black");
+        },
+    },
+    {
+        id: "dai-blue",
+        get label() {
+            return t("黛蓝", "Indigo");
+        },
+    },
+    {
+        id: "pine-green",
+        get label() {
+            return t("松青", "Pine green");
+        },
+    },
+    {
+        id: "crimson",
+        get label() {
+            return t("绛红", "Crimson");
+        },
+    },
+    {
+        id: "wisteria",
+        get label() {
+            return t("藤紫", "Wisteria");
+        },
+    },
 ];
 
 export type EditorPreferences = {
+    autoSave: boolean;
+    language: LanguagePreference;
     theme: ThemePreference;
     fontFamily: FontPreference;
     codeFontFamily: CodeFontPreference;
@@ -274,6 +349,8 @@ const legacyFonts: Readonly<Record<string, FontPreference>> = {
 };
 
 export const DEFAULT_PREFERENCES: EditorPreferences = {
+    autoSave: false,
+    language: "system",
     theme: "system",
     fontFamily: "system-default",
     codeFontFamily: "maple-mono-cn",
@@ -325,6 +402,8 @@ export function normalizePreferences(
     value: Partial<Record<keyof EditorPreferences, unknown>>,
 ): EditorPreferences {
     return {
+        autoSave: typeof value.autoSave === "boolean" ? value.autoSave : false,
+        language: normalizeLanguage(value.language),
         theme: normalizeTheme(value.theme),
         fontFamily: normalizeFont(value.fontFamily),
         codeFontFamily: normalizeCodeFont(value.codeFontFamily),
@@ -382,6 +461,8 @@ export function usePreferences() {
 
     function apply() {
         const value = normalizePreferences(preferences.value);
+        locale.value = resolveLanguage(value.language);
+        document.documentElement.lang = locale.value;
         resolvedTheme.value = resolveTheme(value.theme, media.matches);
         document.documentElement.dataset.theme = resolvedTheme.value;
         document.documentElement.style.setProperty(
@@ -419,9 +500,11 @@ export function usePreferences() {
 
     const stopWatch = watch(preferences, apply, { deep: true, immediate: true });
     media.addEventListener("change", handleSystemTheme);
+    window.addEventListener("languagechange", apply);
 
     function dispose() {
         stopWatch();
+        window.removeEventListener("languagechange", apply);
         media.removeEventListener("change", handleSystemTheme);
     }
 

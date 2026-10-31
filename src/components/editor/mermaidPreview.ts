@@ -1,3 +1,4 @@
+import { t } from "../../i18n";
 import { isDarkTheme } from "../../composables/usePreferences";
 
 export type MermaidRenderResult = {
@@ -78,20 +79,23 @@ export function isSupportedMermaidSource(source: string): boolean {
 
 function mermaidDiagramLabel(source: string): string {
     const declaration = firstMermaidDeclaration(source).match(/^\S+/u)?.[0] ?? "";
-    if (/^(?:flowchart|graph)$/iu.test(declaration)) return "流程图";
-    if (/^sequenceDiagram$/iu.test(declaration)) return "时序图";
-    if (/^classDiagram$/iu.test(declaration)) return "类图";
-    if (/^stateDiagram(?:-v2)?$/iu.test(declaration)) return "状态图";
-    if (/^erDiagram$/iu.test(declaration)) return "实体关系图";
-    if (/^gantt$/iu.test(declaration)) return "甘特图";
-    if (/^timeline$/iu.test(declaration)) return "时间线";
-    if (/^journey$/iu.test(declaration)) return "用户旅程图";
-    if (/^mindmap$/iu.test(declaration)) return "思维导图";
-    if (/^requirementDiagram$/iu.test(declaration)) return "需求图";
-    if (/^C4/iu.test(declaration)) return "C4 架构图";
-    if (/^architecture-beta$/iu.test(declaration)) return "架构图";
-    if (/^block-beta$/iu.test(declaration)) return "块图";
-    return "Mermaid 图表";
+    if (/^(?:flowchart|graph)$/iu.test(declaration)) return t("流程图", "Flowchart");
+    if (/^sequenceDiagram$/iu.test(declaration)) return t("时序图", "Sequence diagram");
+    if (/^classDiagram$/iu.test(declaration)) return t("类图", "Class diagram");
+    if (/^stateDiagram(?:-v2)?$/iu.test(declaration)) return t("状态图", "State diagram");
+    if (/^erDiagram$/iu.test(declaration))
+        return t("实体关系图", "Entity relationship diagram");
+    if (/^gantt$/iu.test(declaration)) return t("甘特图", "Gantt chart");
+    if (/^timeline$/iu.test(declaration)) return t("时间线", "Timeline");
+    if (/^journey$/iu.test(declaration)) return t("用户旅程图", "User journey");
+    if (/^mindmap$/iu.test(declaration)) return t("思维导图", "Mind map");
+    if (/^requirementDiagram$/iu.test(declaration))
+        return t("需求图", "Requirement diagram");
+    if (/^C4/iu.test(declaration)) return t("C4 架构图", "C4 architecture diagram");
+    if (/^architecture-beta$/iu.test(declaration))
+        return t("架构图", "Architecture diagram");
+    if (/^block-beta$/iu.test(declaration)) return t("块图", "Block diagram");
+    return t("Mermaid 图表", "Mermaid diagram");
 }
 
 export async function renderMermaidForExport(
@@ -186,10 +190,13 @@ export function createMermaidPreview(
             (host as HTMLButtonElement).type = "button";
             host.dataset[MERMAID_PREVIEW_TOKEN] = token;
             host.setAttribute("role", "button");
-            host.setAttribute("aria-label", `打开${label}查看器`);
+            host.setAttribute(
+                "aria-label",
+                t(`打开${label}查看器`, `Open ${label} viewer`),
+            );
         } else {
             host.setAttribute("role", "img");
-            host.setAttribute("aria-label", "Mermaid 图表");
+            host.setAttribute("aria-label", t("Mermaid 图表", "Mermaid diagram"));
         }
 
         const render = mermaid
@@ -219,7 +226,10 @@ export function createMermaidPreview(
                 const message = document.createElement("p");
                 message.className = "mermaid-preview-error-message";
                 message.setAttribute("role", "alert");
-                message.textContent = "Mermaid 图表无法渲染，请检查源码。";
+                message.textContent = t(
+                    "Mermaid 图表无法渲染，请检查源码。",
+                    "Cannot render Mermaid diagram. Check its source.",
+                );
                 const sourceBlock = document.createElement("pre");
                 const code = document.createElement("code");
                 code.textContent = source;

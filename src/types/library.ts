@@ -9,5 +9,6 @@ export type NoteListItem = {
 
 export type NoteSearchResult = Omit<NoteListItem, "content"> & {
     snippet: string;
+    content?: string;
     score: number;
 };

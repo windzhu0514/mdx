@@ -35,6 +35,27 @@ function settingsProps() {
 }
 
 describe("SettingsPanel", () => {
+    it("提供默认关闭的自动保存原文件开关", async () => {
+        const update = vi.fn();
+        const host = document.createElement("div");
+        const app = createApp({
+            render: () => h(SettingsPanel, { ...settingsProps(), onUpdate: update }),
+        });
+        app.mount(host);
+        cleanup = () => app.unmount();
+        Array.from(host.querySelectorAll<HTMLButtonElement>(".settings-nav button"))
+            .find((button) => button.textContent?.trim() === "编辑器")!
+            .click();
+        await nextTick();
+        const toggle = host.querySelector<HTMLInputElement>(
+            '[aria-label="自动保存原文件"]',
+        );
+        expect(toggle).not.toBeNull();
+        expect(toggle!.checked).toBe(false);
+        toggle!.checked = true;
+        toggle!.dispatchEvent(new Event("change"));
+        expect(update).toHaveBeenCalledWith({ autoSave: true });
+    });
     it("renders a non-modal categorized workspace with a semantic live preview", async () => {
         const close = vi.fn();
         const host = document.createElement("div");
@@ -55,7 +76,7 @@ describe("SettingsPanel", () => {
         ).toEqual(["外观", "编辑器", "AI", "Agent"]);
 
         const preview = host.querySelector<HTMLElement>(".settings-live-preview");
-        expect(preview?.textContent).toContain("Mora 字体预览");
+        expect(preview?.textContent).toContain("墨笺 字体预览");
         expect(preview?.textContent).toContain("The quick brown fox");
         expect(preview?.querySelector("strong")).not.toBeNull();
         expect(preview?.querySelector("em")).not.toBeNull();
@@ -115,7 +136,9 @@ describe("SettingsPanel", () => {
         });
         app.mount(host);
         cleanup = () => app.unmount();
-        const select = host.querySelector<HTMLSelectElement>("select");
+        const select = host.querySelector<HTMLSelectElement>(
+            "select:not([data-testid=language-select])",
+        );
         if (!select) throw new Error("未找到主题选择框");
 
         expect(Array.from(select.options).map((option) => option.value)).toEqual([
@@ -143,7 +166,9 @@ describe("SettingsPanel", () => {
         });
         app.mount(host);
         cleanup = () => app.unmount();
-        const selects = host.querySelectorAll<HTMLSelectElement>("select");
+        const selects = host.querySelectorAll<HTMLSelectElement>(
+            "select:not([data-testid=language-select])",
+        );
         const bodyFontSelect = selects[1];
         const codeFontSelect = selects[2];
         if (!bodyFontSelect) throw new Error("未找到字体选择框");
@@ -217,7 +242,9 @@ describe("SettingsPanel", () => {
         });
         app.mount(host);
         cleanup = () => app.unmount();
-        const selects = host.querySelectorAll<HTMLSelectElement>("select");
+        const selects = host.querySelectorAll<HTMLSelectElement>(
+            "select:not([data-testid=language-select])",
+        );
         const bodyFontSelect = selects[1];
         const codeFontSelect = selects[2];
         if (!bodyFontSelect || !codeFontSelect) {

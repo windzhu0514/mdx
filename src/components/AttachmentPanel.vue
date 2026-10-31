@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { t } from "../i18n";
+
 import { nextTick, ref, watch } from "vue";
 
 import type { AttachmentListItem } from "../types/mdx";
@@ -80,7 +82,7 @@ function submitRename(path: string) {
     if (props.format === "markdown") return;
     const originalName = renameValue.value.trim();
     if (!originalName) {
-        renameError.value = "文件名不能为空";
+        renameError.value = t("文件名不能为空", "File name cannot be empty");
         return;
     }
     emit("rename", path, originalName);
@@ -127,15 +129,21 @@ function handleEscape() {
             <header class="attachment-panel-header">
                 <div>
                     <p class="panel-eyebrow">{{ documentName }}</p>
-                    <h2 id="attachment-title">附件管理</h2>
+                    <h2 id="attachment-title">{{ t("附件管理", "Attachments") }}</h2>
                     <p id="attachment-description" class="attachment-summary">
-                        {{ items.length }} 个附件 · 打开的是只读缓存副本
+                        {{ items.length }}
+                        {{
+                            t(
+                                "个附件 · 打开的是只读缓存副本",
+                                "attachments · Opens a read-only cached copy",
+                            )
+                        }}
                     </p>
                 </div>
                 <button
                     type="button"
                     class="icon-button"
-                    aria-label="关闭附件管理"
+                    :aria-label="t('关闭附件管理', 'Close attachments')"
                     @click="emit('close')"
                 >
                     ×
@@ -144,12 +152,17 @@ function handleEscape() {
 
             <div class="attachment-toolbar">
                 <button type="button" class="primary" @click="emit('add')">
-                    添加附件
+                    {{ t("添加附件", "Add attachment") }}
                 </button>
             </div>
 
             <p v-if="format === 'markdown'" class="attachment-summary">
-                外置资源请在文件夹中管理。
+                {{
+                    t(
+                        "外置资源请在文件夹中管理。",
+                        "Manage external resources in their folder.",
+                    )
+                }}
             </p>
 
             <ul v-if="items.length" class="attachment-list">
@@ -162,7 +175,7 @@ function handleEscape() {
                     <div class="attachment-info">
                         <template v-if="renamingPath === item.path">
                             <label :for="`attachment-rename-${item.id}`">
-                                修改显示名称
+                                {{ t("修改显示名称", "Change display name") }}
                             </label>
                             <div class="attachment-rename-controls">
                                 <input
@@ -173,9 +186,11 @@ function handleEscape() {
                                     @keydown.enter.prevent="submitRename(item.path)"
                                 />
                                 <button type="button" @click="submitRename(item.path)">
-                                    保存名称
+                                    {{ t("保存名称", "Save name") }}
                                 </button>
-                                <button type="button" @click="cancelRename">取消</button>
+                                <button type="button" @click="cancelRename">
+                                    {{ t("取消", "Cancel") }}
+                                </button>
                             </div>
                             <p v-if="renameError" class="attachment-inline-error">
                                 {{ renameError }}
@@ -191,7 +206,11 @@ function handleEscape() {
                                 class="attachment-reference-state"
                                 :class="{ referenced: item.referenced }"
                             >
-                                {{ item.referenced ? "正文已引用" : "未引用" }}
+                                {{
+                                    item.referenced
+                                        ? t("正文已引用", "Referenced in document")
+                                        : t("未引用", "Not referenced")
+                                }}
                             </span>
                         </template>
                     </div>
@@ -200,15 +219,22 @@ function handleEscape() {
                         v-if="deletingPath === item.path"
                         class="attachment-delete-confirm"
                     >
-                        <span>确认从文档中删除此附件？</span>
+                        <span>{{
+                            t(
+                                "确认从文档中删除此附件？",
+                                "Remove this attachment from the document?",
+                            )
+                        }}</span>
                         <button
                             type="button"
                             class="danger-filled"
                             @click="confirmDelete(item.path)"
                         >
-                            确认删除
+                            {{ t("确认删除", "Confirm deletion") }}
                         </button>
-                        <button type="button" @click="deletingPath = null">取消</button>
+                        <button type="button" @click="deletingPath = null">
+                            {{ t("取消", "Cancel") }}
+                        </button>
                     </div>
                     <div v-else class="attachment-actions">
                         <button
@@ -216,28 +242,28 @@ function handleEscape() {
                             :disabled="busyPath === item.path"
                             @click="emit('insertAttachment', item.path)"
                         >
-                            插入引用
+                            {{ t("插入引用", "Insert reference") }}
                         </button>
                         <button
                             type="button"
                             :disabled="busyPath === item.path"
                             @click="emit('openAttachment', item.path)"
                         >
-                            打开
+                            {{ t("打开", "Open") }}
                         </button>
                         <button
                             type="button"
                             :disabled="busyPath === item.path"
                             @click="emit('saveAttachment', item.path)"
                         >
-                            另存为
+                            {{ t("另存为", "Save as") }}
                         </button>
                         <button
                             type="button"
                             :disabled="format === 'markdown' || busyPath === item.path"
                             @click="beginRename(item)"
                         >
-                            重命名
+                            {{ t("重命名", "Rename") }}
                         </button>
                         <button
                             type="button"
@@ -249,35 +275,57 @@ function handleEscape() {
                             "
                             :title="
                                 format === 'markdown'
-                                    ? '外置资源请在文件夹中管理'
+                                    ? t(
+                                          '外置资源请在文件夹中管理',
+                                          'Manage external resources in their folder',
+                                      )
                                     : item.referenced
-                                      ? '请先移除正文引用，再删除附件'
-                                      : '从当前文档删除附件'
+                                      ? t(
+                                            '请先移除正文引用，再删除附件',
+                                            'Remove references from the document before deleting this attachment',
+                                        )
+                                      : t(
+                                            '从当前文档删除附件',
+                                            'Remove attachment from document',
+                                        )
                             "
                             @click="beginDelete(item)"
                         >
-                            删除
+                            {{ t("删除", "Delete") }}
                         </button>
                     </div>
                     <p
                         v-if="item.referenced && format !== 'markdown'"
                         class="attachment-reference-help"
                     >
-                        请先移除正文引用，再删除附件。
+                        {{
+                            t(
+                                "请先移除正文引用，再删除附件。",
+                                "Remove references from the document before deleting this attachment.",
+                            )
+                        }}
                     </p>
                 </li>
             </ul>
 
             <div v-else class="attachment-empty">
-                <strong>还没有附件</strong>
+                <strong>{{ t("还没有附件", "No attachments yet") }}</strong>
                 <p>
                     {{
                         format === "markdown"
-                            ? "添加的文件会保存到文档旁的资源文件夹，请与文档一起保留。"
-                            : "添加的文件会封装在当前 .mdx 文档中。"
+                            ? t(
+                                  "添加的文件会保存到文档旁的资源文件夹，请与文档一起保留。",
+                                  "Files are saved in a resource folder next to the document. Keep them together.",
+                              )
+                            : t(
+                                  "添加的文件会封装在当前 .mdx 文档中。",
+                                  "Files are packed into the current .mdx document.",
+                              )
                     }}
                 </p>
-                <button type="button" @click="emit('add')">添加附件</button>
+                <button type="button" @click="emit('add')">
+                    {{ t("添加附件", "Add attachment") }}
+                </button>
             </div>
         </section>
     </div>

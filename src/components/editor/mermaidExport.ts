@@ -1,3 +1,4 @@
+import { t } from "../../i18n";
 import { isDarkTheme, type ThemeId } from "../../composables/usePreferences";
 
 export type MermaidExportTheme = ThemeId | "light";
@@ -37,7 +38,9 @@ function normalizedSvg(svg: string): string {
     const document = new DOMParser().parseFromString(svg, "image/svg+xml");
     const element = document.documentElement;
     if (element.nodeName.toLocaleLowerCase() !== "svg") {
-        throw new Error("Mermaid 图表不是有效的 SVG");
+        throw new Error(
+            t("Mermaid 图表不是有效的 SVG", "Mermaid diagram is not valid SVG"),
+        );
     }
     element.setAttribute("xmlns", "http://www.w3.org/2000/svg");
     return new XMLSerializer().serializeToString(element);
@@ -47,7 +50,8 @@ function loadSvgImage(url: string): Promise<HTMLImageElement> {
     return new Promise((resolve, reject) => {
         const image = new Image();
         image.onload = () => resolve(image);
-        image.onerror = () => reject(new Error("无法加载 Mermaid SVG"));
+        image.onerror = () =>
+            reject(new Error(t("无法加载 Mermaid SVG", "Failed to load Mermaid SVG")));
         image.src = url;
     });
 }
@@ -70,14 +74,20 @@ export async function svgToPngBase64(
         canvas.width = outputWidth;
         canvas.height = outputHeight;
         const context = canvas.getContext("2d");
-        if (!context) throw new Error("当前环境无法创建 PNG 画布");
+        if (!context)
+            throw new Error(
+                t(
+                    "当前环境无法创建 PNG 画布",
+                    "Cannot create a PNG canvas in this environment",
+                ),
+            );
 
         context.fillStyle = isDarkTheme(theme) ? "#111827" : "#ffffff";
         context.fillRect(0, 0, outputWidth, outputHeight);
         context.drawImage(image, 0, 0, outputWidth, outputHeight);
         const dataUrl = canvas.toDataURL("image/png");
         const base64 = dataUrl.split(",")[1];
-        if (!base64) throw new Error("PNG 编码失败");
+        if (!base64) throw new Error(t("PNG 编码失败", "PNG encoding failed"));
         return base64;
     } finally {
         URL.revokeObjectURL(url);

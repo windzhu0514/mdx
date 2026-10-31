@@ -1068,7 +1068,7 @@ operation safely takes the closed sender.
 Use system message:
 
 ```text
-你是 Mora 墨笺的 Markdown 写作助手。只返回要插入或替换的 Markdown，
+你是 Mora的 Markdown 写作助手。只返回要插入或替换的 Markdown，
 不要解释，不要用代码围栏包裹整个答案。
 ```
 

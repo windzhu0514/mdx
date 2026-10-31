@@ -85,6 +85,12 @@ export function createResourceSession() {
         if (changed) revision.value += 1;
     }
 
+    function restoreReferences(paths: Iterable<string>) {
+        let changed = false;
+        for (const path of paths) changed = removed.delete(path) || changed;
+        if (changed) revision.value++;
+    }
+
     function removedResources() {
         return Array.from(removed).sort();
     }
@@ -173,6 +179,7 @@ export function createResourceSession() {
         rename,
         remove,
         removedResources,
+        restoreReferences,
         exportResources,
         exportSnapshot,
         resourceRevision,

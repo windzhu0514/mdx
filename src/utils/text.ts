@@ -1,6 +1,7 @@
+import { t } from "../i18n";
 import { splitMarkdownPrefix } from "./markdownFrontMatter";
 
-export const UNNAMED_DOCUMENT_NAME = "未命名文档";
+export const UNNAMED_DOCUMENT_NAME = t("未命名文档", "Untitled document");
 
 export function documentNameFromPath(path: string | null | undefined): string {
     const fileName = path?.split(/[\\/]/u).pop()?.trim() ?? "";

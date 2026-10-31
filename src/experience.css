@@ -1200,6 +1200,19 @@ summary:focus-visible,
     font-size: 21px;
 }
 
+.settings-language {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+    padding: 0 8px;
+}
+
+.settings-language-hint {
+    margin: 8px 8px 18px;
+    color: var(--color-text-muted);
+    font-size: 12px;
+    line-height: 1.5;
+}
+
 .settings-nav {
     display: grid;
     gap: 3px;

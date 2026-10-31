@@ -3,6 +3,9 @@
 </template>
 
 <script setup lang="ts">
+import { textMatches } from "../../utils/reviewText";
+import { locale } from "../../i18n";
+import { codeMirrorLanguage } from "./editorLocale";
 import { redo, selectAll, undo } from "@codemirror/commands";
 import { markdown } from "@codemirror/lang-markdown";
 import { Compartment, EditorState } from "@codemirror/state";
@@ -25,6 +28,7 @@ const editorElement = ref<HTMLDivElement>();
 const scrollElement = ref<HTMLElement>();
 useScrollActivity(scrollElement);
 
+const languageCompartment = new Compartment();
 const editableCompartment = new Compartment();
 let editorView: EditorView | undefined;
 let applyingExternalValue = false;
@@ -37,6 +41,7 @@ function createState(markdownValue: string): EditorState {
         doc: markdownValue,
         extensions: [
             basicSetup,
+            languageCompartment.of(codeMirrorLanguage()),
             markdown(),
             editableCompartment.of(EditorView.editable.of(!props.readonly)),
             EditorView.updateListener.of((update) => {
@@ -131,6 +136,13 @@ watch(
     },
 );
 
+watch(locale, () => {
+    const effects = languageCompartment.reconfigure(codeMirrorLanguage());
+    editorView?.dispatch({ effects });
+    for (const stored of states.values())
+        stored.state = stored.state.update({ effects }).state;
+});
+
 onBeforeUnmount(() => {
     editorView?.destroy();
     editorView = undefined;
@@ -162,6 +174,19 @@ function moveCursor(position: "start" | "end"): void {
     editorView.dispatch({
         selection: { anchor: position === "start" ? 0 : editorView.state.doc.length },
     });
+}
+
+function findText(query: string, occurrence = 0): boolean {
+    if (!editorView) return false;
+    const matches = textMatches(editorView.state.doc.toString(), query);
+    const match = matches[occurrence];
+    if (!match) return false;
+    editorView.dispatch({
+        selection: { anchor: match.from, head: match.to },
+        scrollIntoView: true,
+    });
+    editorView.focus();
+    return true;
 }
 
 function scrollToHeading(text: string): boolean {
@@ -247,6 +272,7 @@ defineExpose<MoraEditorHandle>({
     moveCursor,
     execute,
     scrollToHeading,
+    findText,
     whenReady,
     whenSettled,
     captureMermaidSources,

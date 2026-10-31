@@ -1984,4 +1984,31 @@ describe("document session", () => {
         });
         expect(invoke).not.toHaveBeenCalled();
     });
+
+    describe("工作区路径同步", () => {
+        it("移动路径后保持文档身份并移除旧草稿", async () => {
+            const session = useDocumentSession(true);
+            const document = await session.openMdx("C:/notes/original.mdx");
+            const id = document.id;
+            await session.relocatePaths("C:/notes/original.mdx", "C:/notes/renamed.mdx");
+            expect(session.document(id).path?.replace(/\\/gu, "/")).toBe(
+                "C:/notes/renamed.mdx",
+            );
+            expect(session.document(id).dirty).toBe(false);
+            await session.dispose();
+        });
+    });
+
+    describe("移动包含独立工作区根的文件夹", () => {
+        it("同步移动的嵌套根路径，避免会话继续监听旧根", async () => {
+            const session = useDocumentSession(true);
+            await session.openFolder("C:/notes");
+            await session.openFolder("C:/notes/sub/nested");
+            await session.relocatePaths("C:/notes/sub", "C:/notes/moved");
+            expect(
+                session.folders.value.map((folder) => folder.path.replace(/\\/gu, "/")),
+            ).toEqual(["C:/notes", "C:/notes/moved/nested"]);
+            await session.dispose();
+        });
+    });
 });
